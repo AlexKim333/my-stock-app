@@ -50,8 +50,17 @@
   }
 }
 
+html {
+  width: 100%;
+  overflow: auto;
+}
+
 body {
   margin: 0;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  overflow: auto;
 }
 
 h1,
@@ -157,14 +166,13 @@ code {
 }
 
 #app {
-  width: 1126px;
+  width: 100%;
   max-width: 100%;
   margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
   min-height: 100svh;
   display: flex;
   flex-direction: column;
+  overflow: auto;
   box-sizing: border-box;
 }
 

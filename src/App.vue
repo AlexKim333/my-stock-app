@@ -1,7 +1,6 @@
 <!-- src/App.vue -->
 <template>
-  <div style="padding: 20px; font-family: sans-serif;">
-    <!-- 선생님이 가져오신 뿔포스 스타일 POS 페이지를 메인 화면에 바로 띄웁니다 -->
+  <div class="app-center-shell">
     <PosPage />
   </div>
 </template>
@@ -9,3 +8,16 @@
 <script setup>
 import PosPage from './components/pos_page.vue'
 </script>
+
+<style>
+.app-center-shell {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100vh;
+  margin: 0 auto;
+  display: flex;
+  justify-content: center;
+  overflow: auto;
+  box-sizing: border-box;
+}
+</style>

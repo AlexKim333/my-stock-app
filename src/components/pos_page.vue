@@ -1,19 +1,21 @@
 <template>
   <div class="pos-app-layout">
-    <!-- 🧭 좌측 네비게이션 바 (10개 필수 항목) -->
+    <!-- 🧭 좌측 네비게이션 바 -->
     <aside class="sidebar-nav">
       <div class="nav-logo">🏆 WMS PRO</div>
       <nav class="nav-menu">
-        <a href="#" class="nav-item active">🏠 시작</a>
-        <a href="#" class="nav-item">📤 출고입력</a>
-        <a href="#" class="nav-item">📥 입고입력</a>
-        <a href="#" class="nav-item">🔄 재고 이동</a>
-        <a href="#" class="nav-item">📦 상품등록</a>
-        <a href="#" class="nav-item">🏢 입고처</a>
-        <a href="#" class="nav-item">🚚 출고처</a>
-        <a href="#" class="nav-item">📊 리포트</a>
-        <a href="#" class="nav-item">👤 담당자 (입출고)</a>
-        <a href="#" class="nav-item">⚙️ 설정</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'home' }" @click.prevent="activeNav = 'home'">🏠 시작</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'outbound' }" @click.prevent="setTransactionMode('outbound')">📤 출고입력</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'inbound' }" @click.prevent="setTransactionMode('inbound')">📥 입고입력</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'move' }" @click.prevent="activeNav = 'move'">🔄 재고 이동</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'product' }" @click.prevent="activeNav = 'product'">📦 상품등록</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'supplier' }" @click.prevent="activeNav = 'supplier'">🏢 입고처</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'destination' }" @click.prevent="activeNav = 'destination'">🚚 출고처</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'report' }" @click.prevent="activeNav = 'report'">📊 리포트</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'manager' }" @click.prevent="activeNav = 'manager'">👤 담당자 (입출고)</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'search-edit' }" @click.prevent="activeNav = 'search-edit'">🔍 입출고검색수정</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'reservation' }" @click.prevent="activeNav = 'reservation'">📅 예약상황</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'settings' }" @click.prevent="activeNav = 'settings'">⚙️ 설정</a>
       </nav>
     </aside>
 
@@ -59,47 +61,60 @@
         </div>
 
         <!-- [우측 분할] 장바구니 및 동적 탭 제어 존 -->
-        <div class="workspace-right">
+        <div class="workspace-right" :class="{ 'inbound-mode': transactionMode === 'inbound' }">
           
           <!-- 📍 우측 상단 다중 탭 (이름 옆에 X 삭제 버튼 추가 규칙 반영) -->
-          <div class="tabs-control-header">
+          <div class="tabs-control-header" :class="{ 'inbound-mode': transactionMode === 'inbound' }">
             <div class="tabs-list">
               <div 
                 v-for="tab in tabList" 
                 :key="tab.id" 
                 class="tab-wrapper-item"
-                :class="{ 'active': activeTabId === tab.id }"
+                :class="{ 'active': activeTabId === tab.id, 'inbound-mode': transactionMode === 'inbound' }"
               >
                 <span class="tab-title-text" @click="activeTabId = tab.id">{{ tab.title }}</span>
                 <!-- 탭 삭제 X 버튼 (첫 번째 탭은 안전상 삭제 불가 방어막 적용) -->
                 <button v-if="tabList.length > 1" class="tab-close-x-btn" @click.stop="closeTab(tab.id)">×</button>
               </div>
             </div>
-            <button class="add-tab-action-btn" @click="addNewTab">+ 탭추가</button>
+            <div class="tabs-header-actions">
+              <span class="transaction-mode-label">{{ transactionMode === 'outbound' ? '출고 입력' : '입고 입력' }}</span>
+              <button class="add-tab-action-btn" @click="addNewTab">+ 탭추가</button>
+            </div>
           </div>
 
           <!-- 📍 각 탭 내부 영역 (활성화된 탭의 개별 정보가 노출됨) -->
           <div class="tab-body-content" v-if="currentTab">
+
+            <div class="cart-admin-bar">
+              <button
+                class="admin-mode-btn"
+                :class="{ active: currentTab.isAdminUnlocked }"
+                @click="toggleAdminMode"
+              >
+                {{ currentTab.isAdminUnlocked ? '🔓 관리자' : '🔒 관리자' }}
+              </button>
+            </div>
             
             <!-- 🔥 3대 고정 입력창이 각 주문 탭 내부 상단으로 이사 완료 -->
-            <div class="tab-internal-master-header">
+            <div class="tab-internal-master-header" :class="{ locked: !currentTab.isAdminUnlocked }">
               <div class="master-lock-group">
                 <label>🏢 입고처:</label>
-                <select v-model="currentTab.selectedSupplier">
+                <select v-model="currentTab.selectedSupplier" :disabled="!currentTab.isAdminUnlocked">
                   <option value="sup_1">중국 산동 무역 공장</option>
                   <option value="sup_2">광저우 물류 제조사</option>
                 </select>
               </div>
               <div class="master-lock-group">
                 <label>🚚 출고처 지점:</label>
-                <select v-model="currentTab.selectedDestination">
+                <select v-model="currentTab.selectedDestination" :disabled="!currentTab.isAdminUnlocked">
                   <option value="dest_1">센트로 1호 본점</option>
                   <option value="dest_2">산 안토니오 2호 분점</option>
                 </select>
               </div>
               <div class="master-lock-group">
                 <label>👤 입력 담당자:</label>
-                <select v-model="currentTab.selectedManager">
+                <select v-model="currentTab.selectedManager" :disabled="!currentTab.isAdminUnlocked">
                   <option value="m_1">Juan (주간)</option>
                   <option value="m_2">Carlos (야간)</option>
                 </select>
@@ -187,6 +202,13 @@ import { ref, computed } from 'vue'
 const searchQuery = ref('')
 const isGridModalOpen = ref(false)
 const activeGroup = ref(null)
+const activeNav = ref('outbound')
+const transactionMode = ref('outbound')
+
+const setTransactionMode = (mode) => {
+  transactionMode.value = mode
+  activeNav.value = mode
+}
 
 // 📍 각 탭이 '마스터 설정'과 '장바구니 배열'을 독립적으로 주머니에 차고 있도록 데이터 구조 전면 갈아엎기
 const tabList = ref([
@@ -196,6 +218,7 @@ const tabList = ref([
     selectedSupplier: 'sup_1',
     selectedDestination: 'dest_1',
     selectedManager: 'm_1',
+    isAdminUnlocked: false,
     cartItems: []
   }
 ])
@@ -245,6 +268,7 @@ const addNewTab = () => {
     selectedSupplier: 'sup_1',
     selectedDestination: 'dest_1',
     selectedManager: 'm_1',
+    isAdminUnlocked: false,
     cartItems: []
   })
   activeTabId.value = newId
@@ -299,6 +323,11 @@ const openInlineEdit = (type, target) => {
   alert(`[단축키 수정] 기어 단추를 클릭하여 ${target.name} 단축 아이템 매핑을 변경합니다.`);
 }
 
+const toggleAdminMode = () => {
+  if (!currentTab.value) return
+  currentTab.value.isAdminUnlocked = !currentTab.value.isAdminUnlocked
+}
+
 const triggerAction = (actionType) => {
   if (!currentTab.value) return
   if (actionType === 'reserve') {
@@ -310,16 +339,50 @@ const triggerAction = (actionType) => {
 }
 </script>
 <style scoped>
-.pos-app-layout { display: flex; width: 100vw; height: 100vh; overflow: hidden; font-family: sans-serif; background: #f4f6f9; }
+.pos-app-layout {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 1024px;
+  min-height: 100vh;
+  height: 100vh;
+  margin: 0 auto;
+  overflow: auto;
+  font-family: sans-serif;
+  background: #f4f6f9;
+  transform-origin: center center;
+  box-sizing: border-box;
+}
 
-/* 좌측 바 고정 */
-.sidebar-nav { width: 220px; background: #1e293b; color: #f8fafc; display: flex; flex-direction: column; padding: 20px 0; }
-.nav-logo { font-size: 18px; font-weight: bold; text-align: center; padding-bottom: 20px; border-bottom: 1px solid #334155; color: #38bdf8; }
-.nav-menu { display: flex; flex-direction: column; gap: 4px; padding: 15px 10px; }
-.nav-item { color: #cbd5e1; text-decoration: none; padding: 12px 15px; border-radius: 6px; font-size: 14px; transition: all 0.2s; }
+/* 좌측 바: 확대 시 축소·깨짐 방지, 메뉴 넘침 시 스크롤 */
+.sidebar-nav {
+  width: 220px;
+  min-width: 220px;
+  flex-shrink: 0;
+  height: 100%;
+  min-height: 0;
+  background: #1e293b;
+  color: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+  box-sizing: border-box;
+}
+.nav-logo { flex-shrink: 0; font-size: 18px; font-weight: bold; text-align: center; padding-bottom: 20px; border-bottom: 1px solid #334155; color: #38bdf8; }
+.nav-menu {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 15px 10px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+.nav-item { color: #cbd5e1; text-decoration: none; padding: 12px 15px; border-radius: 6px; font-size: 14px; transition: all 0.2s; white-space: nowrap; flex-shrink: 0; }
 .nav-item:hover, .nav-item.active { background: #334155; color: white; font-weight: bold; }
 
-.main-content-zone { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.main-content-zone { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
 .workspace-body { display: flex; flex: 1; overflow: hidden; padding: 15px; gap: 15px; }
 .workspace-left { flex: 1.1; display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
 .workspace-right { flex: 0.9; background: white; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; overflow: hidden; }
@@ -341,21 +404,36 @@ const triggerAction = (actionType) => {
 
 /* 📍 탭 바 및 X 닫기 버튼 전용 인테리어 서식 */
 .tabs-control-header { display: flex; justify-content: space-between; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; padding: 6px 10px 0 10px; }
+.tabs-control-header.inbound-mode { background: #fce7f3; border-bottom-color: #f9a8d4; }
 .tabs-list { display: flex; gap: 4px; }
 .tab-wrapper-item { display: flex; align-items: center; gap: 6px; background: #e2e8f0; border: 1px solid #cbd5e1; border-bottom: none; padding: 8px 12px; border-radius: 6px 6px 0 0; font-size: 12.5px; font-weight: bold; cursor: pointer; color: #64748b; position: relative; }
+.tab-wrapper-item.inbound-mode { background: #fbcfe8; border-color: #f9a8d4; }
 .tab-wrapper-item.active { background: white; color: #00a896; border-color: #cbd5e1; border-bottom-color: white; margin-bottom: -1px; }
+.tab-wrapper-item.inbound-mode.active { background: #fff1f2; color: #db2777; border-color: #f9a8d4; border-bottom-color: #fff1f2; }
 .tab-title-text { cursor: pointer; }
 .tab-close-x-btn { background: none; border: none; font-size: 14px; font-weight: bold; color: #94a3b8; cursor: pointer; padding: 0 2px; line-height: 1; border-radius: 50%; }
 .tab-close-x-btn:hover { background: #ef4444; color: white; }
-.add-tab-action-btn { background: none; border: none; color: #00a896; font-weight: bold; cursor: pointer; font-size: 13px; padding-bottom: 6px; }
+.tabs-header-actions { display: flex; align-items: center; gap: 10px; padding-bottom: 6px; }
+.transaction-mode-label { font-size: 13px; font-weight: bold; color: #00a896; white-space: nowrap; }
+.inbound-mode .transaction-mode-label { color: #db2777; }
+.add-tab-action-btn { background: none; border: none; color: #00a896; font-weight: bold; cursor: pointer; font-size: 13px; }
+.inbound-mode .add-tab-action-btn { color: #db2777; }
+.workspace-right.inbound-mode { background: #fff1f2; border-color: #f9a8d4; }
 
 .tab-body-content { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
 
+.cart-admin-bar { display: flex; justify-content: flex-end; }
+.admin-mode-btn { background: #475569; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 12.5px; font-weight: bold; cursor: pointer; transition: all 0.2s; }
+.admin-mode-btn:hover { background: #334155; }
+.admin-mode-btn.active { background: #f59e0b; color: #1e293b; }
+
 /* 📍 탭 내부 전용으로 밀려 들어온 3대 마스터 헤더 서식 */
 .tab-internal-master-header { display: flex; gap: 10px; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0; }
+.tab-internal-master-header.locked { background: #f1f5f9; }
 .master-lock-group { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .master-lock-group label { font-size: 11px; font-weight: bold; color: #64748b; }
 .master-lock-group select { padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12.5px; outline: none; background: white; }
+.master-lock-group select:disabled { background: #e2e8f0; color: #64748b; cursor: not-allowed; }
 
 .pos-cart-table { width: 100%; border-collapse: collapse; }
 .pos-cart-table th, .pos-cart-table td { border: 1px solid #e2e8f0; padding: 8px; font-size: 12.5px; text-align: center; }
