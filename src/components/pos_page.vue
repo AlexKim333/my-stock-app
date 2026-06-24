@@ -341,26 +341,28 @@ const triggerAction = (actionType) => {
 <style scoped>
 .pos-app-layout {
   display: flex;
+  align-items: flex-start;
   width: 100%;
-  max-width: 100%;
   min-width: 1024px;
   min-height: 100vh;
-  height: 100vh;
   margin: 0 auto;
   overflow: auto;
   font-family: sans-serif;
   background: #f4f6f9;
-  transform-origin: center center;
   box-sizing: border-box;
 }
 
-/* 좌측 바: 확대 시 축소·깨짐 방지, 메뉴 넘침 시 스크롤 */
+/* 좌측 바: 뷰포트 높이에 고정, 메뉴 넘침 시 스크롤바 표시 */
 .sidebar-nav {
   width: 220px;
   min-width: 220px;
   flex-shrink: 0;
-  height: 100%;
-  min-height: 0;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
   background: #1e293b;
   color: #f8fafc;
   display: flex;
@@ -370,19 +372,26 @@ const triggerAction = (actionType) => {
 }
 .nav-logo { flex-shrink: 0; font-size: 18px; font-weight: bold; text-align: center; padding-bottom: 20px; border-bottom: 1px solid #334155; color: #38bdf8; }
 .nav-menu {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 15px 10px;
   overflow-y: auto;
-  overflow-x: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #334155;
 }
+.nav-menu::-webkit-scrollbar { width: 8px; }
+.nav-menu::-webkit-scrollbar-track { background: #334155; border-radius: 4px; }
+.nav-menu::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 4px; }
+.nav-menu::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
 .nav-item { color: #cbd5e1; text-decoration: none; padding: 12px 15px; border-radius: 6px; font-size: 14px; transition: all 0.2s; white-space: nowrap; flex-shrink: 0; }
 .nav-item:hover, .nav-item.active { background: #334155; color: white; font-weight: bold; }
 
-.main-content-zone { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.main-content-zone { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: visible; }
 .workspace-body { display: flex; flex: 1; overflow: hidden; padding: 15px; gap: 15px; }
 .workspace-left { flex: 1.1; display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
 .workspace-right { flex: 0.9; background: white; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; overflow: hidden; }
