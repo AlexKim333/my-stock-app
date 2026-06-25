@@ -1,8 +1,12 @@
 <!-- src/App.vue -->
 <template>
-  <PosPage />
+  <v-app>
+    <router-view />
+  </v-app>
 </template>
 
-<script setup>
-import PosPage from './components/pos_page.vue'
-</script>
+<style>
+.v-application {
+  background: #f4f6f9 !important;
+}
+</style>

@@ -3,12 +3,16 @@
     <!-- 🧭 좌측 네비게이션 바 -->
     <aside class="sidebar-nav">
       <div class="nav-logo">🏆 WMS PRO</div>
+      <div v-if="authStore.user" class="nav-user-info">
+        <span class="nav-user-name">{{ authStore.user.member_name }}</span>
+        <span class="nav-user-meta">{{ authStore.user.branch_name ?? '—' }} · {{ authStore.user.access_level }}</span>
+      </div>
       <nav class="nav-menu">
         <a href="#" class="nav-item" :class="{ active: activeNav === 'home' }" @click.prevent="activeNav = 'home'">🏠 시작</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'outbound' }" @click.prevent="setTransactionMode('outbound')">📤 출고입력</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'inbound' }" @click.prevent="setTransactionMode('inbound')">📥 입고입력</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'move' }" @click.prevent="activeNav = 'move'">🔄 재고 이동</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'product' }" @click.prevent="activeNav = 'product'">📦 상품등록</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'product' }" @click.prevent="setActiveNav('product')">📦 상품등록</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'supplier' }" @click.prevent="activeNav = 'supplier'">🏢 입고처</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'destination' }" @click.prevent="activeNav = 'destination'">🚚 출고처</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'report' }" @click.prevent="activeNav = 'report'">📊 리포트</a>
@@ -16,12 +20,17 @@
         <a href="#" class="nav-item" :class="{ active: activeNav === 'search-edit' }" @click.prevent="activeNav = 'search-edit'">🔍 입출고검색수정</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'reservation' }" @click.prevent="activeNav = 'reservation'">📅 예약상황</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'settings' }" @click.prevent="activeNav = 'settings'">⚙️ 설정</a>
+        <button type="button" class="nav-item nav-logout-btn" @click="handleLogout">🚪 로그아웃</button>
       </nav>
     </aside>
 
     <!-- 🖥️ 메인 작업 영역 -->
     <main class="main-content-zone">
-      <div class="workspace-body">
+      <!-- 📦 상품등록 전용 화면 -->
+      <ProductRegistrationPanel v-if="activeNav === 'product'" />
+
+      <!-- 입출고 POS 작업 화면 -->
+      <div v-else class="workspace-body">
         
         <!-- [좌측 분할] 핫키 패널 -->
         <div class="workspace-left">
@@ -86,35 +95,25 @@
           <!-- 📍 각 탭 내부 영역 (활성화된 탭의 개별 정보가 노출됨) -->
           <div class="tab-body-content" v-if="currentTab">
 
-            <div class="cart-admin-bar">
-              <button
-                class="admin-mode-btn"
-                :class="{ active: currentTab.isAdminUnlocked }"
-                @click="toggleAdminMode"
-              >
-                {{ currentTab.isAdminUnlocked ? '🔓 관리자' : '🔒 관리자' }}
-              </button>
-            </div>
-            
-            <!-- 🔥 3대 고정 입력창이 각 주문 탭 내부 상단으로 이사 완료 -->
-            <div class="tab-internal-master-header" :class="{ locked: !currentTab.isAdminUnlocked }">
+            <!-- 🔥 3대 고정 입력창: access_level === 'admin' 일 때만 잠금 해제 -->
+            <div class="tab-internal-master-header" :class="{ locked: !canEditMasterFields }">
               <div class="master-lock-group">
                 <label>🏢 입고처:</label>
-                <select v-model="currentTab.selectedSupplier" :disabled="!currentTab.isAdminUnlocked">
+                <select v-model="currentTab.selectedSupplier" :disabled="!canEditMasterFields">
                   <option value="sup_1">중국 산동 무역 공장</option>
                   <option value="sup_2">광저우 물류 제조사</option>
                 </select>
               </div>
               <div class="master-lock-group">
                 <label>🚚 출고처 지점:</label>
-                <select v-model="currentTab.selectedDestination" :disabled="!currentTab.isAdminUnlocked">
+                <select v-model="currentTab.selectedDestination" :disabled="!canEditMasterFields">
                   <option value="dest_1">센트로 1호 본점</option>
                   <option value="dest_2">산 안토니오 2호 분점</option>
                 </select>
               </div>
               <div class="master-lock-group">
                 <label>👤 입력 담당자:</label>
-                <select v-model="currentTab.selectedManager" :disabled="!currentTab.isAdminUnlocked">
+                <select v-model="currentTab.selectedManager" :disabled="!canEditMasterFields">
                   <option value="m_1">Juan (주간)</option>
                   <option value="m_2">Carlos (야간)</option>
                 </select>
@@ -198,6 +197,20 @@
 </template>
 <script setup>
 import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '../stores/auth.js'
+import ProductRegistrationPanel from './ProductRegistrationPanel.vue'
+
+const router = useRouter()
+const authStore = useAuthStore()
+
+/** admin만 3대 마스터 헤더(입고처·출고처·담당자) 수정 가능 */
+const canEditMasterFields = computed(() => authStore.isAdmin)
+
+const handleLogout = () => {
+  authStore.logout()
+  router.push('/login')
+}
 
 const searchQuery = ref('')
 const isGridModalOpen = ref(false)
@@ -210,6 +223,10 @@ const setTransactionMode = (mode) => {
   activeNav.value = mode
 }
 
+const setActiveNav = (nav) => {
+  activeNav.value = nav
+}
+
 // 📍 각 탭이 '마스터 설정'과 '장바구니 배열'을 독립적으로 주머니에 차고 있도록 데이터 구조 전면 갈아엎기
 const tabList = ref([
   { 
@@ -218,7 +235,6 @@ const tabList = ref([
     selectedSupplier: 'sup_1',
     selectedDestination: 'dest_1',
     selectedManager: 'm_1',
-    isAdminUnlocked: false,
     cartItems: []
   }
 ])
@@ -268,7 +284,6 @@ const addNewTab = () => {
     selectedSupplier: 'sup_1',
     selectedDestination: 'dest_1',
     selectedManager: 'm_1',
-    isAdminUnlocked: false,
     cartItems: []
   })
   activeTabId.value = newId
@@ -323,11 +338,6 @@ const openInlineEdit = (type, target) => {
   alert(`[단축키 수정] 기어 단추를 클릭하여 ${target.name} 단축 아이템 매핑을 변경합니다.`);
 }
 
-const toggleAdminMode = () => {
-  if (!currentTab.value) return
-  currentTab.value.isAdminUnlocked = !currentTab.value.isAdminUnlocked
-}
-
 const triggerAction = (actionType) => {
   if (!currentTab.value) return
   if (actionType === 'reserve') {
@@ -370,7 +380,10 @@ const triggerAction = (actionType) => {
   padding: 20px 0;
   box-sizing: border-box;
 }
-.nav-logo { flex-shrink: 0; font-size: 18px; font-weight: bold; text-align: center; padding-bottom: 20px; border-bottom: 1px solid #334155; color: #38bdf8; }
+.nav-logo { flex-shrink: 0; font-size: 18px; font-weight: bold; text-align: center; padding-bottom: 12px; border-bottom: 1px solid #334155; color: #38bdf8; }
+.nav-user-info { flex-shrink: 0; padding: 10px 15px 14px; border-bottom: 1px solid #334155; text-align: center; }
+.nav-user-name { display: block; font-size: 13px; font-weight: bold; color: #f8fafc; }
+.nav-user-meta { display: block; font-size: 10.5px; color: #94a3b8; margin-top: 2px; text-transform: uppercase; }
 .nav-menu {
   flex: 1 1 auto;
   min-height: 0;
@@ -390,6 +403,8 @@ const triggerAction = (actionType) => {
 .nav-menu::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
 .nav-item { color: #cbd5e1; text-decoration: none; padding: 12px 15px; border-radius: 6px; font-size: 14px; transition: all 0.2s; white-space: nowrap; flex-shrink: 0; }
 .nav-item:hover, .nav-item.active { background: #334155; color: white; font-weight: bold; }
+.nav-logout-btn { width: 100%; text-align: left; background: none; border: none; cursor: pointer; font-family: inherit; margin-top: 8px; color: #fca5a5 !important; }
+.nav-logout-btn:hover { background: #450a0a !important; color: white !important; }
 
 .main-content-zone { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: visible; }
 .workspace-body { display: flex; flex: 1; overflow: hidden; padding: 15px; gap: 15px; }
@@ -430,11 +445,6 @@ const triggerAction = (actionType) => {
 .workspace-right.inbound-mode { background: #fff1f2; border-color: #f9a8d4; }
 
 .tab-body-content { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
-
-.cart-admin-bar { display: flex; justify-content: flex-end; }
-.admin-mode-btn { background: #475569; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 12.5px; font-weight: bold; cursor: pointer; transition: all 0.2s; }
-.admin-mode-btn:hover { background: #334155; }
-.admin-mode-btn.active { background: #f59e0b; color: #1e293b; }
 
 /* 📍 탭 내부 전용으로 밀려 들어온 3대 마스터 헤더 서식 */
 .tab-internal-master-header { display: flex; gap: 10px; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0; }

@@ -1,0 +1,47 @@
+---
+description: Supabase DB 스키마 — 코드 작성 전 반드시 참조
+alwaysApply: true
+---
+
+# Supabase DB 스키마 규칙
+
+코드 작성·수정 전 **반드시** 아래 파일을 읽고 현재 스키마를 확인한다.
+
+## 1. 단일 진실 공급원 (테이블·컬럼·FK)
+
+- `src/types/supabase.ts` — Supabase 원격 DB에서 `npm run update-types`로 생성
+- 프로젝트 ID: `npcytppgaxwzrhdoxdrh`
+
+## 2. DB 로직 (트리거·제약·RLS)
+
+- `supabase/migrations/*.sql` — UNIQUE, 트리거, 함수, RLS 등
+- `supabase.ts`에는 **트리거/RLS가 포함되지 않음** → migrations SQL을 함께 읽을 것
+
+## 3. 현재 public 테이블 (types 기준)
+
+### brands
+`id`, `name`, `description`, `is_active`, `created_at`
+
+### items
+`id`, `item_name`, `item_code`, `name_number`, `color`, `barcode`, `box_packaging_qty`,
+`initial_stock_boxes`, `initial_stock_units`, `brand_id` → brands.id,
+`is_grid_item`, `grid_group_id`, `is_active`, `created_at`
+
+### 비즈니스 규칙 (코드 + DB)
+- `barcode`: 중복 허용 (UNIQUE 없음)
+- `(item_name, color, box_packaging_qty)`: 복합 UNIQUE (`uniq_item_name_color_pkg`)
+- `is_grid_item`: insert 시 프론트는 `false` → **DB 트리거**가 동일 품명 2건 이상 시 자동 true
+- `item_code`: **DB 트리거**가 생성 (프론트에서 직접 넣지 않음)
+
+## 4. 스키마 변경 시 사용자·에이전트 공통 절차
+
+1. Supabase에서 SQL 적용
+2. 동일 SQL을 `supabase/migrations/YYYYMMDDHHMMSS_설명.sql`에 저장
+3. `npm run update-types` 실행 → `src/types/supabase.ts` 갱신
+4. git commit (migrations + types 함께)
+5. 채팅에서 "DB 업데이트 완료"라고 알리기
+
+## 5. 금지
+
+- `supabase.ts`·migrations 없이 테이블/컬럼명 추측하지 않음
+- 트리거가 처리하는 필드(`is_grid_item`, `item_code`)를 프론트에서 중복 구현하지 않음 (명시적 요청 제외)
