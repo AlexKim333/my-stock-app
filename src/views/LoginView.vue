@@ -2,7 +2,8 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-brand">
-        <div class="login-logo">🏆 WMS PRO</div>
+       
+        <img src="../assets/lady_polo_logo.png" alt="LADY POLO" class="custom-logo" />
         <p class="login-subtitle">작업자 로그인</p>
       </div>
 
@@ -99,6 +100,13 @@ onMounted(() => {
   font-size: 26px;
   font-weight: bold;
   color: #00a896;
+}
+
+.custom-logo {
+  display: block;
+  margin: 0 auto 15px;
+  max-width: 180px; /* 🌟 바로 이 숫자를 조절하시면 됩니다! */
+  height: auto;
 }
 
 .login-subtitle {
