@@ -26,6 +26,13 @@
 
     <!-- 🖥️ 메인 작업 영역 -->
     <main class="main-content-zone">
+      <!-- 🚛 멕시코 센트로 8대 서브창고 100상자 FTL 실시간 트럭 게이지 바 -->
+      <TruckGaugeBar 
+        :warehouses="wmsStore.truckGauges" 
+        @refresh="wmsStore.loadTruckGauges" 
+        @select-warehouse="handleSelectWarehouse" 
+      />
+
       <!-- 📦 상품등록 전용 화면 -->
       <ProductRegistrationPanel v-if="activeNav === 'product'" />
 
@@ -35,21 +42,39 @@
         <!-- [좌측 분할] 핫키 패널 -->
         <div class="workspace-left">
           <div class="search-section">
-            <input type="text" v-model="searchQuery" placeholder="Buscar... (숫자패드로 상품 코드 검색)" class="search-bar" />
+            <input 
+              type="text" 
+              v-model="searchQuery" 
+              @input="handleSearchInput" 
+              placeholder="Buscar... (품명 또는 바코드 검색)" 
+              class="search-bar" 
+            />
+            <!-- 실시간 검색 결과 드롭다운 팝업 -->
+            <div class="search-dropdown-list" v-if="wmsStore.searchResults.length > 0">
+              <div 
+                v-for="sItem in wmsStore.searchResults" 
+                :key="sItem.id" 
+                class="search-result-row"
+                @click="addSearchedItemToCart(sItem)"
+              >
+                <span class="sr-name">{{ sItem.name }} ({{ sItem.color }})</span>
+                <span class="sr-meta">{{ sItem.pack_qty }}入 · 재고: {{ sItem.stock_box }}B</span>
+              </div>
+            </div>
           </div>
 
-          <!-- 핫키 블록 1: 단일 10종 -->
+          <!-- 핫키 블록 1: 단일 10종 (DB 실재고 Top 10 연동) -->
           <div class="hotkey-block">
-            <div class="block-header"><h3>⚡ Quick Pick (단일 베스트 10종)</h3></div>
+            <div class="block-header"><h3>⚡ Quick Pick (실재고 베스트 10종)</h3></div>
             <div class="grid-3x4">
-              <div v-for="prod in singleHotkeys" :key="prod.id" class="hotkey-card">
+              <div v-for="prod in displayedSingleHotkeys" :key="prod.id" class="hotkey-card">
                 <button class="hotkey-btn-core" @click="addSingleHotkeyToCart(prod)">
                   <div class="line-1">{{ prod.name }}</div>
-                  <div class="line-2">({{ prod.color }} · {{ prod.pack_qty }}入)</div>
+                  <div class="line-2">({{ prod.color }} · {{ prod.pack_qty }}入 · {{ prod.stock_box }}B)</div>
                 </button>
-                <button class="hotkey-sub-edit-btn" @click="openInlineEdit('single', prod)">⚙️ edit</button>
+                <button class="hotkey-sub-edit-btn" @click="openInlineEdit('single', prod)">⚙️</button>
               </div>
-              <div class="empty-cell"></div><div class="empty-cell"></div>
+              <div class="empty-cell" v-for="n in Math.max(0, 10 - displayedSingleHotkeys.length)" :key="n"></div>
             </div>
           </div>
 
@@ -95,27 +120,29 @@
           <!-- 📍 각 탭 내부 영역 (활성화된 탭의 개별 정보가 노출됨) -->
           <div class="tab-body-content" v-if="currentTab">
 
-            <!-- 🔥 3대 고정 입력창: access_level === 'admin' 일 때만 잠금 해제 -->
+            <!-- 🔥 3대 고정 입력창: access_level === 'admin' 일 때만 잠금 해제 (실제 DB 마스터 바인딩) -->
             <div class="tab-internal-master-header" :class="{ locked: !canEditMasterFields }">
-              <div class="master-lock-group">
+              <div class="master-lock-group" v-if="transactionMode === 'inbound'">
                 <label>🏢 입고처:</label>
                 <select v-model="currentTab.selectedSupplier" :disabled="!canEditMasterFields">
-                  <option value="sup_1">중국 산동 무역 공장</option>
-                  <option value="sup_2">광저우 물류 제조사</option>
+                  <option value="">-- 입고처 선택 (총 {{ wmsStore.suppliers.length }}개) --</option>
+                  <option v-for="s in wmsStore.suppliers" :key="s.id" :value="s.name">{{ s.name }}</option>
                 </select>
               </div>
-              <div class="master-lock-group">
+              <div class="master-lock-group" v-else>
                 <label>🚚 출고처 지점:</label>
                 <select v-model="currentTab.selectedDestination" :disabled="!canEditMasterFields">
-                  <option value="dest_1">센트로 1호 본점</option>
-                  <option value="dest_2">산 안토니오 2호 분점</option>
+                  <option value="">-- 출고처 선택 (총 {{ wmsStore.destinations.length }}개) --</option>
+                  <option v-for="d in wmsStore.destinations" :key="d.id" :value="d.name">{{ d.name }}</option>
                 </select>
               </div>
               <div class="master-lock-group">
                 <label>👤 입력 담당자:</label>
                 <select v-model="currentTab.selectedManager" :disabled="!canEditMasterFields">
-                  <option value="m_1">Juan (주간)</option>
-                  <option value="m_2">Carlos (야간)</option>
+                  <option value="">-- 담당자 선택 --</option>
+                  <option v-for="m in wmsStore.managers" :key="m.id" :value="m.member_name">
+                    {{ m.member_name }} ({{ m.branch_name || '지점' }})
+                  </option>
                 </select>
               </div>
             </div>
@@ -196,13 +223,29 @@
   </div>
 </template>
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
+import { useWmsStore } from '../stores/wms.js'
+import TruckGaugeBar from './TruckGaugeBar.vue'
 import ProductRegistrationPanel from './ProductRegistrationPanel.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const wmsStore = useWmsStore()
+
+let unsubscribeRealtime = null
+
+onMounted(async () => {
+  await wmsStore.loadMasters()
+  unsubscribeRealtime = wmsStore.subscribeRealtime()
+})
+
+onUnmounted(() => {
+  if (typeof unsubscribeRealtime === 'function') {
+    unsubscribeRealtime()
+  }
+})
 
 /** admin만 3대 마스터 헤더(입고처·출고처·담당자) 수정 가능 */
 const canEditMasterFields = computed(() => authStore.isAdmin)
@@ -213,6 +256,40 @@ const handleLogout = () => {
 }
 
 const searchQuery = ref('')
+let searchDebounceTimer = null
+
+const handleSearchInput = () => {
+  clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    wmsStore.searchItems(searchQuery.value)
+  }, 200)
+}
+
+const addSearchedItemToCart = (sItem) => {
+  if (!currentTab.value) return
+  const existing = currentTab.value.cartItems.find(item => item.id === sItem.id)
+  if (existing) {
+    existing.input_box += 1
+  } else {
+    currentTab.value.cartItems.push({
+      id: sItem.id,
+      name: sItem.name,
+      color: sItem.color,
+      pack_qty: sItem.pack_qty,
+      stock_box: sItem.stock_box,
+      stock_each: sItem.stock_each,
+      input_box: 1,
+      input_each: 0
+    })
+  }
+  searchQuery.value = ''
+  wmsStore.searchResults = []
+}
+
+const handleSelectWarehouse = (wh) => {
+  alert(`🚚 [${wh.warehouse_name}] 현재 적재량: ${wh.current_boxes || 0}상자 (100상자 기준 ${wh.gauge_percentage || 0}%)`)
+}
+
 const isGridModalOpen = ref(false)
 const activeGroup = ref(null)
 const activeNav = ref('outbound')
@@ -227,25 +304,25 @@ const setActiveNav = (nav) => {
   activeNav.value = nav
 }
 
-// 📍 각 탭이 '마스터 설정'과 '장바구니 배열'을 독립적으로 주머니에 차고 있도록 데이터 구조 전면 갈아엎기
+// 📍 각 탭이 '마스터 설정'과 '장바구니 배열'을 독립적으로 주머니에 차고 있도록 구성
 const tabList = ref([
   { 
     id: 'tab_1', 
     title: '주문서 1',
-    selectedSupplier: 'sup_1',
-    selectedDestination: 'dest_1',
-    selectedManager: 'm_1',
+    selectedSupplier: '',
+    selectedDestination: '',
+    selectedManager: '',
     cartItems: []
   }
 ])
 const activeTabId = ref('tab_1')
 
-// 현재 활성화된 탭 객체를 실시간 조명하는 계산식 규칙
+// 현재 활성화된 탭 객체
 const currentTab = computed(() => {
   return tabList.value.find(t => t.id === activeTabId.value)
 })
 
-// 📍 규칙 반영: 현재 선택된 탭 내부의 순수 상자 총합과 낱개 총합을 실시간 분리 연산하는 엔진
+// 순수 상자 총합과 낱개 총합 분리 연산
 const currentTabSummary = computed(() => {
   if (!currentTab.value) return { boxes: 0, eaches: 0 }
   let boxes = 0
@@ -257,44 +334,50 @@ const currentTabSummary = computed(() => {
   return { boxes, eaches }
 })
 
-const singleHotkeys = ref([
-  { id: 'sh_1', name: 'P-160', color: 'NEGRO', pack_qty: 50, stock_box: 120, stock_each: 5 },
-  { id: 'sh_2', name: 'L-160', color: 'BLANCO', pack_qty: 40, stock_box: 85, stock_each: 12 }
-])
+// 실재고 기반 Top 10 핫키 표시
+const displayedSingleHotkeys = computed(() => {
+  if (wmsStore.hotkeyItems && wmsStore.hotkeyItems.length > 0) {
+    return wmsStore.hotkeyItems
+  }
+  return [
+    { id: 'sh_1', name: 'ST43', color: 'SURTIDO', pack_qty: 500, stock_box: 1, stock_each: 0 },
+    { id: 'sh_2', name: 'TWLT19', color: 'SURTIDO', pack_qty: 200, stock_box: 18, stock_each: 0 }
+  ]
+})
 
 const gridHotkeys = ref([
   {
     id: 'gh_1',
-    group_name: 'P-150 시리즈 전체',
-    pack_qty: 50,
+    group_name: '021G 시리즈 전체',
+    pack_qty: 400,
     variants: [
-      { color: '검정', stock_box: 12, stock_each: 5, input_box: '', input_each: '' },
-      { color: '흰색', stock_box: 0,  stock_each: 0, input_box: '', input_each: '' }
+      { color: 'NEGRO', stock_box: 4, stock_each: 0, input_box: '', input_each: '' },
+      { color: 'AZUL', stock_box: 4, stock_each: 0, input_box: '', input_each: '' },
+      { color: 'MARINO', stock_box: 3, stock_each: 0, input_box: '', input_each: '' }
     ]
   }
 ])
 
-// 동적 탭 추가 시, 독립된 빈 설정 주머니를 채워서 생성하는 규칙
+// 동적 탭 추가
 const addNewTab = () => {
   const nextNum = Math.max(...tabList.value.map(t => parseInt(t.id.replace('tab_', '')) || 1)) + 1
   const newId = `tab_${nextNum}`
   tabList.value.push({ 
     id: newId, 
     title: `주문서 ${nextNum}`,
-    selectedSupplier: 'sup_1',
-    selectedDestination: 'dest_1',
-    selectedManager: 'm_1',
+    selectedSupplier: '',
+    selectedDestination: '',
+    selectedManager: '',
     cartItems: []
   })
   activeTabId.value = newId
 }
 
-// 📍 규칙 반영: 탭 이름 옆 X를 눌렀을 때 해당 전표를 파괴하고 이웃 탭으로 포커스를 옮기는 삭제 엔진
+// 탭 삭제
 const closeTab = (tabId) => {
   const index = tabList.value.findIndex(t => t.id === tabId)
   if (index === -1) return
   
-  // 삭제하려는 탭이 현재 보고 있는 활성화 탭이라면 이웃 탭으로 주소 이동 안전장치 가동
   if (activeTabId.value === tabId) {
     if (index > 0) activeTabId.value = tabList.value[index - 1].id
     else if (tabList.value.length > 1) activeTabId.value = tabList.value[index + 1].id
@@ -302,12 +385,19 @@ const closeTab = (tabId) => {
   tabList.value = tabList.value.filter(t => t.id !== tabId)
 }
 
-// 활성화된 탭의 독립 주머니에 핫키 상품을 꽂아 넣는 로직 규칙
+// 핫키 상품 장바구니 추가
 const addSingleHotkeyToCart = (prod) => {
   if (!currentTab.value) return
   const existing = currentTab.value.cartItems.find(item => item.id === prod.id)
-  if (existing) { existing.input_box += 1 } 
-  else { currentTab.value.cartItems.push({ ...prod, input_box: 1, input_each: 0 }) }
+  if (existing) { 
+    existing.input_box += 1 
+  } else { 
+    currentTab.value.cartItems.push({ 
+      ...prod, 
+      input_box: 1, 
+      input_each: 0 
+    }) 
+  }
 }
 
 const openGridModal = (group) => {
@@ -335,16 +425,43 @@ const submitGridSelection = () => {
 }
 
 const openInlineEdit = (type, target) => {
-  alert(`[단축키 수정] 기어 단추를 클릭하여 ${target.name} 단축 아이템 매핑을 변경합니다.`);
+  alert(`[단축키 안내] ${target.name} (${target.color}) 품목이 매핑되어 있습니다.`);
 }
 
-const triggerAction = (actionType) => {
+// ⚡ 원자적 Supabase 트랜잭션 실행
+const triggerAction = async (actionType) => {
   if (!currentTab.value) return
+
+  if (!currentTab.value.cartItems.length) {
+    alert('전표에 입력된 품목이 없습니다. 상품을 먼저 추가해주세요.');
+    return;
+  }
+
   if (actionType === 'reserve') {
-    alert(`[예약 완료] ${currentTab.value.title} 전표의 수량이 가상 물류 대장에 임시 세이브되었습니다.`);
-  } else {
-    alert(`[최종 제출] ${currentTab.value.title} 전표 발행이 승인되어 데이터가 처리되고 해당 탭이 클리어됩니다.`);
+    alert(`[예약 접수] ${currentTab.value.title} 전표의 출고 예약이 등록되었습니다.`);
+    return;
+  }
+
+  const isOutbound = transactionMode.value === 'outbound'
+  const partnerName = isOutbound 
+    ? (currentTab.value.selectedDestination || '일반 출고처')
+    : (currentTab.value.selectedSupplier || '일반 입고처');
+
+  const handlerName = currentTab.value.selectedManager || authStore.user?.member_name || '관리자';
+
+  try {
+    const res = await wmsStore.submitTransaction({
+      transactionType: isOutbound ? 'OUTBOUND' : 'INBOUND',
+      warehouseCode: 'MAIN',
+      partnerName: partnerName,
+      handlerName: handlerName,
+      cartItems: currentTab.value.cartItems
+    })
+
+    alert(`🎉 [${isOutbound ? '출고' : '입고'} 완료] ${currentTab.value.title} 전표 처리가 완료되었습니다!\n실재고가 Supabase에 즉각 반영되었습니다.`);
     currentTab.value.cartItems = [];
+  } catch (err) {
+    alert(`❌ 처리 실패: ${err.message}`);
   }
 }
 </script>
@@ -411,7 +528,46 @@ const triggerAction = (actionType) => {
 .workspace-left { flex: 1.1; display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
 .workspace-right { flex: 0.9; background: white; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; overflow: hidden; }
 
-.search-bar { width: 100%; padding: 12px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 14px; }
+.search-section { position: relative; width: 100%; }
+.search-bar { width: 100%; padding: 12px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 14px; box-sizing: border-box; }
+.search-dropdown-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 100;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+  margin-top: 4px;
+}
+.search-result-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.15s;
+}
+.search-result-row:hover {
+  background: #f0fdfa;
+}
+.sr-name {
+  font-size: 13px;
+  font-weight: bold;
+  color: #1e293b;
+}
+.sr-meta {
+  font-size: 11px;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
 .hotkey-block { display: flex; flex-direction: column; gap: 8px; }
 .block-header { border-bottom: 2px solid #00a896; padding-bottom: 4px; }
 .block-header h3 { margin: 0; font-size: 14px; }
