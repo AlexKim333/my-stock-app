@@ -1,6 +1,10 @@
-// src/wms-entry.js
 import { installSupabaseBridge, preloadItemIdCache } from './lib/supabaseAdapter.js'
 import { supabase } from './lib/supabase.js'
+import FlexSearch from 'flexsearch'
+
+// 0. ktk-wms-v2 동급 최강 FlexSearch 초고속 검색엔진 전역 등록
+window.FlexSearch = FlexSearch
+
 
 // 1. Supabase 브릿지 설치
 installSupabaseBridge()
