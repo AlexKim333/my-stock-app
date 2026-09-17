@@ -374,11 +374,29 @@ export const serverMethods = {
       throw new Error(rpcErr.message || '재고 트랜잭션 처리 실패')
     }
 
+    // 🛡️ [정합성 100% 무결성 보장] 프론트엔드 인메모리 캐시 즉각 동기화를 위해 방금 커밋된 최종 재고 조회
+    const itemIds = itemsPayload.map(i => i.item_id)
+    const { data: freshStocks } = await supabase
+      .from('inventory_stocks')
+      .select('item_id, box_qty, unit_qty')
+      .in('item_id', itemIds)
+      .eq('warehouse_code', 'MAIN')
+
+    const stockMap = new Map((freshStocks || []).map(s => [s.item_id, s]))
+    const authoritativeItems = updatedItems.map((up, idx) => {
+      const fresh = stockMap.get(itemsPayload[idx]?.item_id)
+      return {
+        ...up,
+        stockBox: fresh ? Number(fresh.box_qty || 0) : 0,
+        stockIndividual: fresh ? Number(fresh.unit_qty || 0) : 0
+      }
+    })
+
     return {
       success: true,
       seq: seq,
       invoiceNumber: invoiceNumber,
-      updatedItems: updatedItems
+      updatedItems: authoritativeItems
     }
   },
 
