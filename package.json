@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "update-types": "npx supabase gen types typescript --project-id npcytppgaxwzrhdoxdrh > src/types/supabase.ts",
+    "update-types": "npx supabase gen types typescript --project-id xfxmodlrczofwylyedjh > src/types/supabase.ts",
     "sync-db": "npm run update-types"
   },
   "dependencies": {
