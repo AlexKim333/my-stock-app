@@ -524,9 +524,57 @@ export const serverMethods = {
       items: formattedItems,
       updatedAt: new Date().toLocaleTimeString()
     }
-  }
+  },
 
+  /**
+   * 15. Gemini 비전 OCR 손글씨 주문서 분석
+   */
+  async analyzeHandwrittenOrder(imageBase64) {
+    const res = await fetch('/api/ocr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'handwritten', imageBase64 })
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: '서버 오류' }))
+      throw new Error(err.error || `손글씨 분석 실패 (${res.status})`)
+    }
+    return await res.json()
+  },
+
+  /**
+   * 16. Gemini 비전 OCR 화물운송장(Carta de Porte) 분석
+   */
+  async analyzeCartaDePorte(imageBase64) {
+    const res = await fetch('/api/ocr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'cartadeporte', imageBase64 })
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: '서버 오류' }))
+      throw new Error(err.error || `송장 분석 실패 (${res.status})`)
+    }
+    return await res.json()
+  },
+
+  /**
+   * 17. Gemini 비전 OCR 재고실사표 분석
+   */
+  async analyzeStockAuditSheet(imageBase64) {
+    const res = await fetch('/api/ocr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'audit', imageBase64 })
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: '서버 오류' }))
+      throw new Error(err.error || `실사표 분석 실패 (${res.status})`)
+    }
+    return await res.json()
+  }
 }
+
 
 /**
  * google.script.run 클라이언트 브릿지 생성자
