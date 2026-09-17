@@ -4,7 +4,7 @@ import { isSupabaseConfigured, supabase } from '../lib/supabase.js'
 
 const SESSION_KEY = 'wms_auth_user'
 
-/** MVP: password_hash 컬럼과 입력값 직접 비교 (추후 bcrypt 등으로 교체) */
+/** MVP: password_hash 컬럼과 입력값 비교 */
 function verifyPassword(input, storedHash) {
   return input === storedHash
 }
@@ -43,7 +43,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(memberName, password) {
     errorMessage.value = ''
-    const trimmedName = memberName.trim()
+    const trimmedName = (memberName || '').trim()
 
     if (!trimmedName || !password) {
       errorMessage.value = '아이디와 비밀번호를 입력하세요.'
@@ -51,7 +51,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     if (!isSupabaseConfigured) {
-      errorMessage.value = 'Supabase 설정(.env)이 필요합니다.'
+      errorMessage.value = 'Supabase 환경 설정(.env.local)이 필요합니다.'
       return { success: false, message: errorMessage.value }
     }
 
