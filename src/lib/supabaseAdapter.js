@@ -107,13 +107,45 @@ export const serverMethods = {
   },
 
   /**
-   * 3. 입고처 목록
+  /**
+   * 3. 내부 창고 목록 (9대 거점 창고)
+   */
+  async getWarehouses() {
+    return [
+      { code: 'MAIN', name: '메인허브 (알라르꼰)', is_hub: true },
+      { code: 'PANTACO', name: 'PANTACO (판타코)' },
+      { code: 'IKEA', name: 'IKEA (이케아)' },
+      { code: 'LERMA', name: 'LERMA (레르마)' },
+      { code: 'PINO', name: 'PINO (피노)' },
+      { code: 'YARE', name: 'YARE (야레)' },
+      { code: 'ALMINTER', name: 'ALMINTER (알민테르)' },
+      { code: 'TLANE', name: 'TLANE (틀라네)' },
+      { code: 'STAR', name: 'STAR (스타)' }
+    ]
+  },
+
+  /**
+   * 3-1. 통합 파트너(거래처/지점) 마스터 목록 (역할 플래그 포함)
+   */
+  async getPartnersMaster() {
+    const { data, error } = await supabase
+      .from('partners')
+      .select('id, name, is_supplier, is_customer, is_branch, warehouse_code, partner_type')
+      .eq('is_active', true)
+      .order('name', { ascending: true })
+
+    if (error) throw error
+    return data || []
+  },
+
+  /**
+   * 3-2. 입고처 목록 (공급처 및 겸용 거래처)
    */
   async getInLocations() {
     const { data, error } = await supabase
       .from('partners')
       .select('name')
-      .eq('partner_type', 'INBOUND')
+      .or('is_supplier.eq.true,partner_type.eq.INBOUND')
       .eq('is_active', true)
       .order('name', { ascending: true })
 
@@ -122,13 +154,13 @@ export const serverMethods = {
   },
 
   /**
-   * 4. 출고처 목록
+   * 4. 출고처 목록 (고객, 겸용 거래처 및 9대 지점)
    */
   async getOutLocations() {
     const { data, error } = await supabase
       .from('partners')
-      .select('name')
-      .eq('partner_type', 'OUTBOUND')
+      .select('name, is_branch, warehouse_code')
+      .or('is_customer.eq.true,is_branch.eq.true,partner_type.eq.OUTBOUND')
       .eq('is_active', true)
       .order('name', { ascending: true })
 
@@ -316,12 +348,47 @@ export const serverMethods = {
       throw new Error('처리할 데이터가 없습니다.')
     }
 
+    const firstRow = tableData[0] || {}
+    let sourceWh = firstRow.sourceWarehouse || firstRow.warehouse || 'MAIN'
+    let targetWh = firstRow.targetWarehouse || null
+    const partner = String(firstRow.location || '').trim()
+    const handler = String(admin || 'ADMIN').trim()
+
+    // 🏢 9대 지점(내부창고) 매핑 테이블
+    const branchMap = {
+      'MAIN': 'MAIN', '메인허브 (알라르꼰)': 'MAIN', '메인허브': 'MAIN', '알라르꼰': 'MAIN',
+      'PANTACO': 'PANTACO', '판타코': 'PANTACO',
+      'IKEA': 'IKEA', '이케아': 'IKEA',
+      'LERMA': 'LERMA', '레르마': 'LERMA',
+      'PINO': 'PINO', '피노': 'PINO',
+      'YARE': 'YARE', '야레': 'YARE',
+      'ALMINTER': 'ALMINTER', '알민테르': 'ALMINTER',
+      'TLANE': 'TLANE', '틀라네': 'TLANE',
+      'STAR': 'STAR', '스타': 'STAR'
+    }
+
+    // 출고처가 지점(내부창고)인 경우 자동 감지
+    const cleanPartner = partner.replace(/^🏢\s*(\[지점\]\s*)?/, '').trim()
+    const partnerBranchCode = branchMap[cleanPartner.toUpperCase()] || branchMap[cleanPartner] || branchMap[partner.toUpperCase()] || branchMap[partner]
+
+    let txType = mode === 'in' ? 'INBOUND' : 'OUTBOUND'
+    let effectiveTargetWarehouse = targetWh
+
+    if (mode === 'out' && partnerBranchCode) {
+      // 🔄 출고처가 내부 지점인 경우 -> 원자적 지점간 재고이동(MOVE) 자동 전환
+      if (sourceWh === partnerBranchCode) {
+        throw new Error(`출발창고(${sourceWh})와 도착지점(${partnerBranchCode})이 동일할 수 없습니다.`)
+      }
+      txType = 'MOVE'
+      effectiveTargetWarehouse = partnerBranchCode
+    } else if (mode === 'in') {
+      // 📥 입고 시에는 sourceWh가 대상 입고창고(도착창고)가 됨
+      sourceWh = firstRow.warehouse || firstRow.targetWarehouse || firstRow.sourceWarehouse || 'MAIN'
+    }
+
     const todayStr = formatDate(new Date())
-    const txType = mode === 'in' ? 'INBOUND' : 'OUTBOUND'
     const seq = await this.generateInvoiceNumber(txType)
     const invoiceNumber = `${todayStr}-${seq}`
-    const partner = String(tableData[0]?.location || '').trim()
-    const handler = String(admin || 'ADMIN').trim()
 
     // 품목 ID 확인 및 items payload 조립
     const itemsPayload = []
@@ -380,15 +447,18 @@ export const serverMethods = {
       })
     }
 
-    // Supabase 원자적 RPC 호출
+    // Supabase 원자적 RPC 호출 (이동/입고/출고)
     const { data: rpcResult, error: rpcErr } = await supabase.rpc('rpc_process_transaction', {
       p_tx_type: txType,
-      p_warehouse: 'MAIN',
+      p_warehouse: sourceWh,
       p_partner: partner,
       p_handler: handler,
       p_invoice: invoiceNumber,
-      p_memo: `${mode === 'in' ? '입고' : '출고'} 웹앱 처리`,
-      p_items: itemsPayload
+      p_memo: txType === 'MOVE' 
+        ? `[지점간이동] ${sourceWh} ➔ ${effectiveTargetWarehouse}` 
+        : `${mode === 'in' ? '입고' : '출고'} 웹앱 처리 (${sourceWh})`,
+      p_items: itemsPayload,
+      p_target_warehouse: effectiveTargetWarehouse
     })
 
     if (rpcErr) {
@@ -396,7 +466,7 @@ export const serverMethods = {
       throw new Error(rpcErr.message || '재고 트랜잭션 처리 실패')
     }
 
-    // 🛡️ [정합성 100% 무결성 보장] 프론트엔드 인메모리 캐시 즉각 동기화를 위해 방금 커밋된 최종 재고 조회
+    // 🛡️ [정합성 100% 무결성 보장] 메인창고 재고 캐시 즉각 동기화를 위해 방금 커밋된 최종 재고 조회
     const itemIds = itemsPayload.map(i => i.item_id)
     const { data: freshStocks } = await supabase
       .from('inventory_stocks')
@@ -418,6 +488,10 @@ export const serverMethods = {
       success: true,
       seq: seq,
       invoiceNumber: invoiceNumber,
+      txType: txType,
+      sourceWarehouse: sourceWh,
+      targetWarehouse: effectiveTargetWarehouse,
+      partner: partner,
       updatedItems: authoritativeItems,
       integrity: {
         checkedCount: itemsPayload.length,

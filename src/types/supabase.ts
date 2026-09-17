@@ -237,22 +237,34 @@ export type Database = {
           created_at: string | null
           id: string
           is_active: boolean | null
+          is_branch: boolean | null
+          is_customer: boolean | null
+          is_supplier: boolean | null
           name: string
-          partner_type: string
+          partner_type: string | null
+          warehouse_code: string | null
         }
         Insert: {
           created_at?: string | null
           id?: string
           is_active?: boolean | null
+          is_branch?: boolean | null
+          is_customer?: boolean | null
+          is_supplier?: boolean | null
           name: string
-          partner_type: string
+          partner_type?: string | null
+          warehouse_code?: string | null
         }
         Update: {
           created_at?: string | null
           id?: string
           is_active?: boolean | null
+          is_branch?: boolean | null
+          is_customer?: boolean | null
+          is_supplier?: boolean | null
           name?: string
-          partner_type?: string
+          partner_type?: string | null
+          warehouse_code?: string | null
         }
         Relationships: []
       }
@@ -351,6 +363,8 @@ export type Database = {
           item_id: string
           memo: string | null
           partner_name: string | null
+          source_warehouse: string | null
+          target_warehouse: string | null
           transaction_type: string
           unit_qty: number
           warehouse_code: string | null
@@ -364,6 +378,8 @@ export type Database = {
           item_id: string
           memo?: string | null
           partner_name?: string | null
+          source_warehouse?: string | null
+          target_warehouse?: string | null
           transaction_type: string
           unit_qty?: number
           warehouse_code?: string | null
@@ -377,6 +393,8 @@ export type Database = {
           item_id?: string
           memo?: string | null
           partner_name?: string | null
+          source_warehouse?: string | null
+          target_warehouse?: string | null
           transaction_type?: string
           unit_qty?: number
           warehouse_code?: string | null
@@ -471,18 +489,32 @@ export type Database = {
       }
     }
     Functions: {
-      rpc_process_transaction: {
-        Args: {
-          p_handler: string
-          p_invoice: string
-          p_items: Json
-          p_memo: string
-          p_partner: string
-          p_tx_type: string
-          p_warehouse: string
-        }
-        Returns: Json
-      }
+      rpc_process_transaction:
+        | {
+            Args: {
+              p_handler: string
+              p_invoice: string
+              p_items: Json
+              p_memo: string
+              p_partner: string
+              p_tx_type: string
+              p_warehouse: string
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_handler: string
+              p_invoice: string
+              p_items: Json
+              p_memo: string
+              p_partner: string
+              p_target_warehouse?: string
+              p_tx_type: string
+              p_warehouse: string
+            }
+            Returns: Json
+          }
     }
     Enums: {
       [_ in never]: never
