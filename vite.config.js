@@ -2,7 +2,17 @@
 
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { resolve } from 'path'
 
 export default defineConfig({
-  plugins: [vue()]
+  plugins: [vue()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        searchmodify: resolve(__dirname, 'searchmodify.html'),
+        pos: resolve(__dirname, 'pos.html')
+      }
+    }
+  }
 })
