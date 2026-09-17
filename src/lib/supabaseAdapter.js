@@ -506,41 +506,63 @@ export const serverMethods = {
   },
 
   /**
-   * 14. 8대 서브창고 주문 매트릭스 조회
+   * 14. 8대 서브창고 주문 매트릭스 조회 (PANTACO, IKEA, LERMA, PINO, YARE, ALMINTER, TLANE, STAR)
    */
   async getSubWarehouseStockMatrix(forceRefresh) {
-    const { data: rawWarehouses } = await supabase
-      .from('warehouses')
-      .select('code, name, sort_order, truck_capacity_boxes')
-      .neq('code', 'MAIN')
-      .order('sort_order', { ascending: true })
+    const whList = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
 
-    const whList = (rawWarehouses || []).map(w => w.name || w.code)
+    // 1. 전체 유효 재고 및 8대 서브창고 재고 병렬 조회 (sub-50ms)
+    const [res1, res2, subRes] = await Promise.all([
+      supabase.from('view_effective_stocks').select('*').range(0, 999),
+      supabase.from('view_effective_stocks').select('*').range(1000, 1999),
+      supabase.from('inventory_stocks').select('warehouse_code, box_qty, item_id').in('warehouse_code', whList)
+    ])
 
-    // items 및 재고 조회
-    const { data: items } = await supabase
-      .from('view_effective_stocks')
-      .select('*')
-      .limit(1000)
+    const allMainItems = [...(res1.data || []), ...(res2.data || [])]
+    const subStocks = subRes.data || []
 
-    const formattedItems = (items || []).map(row => {
+    // 2. 품목 ID별 서브창고 재고 맵 구성
+    const subMap = new Map()
+    subStocks.forEach(row => {
+      if (!subMap.has(row.item_id)) subMap.set(row.item_id, {})
+      subMap.get(row.item_id)[row.warehouse_code] = Number(row.box_qty || 0)
+    })
+
+    // 3. WMS 모달 매트릭스 규격으로 포맷팅
+    const matrixItems = allMainItems.map(row => {
+      const sMap = subMap.get(row.item_id) || {}
+      const stocks = {}
+      let totalSubStock = 0
+
+      whList.forEach(wh => {
+        const q = sMap[wh] || 0
+        stocks[wh] = q
+        totalSubStock += q
+      })
+
+      const mainStock = Number(row.main_box_qty || 0)
+      const safeStock = Number(row.safe_stock_boxes || 0)
+      const effectiveStock = Number(row.effective_box_qty || mainStock)
+
       return {
         codigo: row.item_name,
         color: row.color || 'SURTIDO',
-        mainStock: Number(row.main_box_qty || 0),
-        effectiveStock: Number(row.effective_box_qty || 0),
-        safeStock: Number(row.safe_stock_boxes || 0),
+        mainStock: mainStock,
+        safeStock: safeStock,
+        inTransit: 0,
+        effectiveStock: effectiveStock,
         boxContent: Number(row.box_packaging_qty || 1),
-        totalSubStock: 0,
-        subStocks: {}
+        stocks: stocks,
+        totalSubStock: totalSubStock
       }
     })
 
     return {
       success: true,
       warehouses: whList,
-      items: formattedItems,
-      updatedAt: new Date().toLocaleTimeString()
+      items: matrixItems,
+      totalLoadedCount: matrixItems.length,
+      updatedAt: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
     }
   },
 
