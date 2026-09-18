@@ -253,7 +253,7 @@
             <button type="submit" :disabled="settingsSaving">설정 저장</button>
           </form>
           <p v-else>설정 변경은 관리자만 할 수 있습니다. 서버 세션은 12시간 후 만료됩니다.</p>
-          <p>이전 HTML 화면이 필요하면 <a href="/wms.html">/wms.html</a> 을 여세요.</p>
+          <p>이전 HTML 화면이 필요하면 <a href="/index.html">/index.html</a> 을 여세요.</p>
           <p v-if="settingsStatus">{{ settingsStatus }}</p>
         </div>
       </section>

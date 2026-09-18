@@ -196,12 +196,19 @@ export const serverMethods = {
   },
 
   async login(memberName, password) {
-    const { data, error } = await supabase.rpc('rpc_login', {
-      p_member_name: memberName,
+    const rawName = String(memberName || '').trim()
+    let res = await supabase.rpc('rpc_login', {
+      p_member_name: rawName,
       p_password: password
     })
-    if (error) throw error
-    return data
+    if (!res.data?.success && rawName.toLowerCase() !== rawName) {
+      res = await supabase.rpc('rpc_login', {
+        p_member_name: rawName.toLowerCase(),
+        p_password: password
+      })
+    }
+    if (res.error) throw res.error
+    return res.data
   },
 
   async sessionInfo() {

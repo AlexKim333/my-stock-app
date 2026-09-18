@@ -8,8 +8,8 @@ import ocrHandler from './api/ocr.js'
 function vueSpaFallback() {
   const rewriteToIndex = (req) => {
     const url = String(req.url || '').split('?')[0]
-    if (url === '/login' || url.startsWith('/login/')) {
-      req.url = '/index.html'
+    if (url === '/login' || url.startsWith('/login/') || url === '/pos' || url.startsWith('/pos/')) {
+      req.url = '/pos.html'
     }
   }
   return {
@@ -69,7 +69,6 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           main: resolve(__dirname, 'index.html'),
-          wms: resolve(__dirname, 'wms.html'),
           searchmodify: resolve(__dirname, 'searchmodify.html'),
           pos: resolve(__dirname, 'pos.html'),
           productLedger: resolve(__dirname, 'product-ledger.html')
