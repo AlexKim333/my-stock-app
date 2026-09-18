@@ -144,160 +144,285 @@
     :root {
       --primary-color: #4CAF50;
       --submit-color: #2196F3;
-      --banner-color: #e0e0ff;
+      --banner-color: #ede9fe;
+    }
+    * {
+      box-sizing: border-box;
     }
     body {
-      font-family: Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", Arial, sans-serif;
       padding: 0;
       margin: 0;
-      background-color: #f0f0f0;
-      height: 851px;
-      width: 1075px;
+      background-color: #f8fafc;
+      height: 100vh;
+      width: 100%;
       overflow: hidden;
     }
-    .container { display: flex; flex-direction: column; height: 100%; }
-    .banner {
-      width: 100%;
-      height: 90px;
-      border-bottom: 1px solid #000;
-      padding: 10px;
+    .container {
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
-      align-items: flex-start;
-      font-size: 12pt;
-      font-weight: bold;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+    }
+    .banner {
+      width: 100%;
+      border-bottom: 1.5px solid #c7d2fe;
+      padding: 8px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
       background-color: var(--banner-color);
+      flex-shrink: 0;
     }
     .banner-row { 
       display: flex; 
       flex-direction: row; 
       align-items: center; 
-      gap: 10px; 
+      gap: 12px; 
       width: 100%; 
+      flex-wrap: nowrap;
     }
     .banner-row.second { 
-      justify-content: space-between; /* 변경: 요소들을 양쪽 끝과 중앙에 균형 배치 */
-      flex-wrap: wrap; /* 추가: 창 크기 초과 시 줄바꿈 허용 */
-      gap: 15px; /* 변경: 요소 간 간격 조정 */
-    }
-    .banner div { display: flex; align-items: center; }
-    .content { flex: 1; display: flex; width: 1075px; }
-    .menu {
-      width: 131px;
-      padding: 10px;
-      background-color: #ddd;
-      border-right: 1px solid #000;
-      display: flex;
-      flex-direction: column;
       justify-content: flex-start;
+      align-items: center;
+      gap: 16px;
     }
-    .menu button {
-      width: 100px;
-      padding: 10px;
-      margin-bottom: 20px;
-      background-color: var(--primary-color);
-      color: white;
-      border: none;
-      cursor: pointer;
-      font-size: 10pt;
+    #formTitle {
+      font-size: 11.5pt;
+      font-weight: 800;
+      color: #3730a3;
+      white-space: nowrap;
+      flex-shrink: 0;
+      margin-right: 4px;
+      letter-spacing: -0.3px;
+    }
+    .banner label {
+      display: inline-flex;
+      align-items: center;
+      width: auto !important;
+      margin-right: 4px !important;
+      font-size: 9.5pt;
+      font-weight: 700;
+      color: #1e1b4b;
       white-space: nowrap;
     }
-    .menu button:hover, .menu button.active { background-color: #45a049; }
+    .banner input[type="text"],
+    .banner input[type="date"] {
+      height: 30px !important;
+      padding: 3px 8px !important;
+      font-size: 9.5pt !important;
+      border: 1.5px solid #cbd5e1 !important;
+      border-radius: 6px !important;
+      background: #ffffff !important;
+    }
+    #searchDate { width: 130px !important; }
+    #invoiceNumber { width: 65px !important; text-align: center; font-weight: 800; color: #1e293b; }
+    #adminInput { width: 90px !important; text-align: center; font-weight: 700; }
+    #loadedInvoiceNumber {
+      display: inline-block;
+      min-width: 42px;
+      text-align: center;
+      font-size: 10pt;
+      font-weight: 800;
+      color: #1d4ed8;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      padding: 2px 8px;
+      border-radius: 6px;
+    }
+    .banner-row.second button {
+      padding: 5px 16px;
+      height: 30px;
+      background-color: #059669;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 9.5pt;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: background 0.15s;
+    }
+    .banner-row.second button:hover {
+      background-color: #047857;
+    }
+    .radio-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: #ffffff;
+      padding: 4px 12px;
+      border-radius: 20px;
+      border: 1.5px solid #ddd6fe;
+      flex-shrink: 0;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .radio-group label {
+      font-size: 9pt !important;
+      font-weight: 700 !important;
+      color: #334155;
+      margin: 0 !important;
+      cursor: pointer;
+      display: inline-flex !important;
+      align-items: center;
+      gap: 4px;
+    }
+    .arrow-buttons {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .arrow-buttons button {
+      width: 28px;
+      height: 28px;
+      font-size: 11pt;
+      padding: 0;
+      border: 1px solid #16a34a;
+      border-radius: 5px;
+      background-color: #22c55e;
+      color: white;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: bold;
+      transition: background 0.15s;
+    }
+    .arrow-buttons button:hover {
+      background-color: #16a34a;
+    }
+    .content {
+      flex: 1;
+      display: flex;
+      width: 100%;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .menu {
+      width: 110px;
+      padding: 10px 8px;
+      background-color: #f1f5f9;
+      border-right: 1px solid #cbd5e1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .menu button {
+      width: 100%;
+      padding: 8px 6px;
+      margin-bottom: 0;
+      background-color: #64748b;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 9pt;
+      font-weight: 700;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    .menu button:hover, .menu button.active {
+      background-color: #3b82f6;
+    }
     .input-area {
       flex: 1;
-      padding: 10px;
+      min-width: 0;
+      padding: 12px 16px;
       display: flex;
       flex-direction: row;
-      gap: 5px;
-      height: calc(100% - 20px);
+      gap: 16px;
+      height: 100%;
       overflow: hidden;
     }
     .input-group {
       display: flex;
       align-items: center;
       gap: 5px;
+      flex-shrink: 0;
     }
-    .input-section { flex: 3; display: flex; flex-direction: column; }
-    .table-section { flex: 7; display: flex; flex-direction: column; overflow: hidden; }
-    .form-group { margin-bottom: 20px; }
-    label {
+    .input-section {
+      flex: 0 0 310px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .table-section {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .form-group { margin-bottom: 12px; }
+    .input-section label {
       display: inline-block;
-      width: 100px;
-      margin-right: 10px;
-      font-size: 10pt;
+      width: 95px;
+      margin-right: 6px;
+      font-size: 9.5pt;
+      font-weight: 700;
+      color: #334155;
     }
-    select, input[type="text"], input[type="number"], input[type="date"] {
-      width: 200px;
-      padding: 5px;
-      font-size: 10pt;
+    .input-section select,
+    .input-section input[type="text"],
+    .input-section input[type="number"] {
+      width: 190px;
+      height: 32px;
+      padding: 4px 8px;
+      font-size: 9.5pt;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
     }
-    .input-row { margin-bottom: 10px; display: flex; align-items: center; }
-    .unit-options { margin-bottom: 10px; display: flex; align-items: center; }
-    .arrow-buttons {
-      display: flex;
-      gap: 5px;
-      justify-content: center;
-      align-items: center;
-      margin-left: 10px;
-    }
-    .arrow-buttons button {
-      width: 30px;
-      height: 30px;
-      font-size: 14pt;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      border: 1px solid #000;
-      background-color: var(--primary-color);
-      cursor: pointer;
-    }
+    .input-row { margin-bottom: 8px; display: flex; align-items: center; }
+    .unit-options { margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+    .unit-options label { width: auto !important; margin-right: 0 !important; cursor: pointer; }
     table { width: 100%; border-collapse: collapse; }
     th, td {
       border: 1px solid #ddd;
-      padding: 8px;
+      padding: 6px 8px;
       text-align: center;
-      font-size: 10pt;
+      font-size: 9.5pt;
     }
     th { 
-      background-color: #f2f2f2; 
-      height: 40px; 
+      background-color: #f1f5f9; 
+      color: #1e293b;
+      font-weight: 700;
+      height: 36px; 
       position: sticky; 
       top: 0; 
       z-index: 1; 
     }
-    td { height: 40px; }
+    td { height: 36px; }
     .scrollable-table {
       overflow-y: hidden;
-      border: 1px solid #ddd;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
       flex: 1;
     }
     .scrollable-table.scroll-enabled { 
-      max-height: 300px;
+      max-height: 420px;
       overflow-y: auto;
     }
-    .buttons { margin-bottom: 10px; display: flex; gap: 10px; align-items: center; }
+    .buttons { margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     button {
-      padding: 10px 20px;
+      padding: 7px 16px;
       background-color: var(--primary-color);
       color: white;
       border: none;
+      border-radius: 6px;
       cursor: pointer;
-      font-size: 10pt;
+      font-size: 9.5pt;
+      font-weight: 700;
+      transition: background 0.15s;
     }
     button.submit { background-color: var(--submit-color); }
     button:hover { background-color: #45a049; }
-    .total-label { margin-left: 10px; font-size: 10pt; font-weight: bold; }
-    .radio-group {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .radio-group label {
-      font-size: 10pt;
-      display: flex;
-      align-items: center;
-    }
+    button.submit:hover { background-color: #0284c7; }
+    .total-label { margin-left: 8px; font-size: 9pt; font-weight: 700; color: #475569; }
     .dropdown-container {
       background-color: white;
       border: 1px solid #ddd;
@@ -371,7 +496,7 @@
   <div class="container">
     <div class="banner">
       <div class="banner-row">
-        <div id="formTitle">검색수정</div>
+        <div id="formTitle">🔍 검색수정</div>
         <div class="radio-group">
           <label><input type="radio" name="recordType" value="in" checked> 입고</label>
           <label><input type="radio" name="recordType" value="out"> 출고</label>
@@ -386,21 +511,20 @@
           <input type="text" id="invoiceNumber" name="invoiceNumber">
         </div>
         <div class="arrow-buttons">
-          <button onclick="decrementInvoice()">◀</button>
-          <button onclick="incrementInvoice()">▶</button>
+          <button type="button" onclick="decrementInvoice()" title="이전 영수증">◀</button>
+          <button type="button" onclick="incrementInvoice()" title="다음 영수증">▶</button>
         </div>
-
       </div>
       <div class="banner-row second">
         <div class="input-group">
           <label for="adminInput">관리자:</label>
           <input type="text" id="adminInput" name="adminInput" value="ADMIN">
         </div>
-          <div class="input-group">
-          <label>로드영수증번호:</label>
+        <div class="input-group">
+          <label>로드 영수증:</label>
           <span id="loadedInvoiceNumber">000</span>
         </div>
-        <button onclick="searchRecords()">검색</button>
+        <button type="button" onclick="searchRecords()">🔍 전표 검색</button>
       </div>
     </div>
     <div class="content">
