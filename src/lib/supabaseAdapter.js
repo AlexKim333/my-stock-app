@@ -183,7 +183,24 @@ export const serverMethods = {
   },
 
   /**
-   * 6. 오늘자 송장 번호 자동 채번
+   * 트랜잭션 유형 정규화 헬퍼 (입고 / 출고 / 재고조정 독립 채번 지원)
+   */
+  _normalizeTxTypes(type) {
+    const t = String(type || '').trim().toLowerCase()
+    if (t === 'in' || t === 'inbound' || t === '입고') {
+      return ['INBOUND']
+    }
+    if (t === 'out' || t === 'outbound' || t === '출고' || t === 'move') {
+      return ['OUTBOUND', 'MOVE']
+    }
+    if (t === 'adj' || t === 'adjust' || t === '재고조정' || t === '재고조사' || t === '재고치환' || t === '재고추가') {
+      return ['ADJUST']
+    }
+    return [String(type || 'OUTBOUND').toUpperCase()]
+  },
+
+  /**
+   * 6. 오늘자 송장 번호 자동 채번 (입고 / 출고 / 재고조정 각각 당일 001부터 독립 채번)
    */
   async getInitialInvoiceNumber() {
     return this.generateInvoiceNumber('INBOUND')
@@ -199,19 +216,23 @@ export const serverMethods = {
 
   async generateInvoiceNumber(type) {
     const todayStr = formatDate(new Date())
+    const txTypes = this._normalizeTxTypes(type)
+
     const { data } = await supabase
       .from('stock_transactions')
-      .select('invoice_no')
+      .select('invoice_no, transaction_type')
       .like('invoice_no', `${todayStr}%`)
+      .in('transaction_type', txTypes)
       .order('created_at', { ascending: false })
-      .limit(100)
+      .limit(200)
 
     let maxSeq = 0
     if (data && data.length > 0) {
       data.forEach(row => {
         const inv = String(row.invoice_no || '')
         if (inv.includes('-')) {
-          const seq = parseInt(inv.split('-')[1], 10)
+          const parts = inv.split('-')
+          const seq = parseInt(parts[parts.length - 1], 10)
           if (!isNaN(seq) && seq > maxSeq) maxSeq = seq
         }
       })
@@ -221,18 +242,22 @@ export const serverMethods = {
 
   async getMaxSequentialNumber(date, type) {
     const targetDate = date ? date.replace(/-/g, '/') : formatDate(new Date())
+    const txTypes = this._normalizeTxTypes(type)
+
     const { data } = await supabase
       .from('stock_transactions')
-      .select('invoice_no')
+      .select('invoice_no, transaction_type')
       .like('invoice_no', `${targetDate}%`)
-      .limit(200)
+      .in('transaction_type', txTypes)
+      .limit(300)
 
     let maxSeq = 0
     if (data) {
       data.forEach(row => {
         const inv = String(row.invoice_no || '')
         if (inv.includes('-')) {
-          const seq = parseInt(inv.split('-')[1], 10)
+          const parts = inv.split('-')
+          const seq = parseInt(parts[parts.length - 1], 10)
           if (!isNaN(seq) && seq > maxSeq) maxSeq = seq
         }
       })
@@ -569,9 +594,9 @@ export const serverMethods = {
     const rawInv = String(invoiceNumber || '').trim()
     const slashInv = rawInv.replace(/-/g, '/')
     const dashInv = rawInv.replace(/\//g, '-')
-    const txType = type === 'in' ? 'INBOUND' : 'OUTBOUND'
+    const txTypes = this._normalizeTxTypes(type)
 
-    // 전표번호 검색 (슬래시 및 대시 형식 모두 지원)
+    // 전표번호 검색 (슬래시 및 대시 형식 모두 지원 + 해당 거래유형 매칭)
     const { data, error } = await supabase
       .from('stock_transactions')
       .select(`
@@ -593,7 +618,7 @@ export const serverMethods = {
         )
       `)
       .or(`invoice_no.eq.${slashInv},invoice_no.eq.${dashInv}`)
-      .eq('transaction_type', txType)
+      .in('transaction_type', txTypes)
 
     if (error) {
       console.error('[SupabaseAdapter] searchRecords 실패:', error)
@@ -607,7 +632,7 @@ export const serverMethods = {
       boxQty: row.box_qty,
       individualQty: row.unit_qty,
       boxContent: row.items?.box_packaging_qty || 1,
-      location: row.partner_name || '',
+      location: row.partner_name || row.memo || 'MAIN',
       admin: row.handler_name || 'ADMIN',
       manufacturer: '',
       verificationStatus: 'PASS',
@@ -616,7 +641,8 @@ export const serverMethods = {
   },
 
   async updatePendingRecords(invoiceNumber, type, newRecords, admin) {
-    const txType = type === 'in' ? 'INBOUND' : 'OUTBOUND'
+    const txTypes = this._normalizeTxTypes(type)
+    const txType = txTypes[0] || 'OUTBOUND'
     const targetInv = String(invoiceNumber || '').trim()
 
     // 1. 새 레코드의 item_id 보정
