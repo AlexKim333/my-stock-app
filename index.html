@@ -2118,6 +2118,8 @@
           <button type="button" class="action-btn btn-stock-normalize" onclick="openStockNormalizeModal()" tabindex="13" id="stockNormalizeButton" title="재고시트 중복 코드(하이픈) 및 다중 포장규격 대표수량 통합" style="padding: 4px 10px; font-size: 8.5pt;">🧹 재고정규화</button>
           <button type="button" class="action-btn btn-stock-winter" onclick="openWinterSafeStockModal()" tabindex="14" id="winterSafeStockButton" title="과거 11~12월 트랜잭션 전수 분석 및 과학적 안전재고(Safe Stock) 산정" style="padding: 4px 10px; font-size: 8.5pt; background: #0284c7; color: #ffffff; border: 1px solid #0369a1; border-radius: 4px; font-weight: bold; cursor: pointer;">❄️ 성수기안전재고</button>
           <button type="button" class="action-btn btn-print-order" onclick="printWorkOrder()" tabindex="15" id="printOrderButton" title="현재 장바구니 품목을 스페인어 작업지시서(ORDEN DE TRABAJO)로 즉시 인쇄" style="padding: 4px 10px; font-size: 8.5pt; background: #334155; color: #ffffff; border: 1px solid #1e293b; border-radius: 4px; font-weight: bold; cursor: pointer;">📱 작업지시서</button>
+          <button type="button" class="action-btn btn-dashboard-top" onclick="openDashboardModal()" title="물류 통합 관제 대시보드 열기" style="padding: 4px 10px; font-size: 8.5pt; background: #059669; color: #ffffff; border: 1px solid #047857; border-radius: 4px; font-weight: bold; cursor: pointer;">📊 대시보드</button>
+          <button type="button" class="action-btn btn-settings-top" onclick="openSettingsModal()" title="시스템 종합 설정 및 AI 마이그레이션 열기" style="padding: 4px 10px; font-size: 8.5pt; background: #475569; color: #ffffff; border: 1px solid #334155; border-radius: 4px; font-weight: bold; cursor: pointer;">⚙️ 설정</button>
         </div>
       </div>
       <div class="banner-right">
@@ -2142,6 +2144,7 @@
     </div>
     <div class="content">
       <div class="menu">
+        <button type="button" onclick="openDashboardModal()" id="btnNavDashboard" style="background: linear-gradient(135deg, #059669, #047857); color: #ffffff; font-weight: 800; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 3px; font-size: 8.5pt;" title="물류 통합 관제 대시보드">📊 대시보드</button>
         <button onclick="setPage('입고입력')" class="active">📥 입고입력</button>
         <button onclick="setPage('출고입력')">📤 출고입력</button>
         <button onclick="setPage('상품등록')">🏷️ 상품등록</button>
@@ -2155,6 +2158,7 @@
           <span>📝 주문서작성</span>
           <span id="orderDraftBadge" class="nav-badge" style="display: none;">0</span>
         </button>
+        <button type="button" onclick="openSettingsModal()" id="btnNavSettings" style="background: #334155; color: #f8fafc; font-weight: 700; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; margin-top: 3px; font-size: 8.5pt;" title="시스템 설정 및 AI 품명 마이그레이션">⚙️ 시스템설정</button>
       </div>
       <div class="input-area">
         <div class="input-section">
@@ -12397,6 +12401,305 @@ if (document.readyState === 'loading') {
 }
 </script>
 
+  <!-- 📊 물류 통합 관제 대시보드 (Dashboard Modal) -->
+  <div id="dashboardModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:9998; justify-content:center; align-items:center; backdrop-filter:blur(3px);">
+    <div style="background:#f8fafc; width:96%; max-width:1240px; height:92%; max-height:92vh; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.4); border:1px solid #cbd5e1;">
+      <!-- 헤더 -->
+      <div style="padding:12px 18px; background:linear-gradient(135deg, #065f46, #047857); color:#ffffff; display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:16pt;">📊</span>
+          <div>
+            <h2 style="margin:0; font-size:12pt; font-weight:800; letter-spacing:0.5px; color:#ffffff;">WMS 물류 통합 관제 대시보드 (Control Tower)</h2>
+            <span id="dashLastUpdated" style="font-size:7.5pt; color:#a7f3d0;">실시간 관제 활성화됨</span>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button type="button" onclick="refreshDashboardData()" style="background:rgba(255,255,255,0.2); color:#ffffff; border:1px solid rgba(255,255,255,0.4); border-radius:6px; padding:6px 12px; cursor:pointer; font-weight:700; font-size:8.5pt; display:flex; align-items:center; gap:4px;">🔄 실시간 갱신</button>
+          <button type="button" onclick="closeDashboardModal()" style="background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:6px 14px; cursor:pointer; font-weight:bold; font-size:9.5pt;">✕ 닫기</button>
+        </div>
+      </div>
+
+      <!-- 본문 스크롤 영역 -->
+      <div style="flex:1; overflow-y:auto; padding:16px 20px; display:flex; flex-direction:column; gap:16px;">
+        
+        <!-- 1. 5대 핵심 KPI 카드 -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px;">
+          <!-- 총 재고 -->
+          <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #3b82f6;">
+            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">📦 본사 가용 총재고</div>
+            <div style="font-size:16pt; font-weight:900; color:#1e293b;" id="dashKpiTotalStock">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
+            <div style="font-size:7.8pt; color:#64748b; margin-top:2px;">낱개: <span id="dashKpiTotalUnits" style="font-weight:700; color:#2563eb;">0</span> 개</div>
+          </div>
+          <!-- 금일 입고 -->
+          <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #10b981;">
+            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">📥 금일 입고 실적</div>
+            <div style="font-size:16pt; font-weight:900; color:#065f46;" id="dashKpiTodayIn">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
+            <div style="font-size:7.8pt; color:#10b981; margin-top:2px;">오늘 확정 입고분</div>
+          </div>
+          <!-- 금일 출고 -->
+          <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #f59e0b;">
+            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">📤 금일 출고 실적</div>
+            <div style="font-size:16pt; font-weight:900; color:#92400e;" id="dashKpiTodayOut">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
+            <div style="font-size:7.8pt; color:#d97706; margin-top:2px;">지점/거래처 발송분</div>
+          </div>
+          <!-- 이동중/보류 -->
+          <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #8b5cf6;">
+            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">🚚 서브창고 이동/보류</div>
+            <div style="font-size:16pt; font-weight:900; color:#5b21b6;" id="dashKpiInTransit">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
+            <div style="font-size:7.8pt; color:#7c3aed; margin-top:2px;">보류 주문서: <span id="dashKpiPendingOrders" style="font-weight:700;">0</span> 건</div>
+          </div>
+          <!-- 결품 위험 -->
+          <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #ef4444;">
+            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">⚠️ 안전재고 미달 품목</div>
+            <div style="font-size:16pt; font-weight:900; color:#b91c1c;" id="dashKpiLowStock">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">개 품목</span></div>
+            <div style="font-size:7.8pt; color:#dc2626; margin-top:2px;">발주 및 보충 요망</div>
+          </div>
+        </div>
+
+        <!-- 2. 8대 서브창고 트럭 적재율 게이지 -->
+        <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span style="font-size:11pt; font-weight:800; color:#0f172a;">🚛 8대 서브창고 이동중 수량 & 트럭 적재율 (<span id="dashTruckCapacityLabel">100</span>상자 기준)</span>
+              <span style="font-size:7.5pt; color:#64748b; background:#f1f5f9; padding:2px 6px; border-radius:4px;">실시간 In-Transit 집계</span>
+            </div>
+            <button type="button" onclick="closeDashboardModal(); openSubWarehouseMatrixModal();" style="font-size:8pt; padding:4px 10px; background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; border-radius:5px; font-weight:700; cursor:pointer;">📝 서브창고 매트릭스 열기 ➔</button>
+          </div>
+          <div id="dashTruckGaugesGrid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:10px;">
+            <!-- 각 창고별 카드 렌더링 -->
+          </div>
+        </div>
+
+        <!-- 3. 결품 위험 & 발주 추천 품목 큐 (Actionable Table) -->
+        <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span style="font-size:11pt; font-weight:800; color:#991b1b;">⚠️ 안전재고 미달 품목 Top 10 (결품 방지 긴급 대응)</span>
+              <span id="dashLowStockBadge" style="font-size:7.5pt; color:#dc2626; background:#fee2e2; padding:2px 6px; border-radius:4px; font-weight:700;">0건 감지</span>
+            </div>
+            <span style="font-size:7.8pt; color:#64748b;">현재고가 기준 안전재고보다 부족한 품목 목록</span>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; font-size:8.5pt; text-align:left;">
+              <thead>
+                <tr style="background:#f8fafc; border-bottom:1.5px solid #cbd5e1; color:#475569; font-weight:700;">
+                  <th style="padding:6px 10px;">품명</th>
+                  <th style="padding:6px 10px;">컬러</th>
+                  <th style="padding:6px 10px; text-align:right;">현재고</th>
+                  <th style="padding:6px 10px; text-align:right;">안전재고</th>
+                  <th style="padding:6px 10px; text-align:right;">부족수량</th>
+                  <th style="padding:6px 10px; text-align:center;">상태</th>
+                  <th style="padding:6px 10px; text-align:center;">조치</th>
+                </tr>
+              </thead>
+              <tbody id="dashLowStockTableBody">
+                <tr><td colspan="7" style="text-align:center; padding:14px; color:#94a3b8;">결품 위험 품목이 없습니다. (재고 양호)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 4. 최근 7일 입출고 실적 트렌드 & 베스트셀러 Top 5 -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(400px, 1fr)); gap:14px;">
+          <!-- 7일 입출고 실적 차트 -->
+          <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+              <span style="font-size:10.5pt; font-weight:800; color:#1e293b;">📈 최근 7일 입고 vs 출고 추이 (상자수)</span>
+              <div style="display:flex; align-items:center; gap:8px; font-size:7.5pt; font-weight:600;">
+                <span style="display:inline-flex; align-items:center; gap:3px;"><span style="width:10px; height:10px; background:#10b981; border-radius:2px; display:inline-block;"></span> 입고</span>
+                <span style="display:inline-flex; align-items:center; gap:3px;"><span style="width:10px; height:10px; background:#f59e0b; border-radius:2px; display:inline-block;"></span> 출고</span>
+              </div>
+            </div>
+            <div id="dashDailyTrendChart" style="height:140px; display:flex; align-items:flex-end; gap:8px; padding-top:10px; border-bottom:1px solid #e2e8f0;">
+              <!-- 7일 바 렌더링 -->
+            </div>
+            <div id="dashDailyTrendLabels" style="display:flex; justify-content:space-between; font-size:7.5pt; color:#64748b; margin-top:4px;"></div>
+          </div>
+
+          <!-- 베스트셀러 Top 5 -->
+          <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+              <span style="font-size:10.5pt; font-weight:800; color:#1e293b;">⭐ 최근 7일 베스트셀러 출고 Top 5</span>
+              <span style="font-size:7.5pt; color:#64748b;">주문 빈도 최상위</span>
+            </div>
+            <div id="dashTopSellersList" style="display:flex; flex-direction:column; gap:8px;">
+              <div style="color:#94a3b8; font-size:8.5pt; text-align:center; padding:16px;">출고 실적 데이터 수집 중...</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ⚙️ WMS 시스템 종합 설정 및 AI 마이그레이션 모달 (Settings Modal) -->
+  <div id="settingsModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:9998; justify-content:center; align-items:center; backdrop-filter:blur(3px);">
+    <div style="background:#ffffff; width:94%; max-width:980px; height:90%; max-height:88vh; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.4); border:1px solid #cbd5e1;">
+      <!-- 헤더 -->
+      <div style="padding:12px 18px; background:#1e293b; color:#ffffff; display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:15pt;">⚙️</span>
+          <div>
+            <h2 style="margin:0; font-size:11.5pt; font-weight:800; letter-spacing:0.5px; color:#ffffff;">WMS 시스템 종합 설정 & AI 품명 마이그레이션</h2>
+            <span style="font-size:7.5pt; color:#94a3b8;">물류 정책, 영수증 서식, 작업자 관리, AI 별명사전 자동 구축</span>
+          </div>
+        </div>
+        <button type="button" onclick="closeSettingsModal()" style="background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:6px 14px; cursor:pointer; font-weight:bold; font-size:9.5pt;">✕ 닫기</button>
+      </div>
+
+      <!-- 탭 바 -->
+      <div style="display:flex; background:#f1f5f9; border-bottom:1.5px solid #cbd5e1; padding:0 8px; gap:4px; flex-shrink:0;">
+        <button type="button" class="cfg-tab-btn active" id="cfgTab_subwh" onclick="switchSettingsTab('subwh')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:700; color:#1e293b; border-bottom:3px solid #2563eb; cursor:pointer;">🏢 서브창고 & 거래처</button>
+        <button type="button" class="cfg-tab-btn" id="cfgTab_policy" onclick="switchSettingsTab('policy')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:600; color:#64748b; border-bottom:3px solid transparent; cursor:pointer;">📐 물류 정책</button>
+        <button type="button" class="cfg-tab-btn" id="cfgTab_receipt" onclick="switchSettingsTab('receipt')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:600; color:#64748b; border-bottom:3px solid transparent; cursor:pointer;">🖨️ 영수증 서식</button>
+        <button type="button" class="cfg-tab-btn" id="cfgTab_worker" onclick="switchSettingsTab('worker')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:600; color:#64748b; border-bottom:3px solid transparent; cursor:pointer;">🔐 작업자 관리</button>
+        <button type="button" class="cfg-tab-btn" id="cfgTab_ai" onclick="switchSettingsTab('ai')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:700; color:#7c3aed; border-bottom:3px solid transparent; cursor:pointer;">🤖 AI 품명 마이그레이션</button>
+      </div>
+
+      <!-- 탭 콘텐츠 영역 -->
+      <div style="flex:1; overflow-y:auto; padding:18px 20px;">
+        
+        <!-- 탭 1: 서브창고 & 거래처 -->
+        <div id="cfgPanel_subwh" class="cfg-tab-panel" style="display:block;">
+          <h3 style="margin:0 0 10px 0; font-size:10.5pt; font-weight:800; color:#1e293b;">🏢 8대 서브창고(외부창고) 활성화 및 관리</h3>
+          <p style="font-size:8.2pt; color:#64748b; margin-bottom:14px;">WMS 매트릭스 및 주문서에 노출할 외부창고를 관리합니다.</p>
+          <div id="cfgSubwhList" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin-bottom:18px;">
+            <!-- 체크박스 항목들 -->
+          </div>
+          <button type="button" onclick="saveSubWhSettings()" style="padding:7px 16px; background:#2563eb; color:#ffffff; font-weight:700; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt;">💾 서브창고 목록 저장</button>
+        </div>
+
+        <!-- 탭 2: 물류 정책 -->
+        <div id="cfgPanel_policy" class="cfg-tab-panel" style="display:none;">
+          <h3 style="margin:0 0 10px 0; font-size:10.5pt; font-weight:800; color:#1e293b;">📐 물류 운용 임계치 및 정책 설정</h3>
+          <p style="font-size:8.2pt; color:#64748b; margin-bottom:14px;">트럭 배차 기준 및 겨울 성수기 안전재고 승수를 지정합니다.</p>
+          <div style="max-width:520px; display:flex; flex-direction:column; gap:14px;">
+            <div>
+              <label style="display:block; font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:4px;">🚚 트럭 1회 만차 기준 상자수 (적재율 100% 기준)</label>
+              <input type="number" id="cfgTruckTarget" value="100" min="10" max="500" style="width:100%; padding:8px 12px; font-size:9.5pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+              <span style="font-size:7.5pt; color:#64748b;">대시보드 적재율 게이지 계산에 사용됩니다. (기본: 100상자)</span>
+            </div>
+            <div>
+              <label style="display:block; font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:4px;">❄️ 겨울 성수기(11~12월) 안전재고 가중치 승수</label>
+              <input type="number" id="cfgWinterMult" value="1.3" step="0.1" min="1.0" max="3.0" style="width:100%; padding:8px 12px; font-size:9.5pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+              <span style="font-size:7.5pt; color:#64748b;">과거 트랜잭션 평균 대비 성수기 안전재고 추천 배수 (기본: 1.3배)</span>
+            </div>
+            <div>
+              <label style="display:inline-flex; align-items:center; gap:8px; font-size:8.5pt; font-weight:700; color:#334155; cursor:pointer;">
+                <input type="checkbox" id="cfgAlertIndivOut" checked style="cursor:pointer;">
+                <span>출고 시 낱개 수량 입력 시 안전 확인 알림 표시</span>
+              </label>
+            </div>
+            <button type="button" onclick="savePolicySettings()" style="padding:7px 16px; background:#2563eb; color:#ffffff; font-weight:700; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt; width:fit-content; margin-top:6px;">💾 물류 정책 저장</button>
+          </div>
+        </div>
+
+        <!-- 탭 3: 영수증 서식 -->
+        <div id="cfgPanel_receipt" class="cfg-tab-panel" style="display:none;">
+          <h3 style="margin:0 0 10px 0; font-size:10.5pt; font-weight:800; color:#1e293b;">🖨️ 영수증 및 작업지시서 인쇄 서식 설정</h3>
+          <p style="font-size:8.2pt; color:#64748b; margin-bottom:14px;">영수증 상단 헤더, 회사명, 주소 및 하단 안내 문구를 맞춤 설정합니다.</p>
+          <div style="max-width:580px; display:flex; flex-direction:column; gap:12px;">
+            <div>
+              <label style="display:block; font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:4px;">상호명 (Company Name)</label>
+              <input type="text" id="cfgReceiptCompany" value="LADY POLO S.A. DE C.V." style="width:100%; padding:8px 12px; font-size:9.5pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="display:block; font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:4px;">주소 및 사업자 등록 번호 (Address / RFC)</label>
+              <input type="text" id="cfgReceiptAddress" value="ALARCÓN #42, COL. CENTRO, CDMX" style="width:100%; padding:8px 12px; font-size:9.5pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="display:block; font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:4px;">하단 고객 안내 문구 (Notice)</label>
+              <textarea id="cfgReceiptNotice" rows="2" style="width:100%; padding:8px 12px; font-size:9pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">30일 이내 영수증 지참 시 교환 가능 (환불 불가)</textarea>
+            </div>
+            <div>
+              <label style="display:block; font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:4px;">1페이지당 최대 품목 인쇄 행수 (Rows per Page)</label>
+              <input type="number" id="cfgReceiptRows" value="15" min="5" max="30" style="width:100%; padding:8px 12px; font-size:9.5pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+            </div>
+            <button type="button" onclick="saveReceiptSettings()" style="padding:7px 16px; background:#2563eb; color:#ffffff; font-weight:700; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt; width:fit-content; margin-top:6px;">💾 영수증 서식 저장</button>
+          </div>
+        </div>
+
+        <!-- 탭 4: 작업자 관리 -->
+        <div id="cfgPanel_worker" class="cfg-tab-panel" style="display:none;">
+          <h3 style="margin:0 0 10px 0; font-size:10.5pt; font-weight:800; color:#1e293b;">🔐 WMS 작업자 명단 및 보안 설정</h3>
+          <p style="font-size:8.2pt; color:#64748b; margin-bottom:14px;">현재 등록된 시스템 작업자 및 계정 상태를 조회합니다.</p>
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px 14px; margin-bottom:16px;">
+            <div style="font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:8px;">👥 등록된 작업자 목록</div>
+            <div id="cfgWorkerBadgesList" style="display:flex; flex-wrap:wrap; gap:6px;">
+              <!-- 작업자 태그 목록 -->
+            </div>
+          </div>
+          <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:12px 14px; margin-bottom:16px;">
+            <div style="font-size:8.5pt; font-weight:700; color:#166534; margin-bottom:4px;">🔑 PIN 비밀번호 보안 안내</div>
+            <div style="font-size:8pt; color:#15803d; line-height:1.5;">작업자 PIN은 Supabase DB 정책 또는 브라우저 인증 세션을 통해 보호됩니다. 기본 관리자 PIN은 1234 또는 admin입니다.</div>
+          </div>
+          <button type="button" onclick="handleWmsLogout()" style="padding:7px 16px; background:#dc2626; color:#ffffff; font-weight:700; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt;">🚪 현재 작업자 로그아웃</button>
+        </div>
+
+        <!-- 탭 5: AI 품명 마이그레이션 -->
+        <div id="cfgPanel_ai" class="cfg-tab-panel" style="display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+            <div>
+              <h3 style="margin:0 0 4px 0; font-size:10.5pt; font-weight:800; color:#6d28d9; display:flex; align-items:center; gap:6px;">
+                <span>🤖 AI 품명 시맨틱 매칭 & 별명사전(aliases) 자동 구축</span>
+              </h3>
+              <p style="margin:0; font-size:8.2pt; color:#64748b;">과거 구글 시트, 엑셀, 장부의 비표준 품명들을 AI가 표준 마스터 품명과 자동 매핑하고 별명사전에 원클릭 등록합니다.</p>
+            </div>
+            <button type="button" onclick="loadSampleMigrationData()" style="padding:4px 10px; font-size:7.8pt; background:#f3e8ff; color:#7e22ce; border:1px solid #d8b4fe; border-radius:5px; font-weight:700; cursor:pointer;">샘플 예시 불러오기</button>
+          </div>
+
+          <div style="margin-bottom:12px;">
+            <label style="display:block; font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:4px;">1. 과거 구 품명 목록 붙여넣기 (줄바꿈 구분):</label>
+            <textarea id="aiRawItemsInput" rows="5" placeholder="예:&#10;POLO MANGA CORTA 100&#10;BLUSA DAMA ROSA&#10;CAMISA CASUAL HOMBRE&#10;PANTALON JEANS 32" style="width:100%; padding:8px 12px; font-size:9pt; border:1.5px solid #cbd5e1; border-radius:8px; box-sizing:border-box; font-family:monospace;" oninput="updateAiInputStats()"></textarea>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+              <span id="aiInputStats" style="font-size:7.5pt; color:#64748b;">입력 줄수: 0건</span>
+              <button type="button" onclick="runAiSemanticMatching()" id="btnRunAiMatch" style="padding:7px 18px; background:linear-gradient(135deg, #7c3aed, #6d28d9); color:#ffffff; font-weight:800; border:none; border-radius:6px; cursor:pointer; font-size:9pt; display:flex; align-items:center; gap:6px; box-shadow:0 2px 6px rgba(124,58,237,0.3);">
+                <span>✨ AI 시맨틱 분석 & 카탈로그 매칭 실행</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 매칭 결과 테이블 -->
+          <div id="aiMatchResultSection" style="display:none; margin-top:14px; border-top:1.5px dashed #cbd5e1; padding-top:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:9.5pt; font-weight:800; color:#1e293b;">2. AI 매핑 제안 결과 (<span id="aiMatchResultCount">0</span>건)</span>
+                <label style="display:inline-flex; align-items:center; gap:4px; font-size:8pt; cursor:pointer;">
+                  <input type="checkbox" id="chkSelectAllAiMatches" onchange="toggleSelectAllAiMatches(this.checked)" checked>
+                  <span style="font-weight:600; color:#475569;">전체 선택</span>
+                </label>
+              </div>
+              <button type="button" onclick="commitAiAliases()" id="btnCommitAiAliases" style="padding:6px 14px; background:#16a34a; color:#ffffff; font-weight:800; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt; display:flex; align-items:center; gap:4px; box-shadow:0 2px 6px rgba(22,163,74,0.3);">
+                <span>✅ 선택 항목 별명사전(aliases)에 영구 등록</span>
+              </button>
+            </div>
+
+            <div style="max-height:260px; overflow-y:auto; border:1px solid #cbd5e1; border-radius:8px; background:#ffffff;">
+              <table style="width:100%; border-collapse:collapse; font-size:8.5pt;">
+                <thead>
+                  <tr style="background:#f8fafc; border-bottom:1.5px solid #cbd5e1; color:#475569; position:sticky; top:0; z-index:2;">
+                    <th style="padding:6px 8px; width:36px; text-align:center;">선택</th>
+                    <th style="padding:6px 8px; text-align:left;">입력 구 품명</th>
+                    <th style="padding:6px 8px; text-align:left;">매핑 카탈로그 품명</th>
+                    <th style="padding:6px 8px; text-align:center; width:70px;">컬러</th>
+                    <th style="padding:6px 8px; text-align:center; width:80px;">신뢰도</th>
+                    <th style="padding:6px 8px; text-align:left;">매칭 사유</th>
+                  </tr>
+                </thead>
+                <tbody id="aiMatchTableBody">
+                  <!-- 행 렌더링 -->
+                </tbody>
+              </table>
+            </div>
+            <div id="aiCommitStatus" style="display:none; margin-top:8px; font-size:8.5pt; font-weight:700; color:#15803d; padding:6px 10px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:6px;"></div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+  </div>
+
   <!-- 🔍 검색수정 (Search & Modify) 모달 -->
   <div id="searchModifyModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(2px);">
     <div style="background:#ffffff; width:96%; max-width:1160px; height:92%; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.35);">
@@ -12429,6 +12732,9 @@ if (document.readyState === 'loading') {
   </div>
 
   <script>
+    /* ==========================================================================
+       1. 입출고 전표 검색 및 수정 모달 (Search & Modify)
+       ========================================================================== */
     function openSearchModifyModal() {
       const modal = document.getElementById('searchModifyModal');
       if (modal) modal.style.display = 'flex';
@@ -12438,6 +12744,9 @@ if (document.readyState === 'loading') {
       if (modal) modal.style.display = 'none';
     }
 
+    /* ==========================================================================
+       2. WMS 작업자 인증 및 로그인 세션 (Worker Authentication)
+       ========================================================================== */
     async function initWmsAuth() {
       try {
         const adminSelect = document.getElementById('adminSelect');
@@ -12495,6 +12804,584 @@ if (document.readyState === 'loading') {
         localStorage.removeItem('wms_auth_user');
         const modal = document.getElementById('wmsAuthModal');
         if (modal) modal.style.display = 'flex';
+      }
+    }
+
+    /* ==========================================================================
+       3. WMS 물류 통합 관제 대시보드 (Dashboard Controller)
+       ========================================================================== */
+    let currentDashboardData = null;
+
+    function openDashboardModal() {
+      const modal = document.getElementById('dashboardModal');
+      if (modal) {
+        modal.style.display = 'flex';
+        refreshDashboardData();
+      }
+    }
+
+    function closeDashboardModal() {
+      const modal = document.getElementById('dashboardModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function refreshDashboardData() {
+      const updateEl = document.getElementById('dashLastUpdated');
+      if (updateEl) updateEl.textContent = '실시간 메트릭스 집계 중... ⏳';
+
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(onDashboardDataLoaded)
+          .withFailureHandler(err => {
+            console.error('대시보드 데이터 로드 실패:', err);
+            if (updateEl) updateEl.textContent = '데이터 집계 오류 발생';
+          })
+          .getDashboardMetrics();
+      }
+    }
+
+    function onDashboardDataLoaded(res) {
+      if (!res || !res.kpi) return;
+      currentDashboardData = res;
+
+      const updateEl = document.getElementById('dashLastUpdated');
+      if (updateEl) updateEl.textContent = `실시간 집계 완료 (${res.updatedAt || new Date().toLocaleTimeString('ko-KR')})`;
+
+      // 1. KPI 카드 반영
+      const k = res.kpi;
+      document.getElementById('dashKpiTotalStock').innerHTML = `${Number(k.totalMainBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
+      document.getElementById('dashKpiTotalUnits').textContent = Number(k.totalMainUnits || 0).toLocaleString();
+      document.getElementById('dashKpiTodayIn').innerHTML = `${Number(k.todayInBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
+      document.getElementById('dashKpiTodayOut').innerHTML = `${Number(k.todayOutBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
+      document.getElementById('dashKpiInTransit').innerHTML = `${Number(k.totalInTransitBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
+      document.getElementById('dashKpiPendingOrders').textContent = Number(k.pendingOrderCount || 0).toLocaleString();
+      document.getElementById('dashKpiLowStock').innerHTML = `${Number(k.lowStockCount || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">개 품목</span>`;
+      
+      const lowBadge = document.getElementById('dashLowStockBadge');
+      if (lowBadge) lowBadge.textContent = `${Number(k.lowStockCount || 0)}건 감지`;
+
+      // 2. 8대 서브창고 트럭 적재율 게이지 렌더링
+      renderTruckGauges(res.whInTransitMap || {});
+
+      // 3. 결품 위험 품목 테이블 렌더링
+      renderLowStockTable(res.lowStockItems || []);
+
+      // 4. 주간 입출고 추이 차트 & 베스트셀러 렌더링
+      renderDailyTrendChart(res.dailyTrend || []);
+      renderTopSellers(res.topSellers || []);
+    }
+
+    function renderTruckGauges(whMap) {
+      const grid = document.getElementById('dashTruckGaugesGrid');
+      if (!grid) return;
+
+      const targetCapacity = Number(document.getElementById('cfgTruckTarget')?.value) || 100;
+      const capacityLabel = document.getElementById('dashTruckCapacityLabel');
+      if (capacityLabel) capacityLabel.textContent = targetCapacity;
+
+      const whList = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR'];
+      let html = '';
+
+      whList.forEach(wh => {
+        const inTransit = Number(whMap[wh] || 0);
+        const pct = Math.min(100, Math.round((inTransit / targetCapacity) * 100));
+        let barColor = '#94a3b8';
+        let statusBadge = '<span style="font-size:7pt; color:#64748b; background:#f1f5f9; padding:1px 5px; border-radius:3px;">대기 (0%)</span>';
+
+        if (inTransit >= targetCapacity) {
+          barColor = '#ef4444';
+          statusBadge = '<span style="font-size:7pt; color:#b91c1c; background:#fee2e2; padding:1px 5px; border-radius:3px; font-weight:700;">🚨 만차/초과!</span>';
+        } else if (inTransit > 0) {
+          barColor = pct >= 70 ? '#f59e0b' : '#3b82f6';
+          statusBadge = `<span style="font-size:7pt; color:#1e40af; background:#dbeafe; padding:1px 5px; border-radius:3px; font-weight:700;">🚚 ${pct}% 적재</span>`;
+        }
+
+        html += `
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:9px 12px; display:flex; flex-direction:column; gap:5px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:8.5pt; font-weight:800; color:#1e293b;">🏢 ${wh}</span>
+              ${statusBadge}
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:7.5pt; color:#64748b;">
+              <span>이동중: <strong style="color:#0f172a; font-size:9pt;">${inTransit}</strong> / ${targetCapacity} 상자</span>
+              <span style="font-weight:700; color:${barColor};">${pct}%</span>
+            </div>
+            <div style="background:#e2e8f0; border-radius:4px; height:7px; width:100%; overflow:hidden;">
+              <div style="background:${barColor}; width:${pct}%; height:100%; border-radius:4px; transition:width 0.4s ease;"></div>
+            </div>
+            <div style="display:flex; justify-content:flex-end; margin-top:2px;">
+              <button type="button" onclick="closeDashboardModal(); openSubWarehouseMatrixModal();" style="background:none; border:none; color:#2563eb; font-size:7.5pt; font-weight:700; cursor:pointer; padding:0;">매트릭스 보기 ➔</button>
+            </div>
+          </div>
+        `;
+      });
+
+      grid.innerHTML = html;
+    }
+
+    function renderLowStockTable(items) {
+      const tbody = document.getElementById('dashLowStockTableBody');
+      if (!tbody) return;
+
+      if (!items || items.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:16px; color:#15803d; font-weight:600;">✨ 현재 모든 품목이 안전재고 이상을 유지하고 있습니다.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = items.map(it => {
+        const rawName = it.itemName || it.item_name || '';
+        const name = escapeHtml(rawName);
+        const rawColor = it.color || 'SURTIDO';
+        const color = escapeHtml(rawColor);
+        const stock = Number(it.mainStock !== undefined ? it.mainStock : (it.stock_box || 0));
+        const safe = Number(it.safeStock !== undefined ? it.safeStock : (it.safe_stock || 0));
+        const deficit = Number(it.shortage !== undefined ? it.shortage : (safe - stock));
+
+        return `
+          <tr style="border-bottom:1px solid #f1f5f9; hover:background:#fef2f2;">
+            <td style="padding:7px 10px; font-weight:700; color:#1e293b;">${name}</td>
+            <td style="padding:7px 10px; color:#475569;">${color}</td>
+            <td style="padding:7px 10px; text-align:right; font-weight:700; color:#b91c1c;">${stock}</td>
+            <td style="padding:7px 10px; text-align:right; color:#64748b;">${safe}</td>
+            <td style="padding:7px 10px; text-align:right; font-weight:800; color:#dc2626;">-${deficit}</td>
+            <td style="padding:7px 10px; text-align:center;">
+              <span style="background:#fee2e2; color:#b91c1c; font-size:7.2pt; font-weight:800; padding:2px 6px; border-radius:4px;">결품위험</span>
+            </td>
+            <td style="padding:7px 10px; text-align:center; white-space:nowrap;">
+              <button type="button" onclick="addLowStockToDraft('${escapeHtml(rawName)}', '${escapeHtml(rawColor)}', ${deficit})" style="padding:3px 7px; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:4px; font-size:7.5pt; font-weight:700; cursor:pointer; margin-right:4px;">📋 주문담기</button>
+              <button type="button" onclick="jumpToStockAdj('${escapeHtml(rawName)}', '${escapeHtml(rawColor)}')" style="padding:3px 7px; background:#f8fafc; color:#475569; border:1px solid #cbd5e1; border-radius:4px; font-size:7.5pt; font-weight:600; cursor:pointer;">✏️ 재고조정</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function addLowStockToDraft(name, color, deficit) {
+      if (typeof getOrderDraftItems !== 'function' || typeof saveOrderDraftItems !== 'function') return;
+      const currentDraft = getOrderDraftItems() || [];
+      const key = `${name}___${color || 'SURTIDO'}`.toUpperCase();
+      const existing = currentDraft.find(i => `${i.itemName}___${i.color || 'SURTIDO'}`.toUpperCase() === key);
+      const qty = Math.max(1, Number(deficit) || 1);
+
+      if (existing) {
+        existing.boxQty = (existing.boxQty || 0) + qty;
+      } else {
+        currentDraft.push({
+          itemName: name,
+          color: color || 'SURTIDO',
+          boxQty: qty,
+          boxContent: 0,
+          addedAt: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+        });
+      }
+
+      saveOrderDraftItems(currentDraft);
+      if (typeof updateOrderDraftBadge === 'function') updateOrderDraftBadge();
+      if (typeof showAppToast === 'function') {
+        showAppToast(`📋 [${name} (${color})] ${qty}상자 외부창고 주문서에 추가되었습니다.`);
+      }
+    }
+
+    function jumpToStockAdj(name, color) {
+      closeDashboardModal();
+      if (typeof setPage === 'function') setPage('재고조정');
+      setTimeout(() => {
+        const itemInput = document.getElementById('itemName') || document.getElementById('item');
+        if (itemInput) {
+          itemInput.value = name;
+          itemInput.dispatchEvent(new Event('input'));
+        }
+      }, 250);
+    }
+
+    function renderDailyTrendChart(trendList) {
+      const chart = document.getElementById('dashDailyTrendChart');
+      const labels = document.getElementById('dashDailyTrendLabels');
+      if (!chart || !labels) return;
+
+      if (!trendList || trendList.length === 0) {
+        chart.innerHTML = `<div style="width:100%; text-align:center; color:#94a3b8; font-size:8.5pt; align-self:center;">최근 7일 트랜잭션 기록 없음</div>`;
+        labels.innerHTML = '';
+        return;
+      }
+
+      let maxVal = 1;
+      trendList.forEach(t => {
+        if (t.inBoxes > maxVal) maxVal = t.inBoxes;
+        if (t.outBoxes > maxVal) maxVal = t.outBoxes;
+      });
+
+      let chartHtml = '';
+      let labelsHtml = '';
+
+      trendList.forEach(d => {
+        const inH = Math.max(4, Math.round((d.inBoxes / maxVal) * 115));
+        const outH = Math.max(4, Math.round((d.outBoxes / maxVal) * 115));
+        const shortDate = d.date.slice(5);
+
+        chartHtml += `
+          <div style="flex:1; display:flex; justify-content:center; align-items:flex-end; gap:3px; height:100%; position:relative;" title="${d.date} - 입고: ${d.inBoxes}상자 / 출고: ${d.outBoxes}상자">
+            <div style="width:10px; height:${inH}px; background:#10b981; border-radius:3px 3px 0 0; transition:height 0.3s ease;"></div>
+            <div style="width:10px; height:${outH}px; background:#f59e0b; border-radius:3px 3px 0 0; transition:height 0.3s ease;"></div>
+          </div>
+        `;
+
+        labelsHtml += `<span style="flex:1; text-align:center;">${shortDate}</span>`;
+      });
+
+      chart.innerHTML = chartHtml;
+      labels.innerHTML = labelsHtml;
+    }
+
+    function renderTopSellers(topList) {
+      const container = document.getElementById('dashTopSellersList');
+      if (!container) return;
+
+      if (!topList || topList.length === 0) {
+        container.innerHTML = `<div style="color:#94a3b8; font-size:8.5pt; text-align:center; padding:16px;">최근 7일 출고 실적 없음</div>`;
+        return;
+      }
+
+      const maxOut = topList[0]?.boxes || topList[0]?.outBoxes || 1;
+
+      container.innerHTML = topList.map((item, idx) => {
+        const boxCount = Number(item.boxes !== undefined ? item.boxes : (item.outBoxes || 0));
+        const unitCount = Number(item.units !== undefined ? item.units : (item.outUnits || 0));
+        const pct = Math.max(5, Math.round((boxCount / maxOut) * 100));
+        const rankColor = idx === 0 ? '#eab308' : (idx === 1 ? '#94a3b8' : (idx === 2 ? '#b45309' : '#64748b'));
+        const colorLabel = item.color ? `<span style="font-size:7.5pt; color:#64748b;">(${escapeHtml(item.color)})</span>` : '';
+
+        return `
+          <div style="display:flex; flex-direction:column; gap:3px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 10px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:8.2pt;">
+              <span style="font-weight:700; color:#1e293b; display:flex; align-items:center; gap:5px;">
+                <span style="color:${rankColor}; font-weight:900;">#${idx + 1}</span>
+                <span>${escapeHtml(item.name || '')}</span>
+                ${colorLabel}
+              </span>
+              <span style="font-weight:800; color:#0f172a;">${boxCount.toLocaleString()} 상자 ${unitCount > 0 ? `<span style="font-size:7pt; color:#64748b;">(${unitCount.toLocaleString()} 낱개)</span>` : ''}</span>
+            </div>
+            <div style="background:#e2e8f0; border-radius:3px; height:5px; width:100%; overflow:hidden;">
+              <div style="background:linear-gradient(90deg, #3b82f6, #6366f1); width:${pct}%; height:100%;"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    /* ==========================================================================
+       4. WMS 시스템 종합 설정 & AI 마이그레이션 (Settings Controller)
+       ========================================================================== */
+    let currentWmsSettings = {
+      truckTargetBoxes: 100,
+      winterPeakMultiplier: 1.3,
+      alertOnIndividualOut: true,
+      receiptCompany: 'LADY POLO S.A. DE C.V.',
+      receiptAddress: 'ALARCÓN #42, COL. CENTRO, CDMX',
+      receiptNotice: '30일 이내 영수증 지참 시 교환 가능 (환불 불가)',
+      receiptRowsPerPage: 15,
+      activeSubWarehouses: ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
+    };
+    let currentAiMatches = [];
+
+    function openSettingsModal() {
+      const modal = document.getElementById('settingsModal');
+      if (modal) {
+        modal.style.display = 'flex';
+        loadSettingsData();
+      }
+    }
+
+    function closeSettingsModal() {
+      const modal = document.getElementById('settingsModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function switchSettingsTab(tabKey) {
+      document.querySelectorAll('.cfg-tab-btn').forEach(btn => {
+        btn.style.fontWeight = '600';
+        btn.style.color = '#64748b';
+        btn.style.borderBottom = '3px solid transparent';
+      });
+      document.querySelectorAll('.cfg-tab-panel').forEach(p => p.style.display = 'none');
+
+      const activeBtn = document.getElementById(`cfgTab_${tabKey}`);
+      if (activeBtn) {
+        activeBtn.style.fontWeight = '700';
+        activeBtn.style.color = tabKey === 'ai' ? '#7c3aed' : '#1e293b';
+        activeBtn.style.borderBottom = tabKey === 'ai' ? '3px solid #7c3aed' : '3px solid #2563eb';
+      }
+
+      const activePanel = document.getElementById(`cfgPanel_${tabKey}`);
+      if (activePanel) activePanel.style.display = 'block';
+    }
+
+    function loadSettingsData() {
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        // 설정 로드
+        google.script.run.withSuccessHandler(s => {
+          if (s) {
+            currentWmsSettings = { ...currentWmsSettings, ...s };
+            applySettingsToUI();
+          }
+        }).getSystemSettings();
+
+        // 작업자 명단 로드
+        google.script.run.withSuccessHandler(admins => {
+          const list = document.getElementById('cfgWorkerBadgesList');
+          if (list && admins) {
+            list.innerHTML = admins.map(a => `
+              <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:4px; font-size:8.2pt; font-weight:700; border:1px solid #bae6fd;">
+                👤 ${escapeHtml(a)}
+              </span>
+            `).join('');
+          }
+        }).getAdminList();
+      }
+    }
+
+    function applySettingsToUI() {
+      const s = currentWmsSettings;
+      const truckInp = document.getElementById('cfgTruckTarget');
+      const winterInp = document.getElementById('cfgWinterMult');
+      const alertInp = document.getElementById('cfgAlertIndivOut');
+      const compInp = document.getElementById('cfgReceiptCompany');
+      const addrInp = document.getElementById('cfgReceiptAddress');
+      const noticeInp = document.getElementById('cfgReceiptNotice');
+      const rowsInp = document.getElementById('cfgReceiptRows');
+
+      if (truckInp) truckInp.value = s.truckTargetBoxes || 100;
+      if (winterInp) winterInp.value = s.winterPeakMultiplier || 1.3;
+      if (alertInp) alertInp.checked = s.alertOnIndividualOut !== false;
+      if (compInp) compInp.value = s.receiptCompany || '';
+      if (addrInp) addrInp.value = s.receiptAddress || '';
+      if (noticeInp) noticeInp.value = s.receiptNotice || '';
+      if (rowsInp) rowsInp.value = s.receiptRowsPerPage || 15;
+
+      const subwhList = document.getElementById('cfgSubwhList');
+      if (subwhList) {
+        const allWhs = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR'];
+        const active = s.activeSubWarehouses || allWhs;
+        subwhList.innerHTML = allWhs.map(wh => `
+          <label style="display:flex; align-items:center; gap:8px; padding:8px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; cursor:pointer;">
+            <input type="checkbox" class="subwh-checkbox" value="${wh}" ${active.includes(wh) ? 'checked' : ''} style="cursor:pointer;">
+            <span style="font-size:9pt; font-weight:700; color:#1e293b;">🏢 ${wh}</span>
+          </label>
+        `).join('');
+      }
+    }
+
+    function saveSubWhSettings() {
+      const checkedWhs = Array.from(document.querySelectorAll('.subwh-checkbox:checked')).map(cb => cb.value);
+      currentWmsSettings.activeSubWarehouses = checkedWhs;
+      saveSettingsToServer('🏢 서브창고 목록 설정이 저장되었습니다.');
+    }
+
+    function savePolicySettings() {
+      currentWmsSettings.truckTargetBoxes = Number(document.getElementById('cfgTruckTarget')?.value) || 100;
+      currentWmsSettings.winterPeakMultiplier = Number(document.getElementById('cfgWinterMult')?.value) || 1.3;
+      currentWmsSettings.alertOnIndividualOut = document.getElementById('cfgAlertIndivOut')?.checked;
+      saveSettingsToServer('📐 물류 운영 정책이 저장되었습니다.');
+    }
+
+    function saveReceiptSettings() {
+      currentWmsSettings.receiptCompany = document.getElementById('cfgReceiptCompany')?.value?.trim() || '';
+      currentWmsSettings.receiptAddress = document.getElementById('cfgReceiptAddress')?.value?.trim() || '';
+      currentWmsSettings.receiptNotice = document.getElementById('cfgReceiptNotice')?.value?.trim() || '';
+      currentWmsSettings.receiptRowsPerPage = Number(document.getElementById('cfgReceiptRows')?.value) || 15;
+      saveSettingsToServer('🖨️ 영수증 서식 설정이 저장되었습니다.');
+    }
+
+    function saveSettingsToServer(msg) {
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(() => {
+            if (typeof showAppToast === 'function') {
+              showAppToast(`💾 ${msg}`, 2500);
+            } else {
+              alert(msg);
+            }
+          })
+          .saveSystemSettings(currentWmsSettings);
+      }
+    }
+
+    /* ---------------- AI 품명 마이그레이션 도구 ---------------- */
+    function updateAiInputStats() {
+      const val = document.getElementById('aiRawItemsInput')?.value || '';
+      const lines = val.split('\n').map(l => l.trim()).filter(Boolean);
+      const stats = document.getElementById('aiInputStats');
+      if (stats) stats.textContent = `입력 줄수: ${lines.length}건`;
+    }
+
+    function loadSampleMigrationData() {
+      const samples = [
+        'POLO MANGA CORTA 100',
+        'POLO-01 SURTIDO',
+        'BLUSA DAMA ROSA',
+        'CAMISA CASUAL HOMBRE',
+        'PANTALON JEANS 32 NEGRO'
+      ];
+      const inp = document.getElementById('aiRawItemsInput');
+      if (inp) {
+        inp.value = samples.join('\n');
+        updateAiInputStats();
+      }
+    }
+
+    function runAiSemanticMatching() {
+      const val = document.getElementById('aiRawItemsInput')?.value || '';
+      const lines = val.split('\n').map(l => l.trim()).filter(Boolean);
+
+      if (lines.length === 0) {
+        alert('분석할 과거 구 품명을 먼저 입력해주세요.');
+        return;
+      }
+
+      const btn = document.getElementById('btnRunAiMatch');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>⏳ AI 시맨틱 분석 중...</span>';
+      }
+
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(results => {
+            if (btn) {
+              btn.disabled = false;
+              btn.innerHTML = '<span>✨ AI 시맨틱 분석 & 카탈로그 매칭 실행</span>';
+            }
+            onAiMatchesLoaded(results);
+          })
+          .withFailureHandler(err => {
+            if (btn) {
+              btn.disabled = false;
+              btn.innerHTML = '<span>✨ AI 시맨틱 분석 & 카탈로그 매칭 실행</span>';
+            }
+            alert('AI 분석 중 오류가 발생했습니다: ' + err);
+          })
+          .matchAliasesWithAI(lines);
+      }
+    }
+
+    function onAiMatchesLoaded(results) {
+      currentAiMatches = results || [];
+      const section = document.getElementById('aiMatchResultSection');
+      const countEl = document.getElementById('aiMatchResultCount');
+      const tbody = document.getElementById('aiMatchTableBody');
+      const statusEl = document.getElementById('aiCommitStatus');
+
+      if (statusEl) statusEl.style.display = 'none';
+      if (section) section.style.display = 'block';
+      if (countEl) countEl.textContent = currentAiMatches.length;
+
+      if (!tbody) return;
+
+      if (currentAiMatches.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:16px; color:#94a3b8;">매칭 결과가 없습니다.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = currentAiMatches.map((m, idx) => {
+        const raw = escapeHtml(m.rawInput);
+        const matched = escapeHtml(m.matchedName);
+        const color = escapeHtml(m.matchedColor || 'SURTIDO');
+        const conf = Number(m.confidence || 0);
+
+        let confBadge = '';
+        if (conf >= 100) {
+          confBadge = `<span style="background:#dcfce7; color:#15803d; font-weight:800; padding:2px 8px; border-radius:12px; font-size:7.5pt;">100% 일치</span>`;
+        } else if (conf >= 80) {
+          confBadge = `<span style="background:#dbeafe; color:#1d4ed8; font-weight:800; padding:2px 8px; border-radius:12px; font-size:7.5pt;">${conf}% 우수</span>`;
+        } else if (conf >= 60) {
+          confBadge = `<span style="background:#fef3c7; color:#b45309; font-weight:800; padding:2px 8px; border-radius:12px; font-size:7.5pt;">${conf}% 제안</span>`;
+        } else {
+          confBadge = `<span style="background:#fee2e2; color:#b91c1c; font-weight:800; padding:2px 8px; border-radius:12px; font-size:7.5pt;">${conf}% 미달</span>`;
+        }
+
+        const isChecked = conf >= 60 ? 'checked' : '';
+
+        return `
+          <tr style="border-bottom:1px solid #e2e8f0; font-size:8.2pt;">
+            <td style="padding:6px 8px; text-align:center;">
+              <input type="checkbox" class="ai-match-chk" data-index="${idx}" ${isChecked} style="cursor:pointer;">
+            </td>
+            <td style="padding:6px 8px; font-weight:700; color:#1e293b;">${raw}</td>
+            <td style="padding:6px 8px;">
+              <input type="text" class="ai-target-input" data-index="${idx}" value="${matched}" style="width:96%; padding:4px 6px; font-size:8pt; border:1px solid #cbd5e1; border-radius:4px;">
+            </td>
+            <td style="padding:6px 8px; text-align:center; color:#475569;">${color}</td>
+            <td style="padding:6px 8px; text-align:center;">${confBadge}</td>
+            <td style="padding:6px 8px; color:#64748b; font-size:7.8pt;">${escapeHtml(m.reason || '')}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function toggleSelectAllAiMatches(checked) {
+      document.querySelectorAll('.ai-match-chk').forEach(cb => {
+        cb.checked = checked;
+      });
+    }
+
+    function commitAiAliases() {
+      const chks = document.querySelectorAll('.ai-match-chk:checked');
+      if (chks.length === 0) {
+        alert('별명사전에 등록할 항목을 선택해주세요.');
+        return;
+      }
+
+      const toCommit = [];
+      chks.forEach(cb => {
+        const idx = parseInt(cb.getAttribute('data-index'), 10);
+        if (currentAiMatches[idx]) {
+          const raw = currentAiMatches[idx].rawInput;
+          const targetInp = document.querySelector(`.ai-target-input[data-index="${idx}"]`);
+          const target = targetInp ? targetInp.value.trim() : currentAiMatches[idx].matchedName;
+          if (raw && target && target !== '(신규 모델 필요)') {
+            toCommit.push({
+              rawAlias: raw,
+              targetModel: target
+            });
+          }
+        }
+      });
+
+      if (toCommit.length === 0) {
+        alert('유효한 카탈로그 품명으로 매핑된 항목이 없습니다.');
+        return;
+      }
+
+      const btn = document.getElementById('btnCommitAiAliases');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>⏳ 별명사전 등록 중...</span>';
+      }
+
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(res => {
+            if (btn) {
+              btn.disabled = false;
+              btn.innerHTML = '<span>✅ 선택 항목 별명사전(aliases)에 영구 등록</span>';
+            }
+            const statusEl = document.getElementById('aiCommitStatus');
+            if (statusEl) {
+              statusEl.style.display = 'block';
+              statusEl.textContent = `🎉 총 ${res.count || toCommit.length}건의 품명 별칭이 별명사전(aliases)에 영구 등록되었습니다!`;
+            }
+            if (typeof showAppToast === 'function') {
+              showAppToast(`🎉 총 ${res.count || toCommit.length}건 별칭 영구 등록 완료!`, 3000);
+            }
+          })
+          .withFailureHandler(err => {
+            if (btn) {
+              btn.disabled = false;
+              btn.innerHTML = '<span>✅ 선택 항목 별명사전(aliases)에 영구 등록</span>';
+            }
+            alert('별명사전 등록 중 오류가 발생했습니다: ' + err);
+          })
+          .saveBatchProductAliases(toCommit);
       }
     }
   </script>

@@ -307,6 +307,26 @@ export const serverMethods = {
   },
 
   /**
+   * 8-1. 별명사전 일괄 영구 등록 (AI 마이그레이션용)
+   */
+  async saveBatchProductAliases(aliasList) {
+    if (!Array.isArray(aliasList) || aliasList.length === 0) return { success: true, count: 0 }
+    const rows = aliasList.map(a => ({
+      alias: String(a.rawAlias || a.alias || '').trim().toUpperCase(),
+      target_item_name: String(a.targetModel || a.target_item_name || a.matchedName || '').trim()
+    })).filter(a => a.alias && a.target_item_name)
+
+    if (rows.length === 0) return { success: true, count: 0 }
+
+    const { error } = await supabase
+      .from('aliases')
+      .upsert(rows, { onConflict: 'alias' })
+
+    if (error) throw error
+    return { success: true, count: rows.length, message: `총 ${rows.length}건의 별명이 별명사전에 영구 등록되었습니다.` }
+  },
+
+  /**
    * 9. 신규 상품 마스터 등록
    */
   async registerProduct(payloadList) {
@@ -1577,6 +1597,264 @@ export const serverMethods = {
       throw new Error(err.error || `실사표 분석 실패 (${res.status})`)
     }
     return await res.json()
+  },
+
+  /**
+   * 18. 통합 관제 대시보드 지표 실시간 집계 (getDashboardMetrics)
+   */
+  async getDashboardMetrics() {
+    const todaySlash = formatDate(new Date()).replace(/-/g, '/')
+    const todayDash = formatDate(new Date())
+
+    const [stocksRes, txTodayRes, pendingRes, recentTxRes] = await Promise.all([
+      supabase.from('view_effective_stocks').select('*'),
+      supabase.from('stock_transactions')
+        .select('transaction_type, box_qty, unit_qty, invoice_no')
+        .or(`invoice_no.like.${todaySlash}%,invoice_no.like.${todayDash}%`),
+      supabase.from('pending_orders')
+        .select('item_id, from_warehouse, to_warehouse, box_qty, status')
+        .in('status', ['PENDING', 'IN_TRANSIT']),
+      supabase.from('stock_transactions')
+        .select('item_id, transaction_type, box_qty, unit_qty, created_at, items(item_name, color)')
+        .in('transaction_type', ['INBOUND', 'OUTBOUND', 'MOVE'])
+        .order('created_at', { ascending: false })
+        .limit(1000)
+    ])
+
+    const allStocks = stocksRes.data || []
+    const todayTxs = txTodayRes.data || []
+    const pendingOrders = pendingRes.data || []
+    const recentTxs = recentTxRes.data || []
+
+    // 1. 총 재고 자산 계산
+    let totalMainBoxes = 0
+    let totalMainUnits = 0
+    const lowStockItems = []
+
+    allStocks.forEach(item => {
+      const mb = Number(item.main_box_qty || 0)
+      const safe = Number(item.safe_stock_boxes || 0)
+      const pIn = Number(item.pending_in_boxes || 0)
+      const effective = mb + pIn
+      const boxContent = Number(item.box_packaging_qty || 1)
+
+      totalMainBoxes += mb
+      totalMainUnits += (mb * boxContent)
+
+      if (safe > 0 && effective <= safe) {
+        lowStockItems.push({
+          item_id: item.item_id,
+          itemName: item.item_name,
+          color: item.color || 'SURTIDO',
+          mainStock: mb,
+          inTransit: pIn,
+          effectiveStock: effective,
+          safeStock: safe,
+          shortage: Math.max(0, safe - effective)
+        })
+      }
+    })
+
+    lowStockItems.sort((a, b) => b.shortage - a.shortage)
+
+    // 2. 오늘자 입고/출고/이동 합계
+    let todayInBoxes = 0
+    let todayOutBoxes = 0
+    let todayMoveBoxes = 0
+
+    todayTxs.forEach(tx => {
+      const b = Math.abs(Number(tx.box_qty || 0))
+      if (tx.transaction_type === 'INBOUND') todayInBoxes += b
+      else if (tx.transaction_type === 'OUTBOUND') todayOutBoxes += b
+      else if (tx.transaction_type === 'MOVE') todayMoveBoxes += b
+    })
+
+    // 3. 서브창고별 이동 중(In-Transit) 수량 집계
+    const whInTransitMap = {}
+    let totalInTransitBoxes = 0
+    pendingOrders.forEach(po => {
+      const wh = String(po.from_warehouse || 'UNKNOWN').toUpperCase().trim()
+      const b = Number(po.box_qty || 0)
+      whInTransitMap[wh] = (whInTransitMap[wh] || 0) + b
+      totalInTransitBoxes += b
+    })
+
+    // 4. 최근 7일 일자별 입/출고 추이 (차트용)
+    const dailyMap = {}
+    const now = new Date()
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now)
+      d.setDate(d.getDate() - i)
+      const dStr = d.toISOString().split('T')[0]
+      const label = `${d.getMonth() + 1}/${d.getDate()}`
+      dailyMap[dStr] = { date: dStr, label: label, inBoxes: 0, outBoxes: 0 }
+    }
+
+    recentTxs.forEach(tx => {
+      if (!tx.created_at) return
+      const dStr = tx.created_at.split('T')[0]
+      if (dailyMap[dStr]) {
+        const b = Math.abs(Number(tx.box_qty || 0))
+        if (tx.transaction_type === 'INBOUND') dailyMap[dStr].inBoxes += b
+        if (tx.transaction_type === 'OUTBOUND' || tx.transaction_type === 'MOVE') dailyMap[dStr].outBoxes += b
+      }
+    })
+
+    // 5. 최근 최다 출고 베스트셀러 Top 5
+    const itemOutMap = new Map()
+    recentTxs.forEach(tx => {
+      if (tx.transaction_type === 'OUTBOUND' || tx.transaction_type === 'MOVE') {
+        const b = Math.abs(Number(tx.box_qty || 0))
+        const name = tx.items?.item_name || 'UNKNOWN'
+        const color = tx.items?.color || 'SURTIDO'
+        const key = `${name} (${color})`
+        itemOutMap.set(key, (itemOutMap.get(key) || 0) + b)
+      }
+    })
+
+    const topSellers = Array.from(itemOutMap.entries())
+      .map(([name, boxes]) => ({ name, boxes }))
+      .sort((a, b) => b.boxes - a.boxes)
+      .slice(0, 5)
+
+    return {
+      success: true,
+      updatedAt: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
+      kpi: {
+        totalMainBoxes,
+        totalMainUnits,
+        todayInBoxes,
+        todayOutBoxes,
+        todayMoveBoxes,
+        totalInTransitBoxes,
+        pendingOrderCount: pendingOrders.length,
+        lowStockCount: lowStockItems.length
+      },
+      lowStockItems: lowStockItems.slice(0, 10),
+      whInTransitMap,
+      dailyTrend: Object.values(dailyMap),
+      topSellers
+    }
+  },
+
+  /**
+   * 19. 시스템 종합 설정 불러오기 및 저장
+   */
+  async getSystemSettings() {
+    const defaultSettings = {
+      truckTargetBoxes: 100,
+      winterPeakMultiplier: 1.3,
+      alertOnIndividualOut: true,
+      receiptCompany: 'LADY POLO S.A. DE C.V.',
+      receiptAddress: 'ALARCÓN #42, COL. CENTRO, CDMX',
+      receiptNotice: '30일 이내 영수증 지참 시 교환 가능 (환불 불가)',
+      receiptRowsPerPage: 15,
+      activeSubWarehouses: ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
+    }
+
+    try {
+      const localSaved = localStorage.getItem('wms_system_settings')
+      if (localSaved) {
+        return { ...defaultSettings, ...JSON.parse(localSaved) }
+      }
+    } catch (e) {}
+
+    return defaultSettings
+  },
+
+  async saveSystemSettings(settings) {
+    if (!settings || typeof settings !== 'object') throw new Error('유효하지 않은 설정값입니다.')
+    try {
+      localStorage.setItem('wms_system_settings', JSON.stringify(settings))
+    } catch (e) {
+      console.warn('localStorage save warning:', e)
+    }
+    return { success: true, message: '설정이 저장되었습니다.' }
+  },
+
+  /**
+   * 20. AI 품명 매핑 & 마이그레이션 제안 (matchAliasesWithAI)
+   */
+  async matchAliasesWithAI(rawItems) {
+    if (!Array.isArray(rawItems) || rawItems.length === 0) return []
+
+    const { data: allItems } = await supabase
+      .from('items')
+      .select('id, item_name, color, box_packaging_qty')
+      .limit(3000)
+
+    const catalog = allItems || []
+    const results = []
+
+    for (const raw of rawItems) {
+      const rawName = String(raw.name || raw.itemName || raw || '').trim()
+      const rawColor = String(raw.color || '').trim().toUpperCase()
+
+      const cleanRaw = rawName.toUpperCase().replace(/[\s\-_]/g, '')
+      const directMatch = catalog.find(it => it.item_name.toUpperCase().replace(/[\s\-_]/g, '') === cleanRaw)
+
+      if (directMatch) {
+        results.push({
+          rawInput: rawName,
+          rawColor: rawColor || 'SURTIDO',
+          matchedId: directMatch.id,
+          matchedName: directMatch.item_name,
+          matchedColor: directMatch.color,
+          confidence: 100,
+          reason: '기존 마스터와 100% 일치'
+        })
+        continue
+      }
+
+      let bestItem = null
+      let bestScore = 0
+
+      catalog.forEach(cat => {
+        const catClean = cat.item_name.toUpperCase().replace(/[\s\-_]/g, '')
+        let score = 0
+        if (catClean.includes(cleanRaw) || cleanRaw.includes(catClean)) {
+          score = 80
+        }
+        let matchLen = 0
+        for (let i = 0; i < Math.min(catClean.length, cleanRaw.length); i++) {
+          if (catClean[i] === cleanRaw[i]) matchLen++
+          else break
+        }
+        const prefixRatio = matchLen / Math.max(catClean.length, cleanRaw.length)
+        if (prefixRatio > 0.6) {
+          score = Math.max(score, Math.round(prefixRatio * 95))
+        }
+
+        if (score > bestScore) {
+          bestScore = score
+          bestItem = cat
+        }
+      })
+
+      if (bestItem && bestScore >= 60) {
+        results.push({
+          rawInput: rawName,
+          rawColor: rawColor || 'SURTIDO',
+          matchedId: bestItem.id,
+          matchedName: bestItem.item_name,
+          matchedColor: bestItem.color,
+          confidence: bestScore,
+          reason: `유사 패턴 감지 (${bestScore}% 일치)`
+        })
+      } else {
+        results.push({
+          rawInput: rawName,
+          rawColor: rawColor || 'SURTIDO',
+          matchedId: null,
+          matchedName: '(신규 모델 필요)',
+          matchedColor: rawColor || 'SURTIDO',
+          confidence: 20,
+          reason: '기존 카탈로그에 유사 모델 없음'
+        })
+      }
+    }
+
+    return results
   }
 }
 
