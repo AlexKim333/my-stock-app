@@ -2118,6 +2118,7 @@
           <button type="button" class="action-btn btn-stock-normalize" onclick="openStockNormalizeModal()" tabindex="13" id="stockNormalizeButton" title="재고시트 중복 코드(하이픈) 및 다중 포장규격 대표수량 통합" style="padding: 4px 10px; font-size: 8.5pt;">🧹 재고정규화</button>
           <button type="button" class="action-btn btn-stock-winter" onclick="openWinterSafeStockModal()" tabindex="14" id="winterSafeStockButton" title="과거 11~12월 트랜잭션 전수 분석 및 과학적 안전재고(Safe Stock) 산정" style="padding: 4px 10px; font-size: 8.5pt; background: #0284c7; color: #ffffff; border: 1px solid #0369a1; border-radius: 4px; font-weight: bold; cursor: pointer;">❄️ 성수기안전재고</button>
           <button type="button" class="action-btn btn-print-order" onclick="printWorkOrder()" tabindex="15" id="printOrderButton" title="현재 장바구니 품목을 스페인어 작업지시서(ORDEN DE TRABAJO)로 즉시 인쇄" style="padding: 4px 10px; font-size: 8.5pt; background: #334155; color: #ffffff; border: 1px solid #1e293b; border-radius: 4px; font-weight: bold; cursor: pointer;">📱 작업지시서</button>
+          <button type="button" class="action-btn btn-product-ledger-top" onclick="openProductLedgerModal()" title="상품별 종합 수불원장 및 물동량 독립 분석기 열기" style="padding: 4px 10px; font-size: 8.5pt; background: #4338ca; color: #ffffff; border: 1px solid #3730a3; border-radius: 4px; font-weight: bold; cursor: pointer;">📜 수불원장</button>
           <button type="button" class="action-btn btn-dashboard-top" onclick="openDashboardModal()" title="물류 통합 관제 대시보드 열기" style="padding: 4px 10px; font-size: 8.5pt; background: #059669; color: #ffffff; border: 1px solid #047857; border-radius: 4px; font-weight: bold; cursor: pointer;">📊 대시보드</button>
           <button type="button" class="action-btn btn-settings-top" onclick="openSettingsModal()" title="시스템 종합 설정 및 AI 마이그레이션 열기" style="padding: 4px 10px; font-size: 8.5pt; background: #475569; color: #ffffff; border: 1px solid #334155; border-radius: 4px; font-weight: bold; cursor: pointer;">⚙️ 설정</button>
         </div>
@@ -2154,6 +2155,7 @@
         </button>
         
         <button type="button" class="action-btn btn-search-modify" onclick="openSearchModifyModal()" id="btnNavSearchModify" style="background:#4338ca; color:#ffffff; font-weight:700; border:none; padding:5px 11px; border-radius:6px; cursor:pointer;" title="이전 입출고 전표 검색 및 수정">🔍 검색수정</button>
+        <button type="button" class="action-btn btn-product-ledger" onclick="openProductLedgerModal()" id="btnNavProductLedger" style="background: linear-gradient(135deg, #4338ca, #3730a3); color:#ffffff; font-weight:700; border:none; padding:5px 11px; border-radius:6px; cursor:pointer;" title="상품별 종합 수불원장 및 물동량 독립 분석기">📜 수불원장</button>
         <button type="button" onclick="openSubWarehouseMatrixModal()" id="btnNavOrderDraft" title="외부창고 8대 재고 매트릭스 & 주문서 작성">
           <span>📝 주문서작성</span>
           <span id="orderDraftBadge" class="nav-badge" style="display: none;">0</span>
@@ -12700,6 +12702,17 @@ if (document.readyState === 'loading') {
     </div>
   </div>
 
+  <!-- 📜 상품수불원장 & 물동량 독립 분석기 모달 -->
+  <div id="productLedgerModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9998; justify-content:center; align-items:center; backdrop-filter:blur(2px);">
+    <div style="background:#ffffff; width:99%; max-width:1500px; height:95vh; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.4);">
+      <div style="padding:8px 16px; background:#312e81; color:#ffffff; display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
+        <span style="font-weight:700; font-size:11pt;">📜 상품수불원장 &amp; 물동량 통합 분석기</span>
+        <button type="button" onclick="closeProductLedgerModal()" style="background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:5px 12px; cursor:pointer; font-weight:bold; font-size:10pt;">✕ 닫기</button>
+      </div>
+      <iframe id="productLedgerFrame" src="" style="width:100%; height:100%; border:none;"></iframe>
+    </div>
+  </div>
+
   <!-- 🔍 검색수정 (Search & Modify) 모달 -->
   <div id="searchModifyModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(2px);">
     <div style="background:#ffffff; width:96%; max-width:1160px; height:92%; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.35);">
@@ -12742,6 +12755,27 @@ if (document.readyState === 'loading') {
     function closeSearchModifyModal() {
       const modal = document.getElementById('searchModifyModal');
       if (modal) modal.style.display = 'none';
+    }
+
+    /* ==========================================================================
+       1-1. 상품수불원장 & 물동량 독립 분석기 모달 (Product Ledger)
+       ========================================================================== */
+    function openProductLedgerModal(itemName) {
+      const modal = document.getElementById('productLedgerModal');
+      const frame = document.getElementById('productLedgerFrame');
+      if (modal && frame) {
+        const url = itemName
+          ? `/product-ledger.html?item=${encodeURIComponent(itemName)}`
+          : '/product-ledger.html';
+        frame.src = url;
+        modal.style.display = 'flex';
+      }
+    }
+    function closeProductLedgerModal() {
+      const modal = document.getElementById('productLedgerModal');
+      const frame = document.getElementById('productLedgerFrame');
+      if (modal) modal.style.display = 'none';
+      if (frame) frame.src = '';
     }
 
     /* ==========================================================================

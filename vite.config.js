@@ -45,7 +45,8 @@ export default defineConfig(({ mode }) => {
         input: {
           main: resolve(__dirname, 'index.html'),
           searchmodify: resolve(__dirname, 'searchmodify.html'),
-          pos: resolve(__dirname, 'pos.html')
+          pos: resolve(__dirname, 'pos.html'),
+          productLedger: resolve(__dirname, 'product-ledger.html')
         }
       }
     }

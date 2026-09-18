@@ -1855,6 +1855,242 @@ export const serverMethods = {
     }
 
     return results
+  },
+
+  /**
+   * 21. 상품 종합 수불원장 및 거래처/물동량 분석 (getProductLedger)
+   */
+  async getProductLedger(identifier, options = {}) {
+    if (!identifier) throw new Error('조회할 상품명 또는 ID가 지정되지 않았습니다.')
+
+    const rawId = String(identifier).trim()
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId)
+
+    // 1. 상품 마스터 및 유효재고 조회
+    let itemQuery = supabase.from('items').select('*')
+    if (isUuid) {
+      itemQuery = itemQuery.eq('id', rawId)
+    } else {
+      itemQuery = itemQuery.ilike('item_name', `%${rawId}%`)
+    }
+    const { data: matchedItems, error: itemErr } = await itemQuery.limit(5)
+    if (itemErr) throw itemErr
+    if (!matchedItems || matchedItems.length === 0) {
+      return { success: false, message: `상품을 찾을 수 없습니다: ${rawId}` }
+    }
+
+    const item = matchedItems[0]
+
+    // 2. 본사 재고 및 외부창고 재고 병렬 조회
+    const [effStockRes, whStockRes, allTxRes] = await Promise.all([
+      supabase.from('view_effective_stocks').select('*').eq('item_id', item.id).maybeSingle(),
+      supabase.from('inventory_stocks').select('warehouse_code, box_qty, unit_qty').eq('item_id', item.id),
+      supabase.from('stock_transactions')
+        .select('*')
+        .eq('item_id', item.id)
+        .order('created_at', { ascending: false })
+        .limit(2000)
+    ])
+
+    const eff = effStockRes.data || {}
+    const whStocks = whStockRes.data || []
+    const allTxs = allTxRes.data || []
+
+    const currentMainBoxes = Number(eff.main_box_qty || 0)
+    const currentMainUnits = Number(eff.main_unit_qty || 0)
+    const safeStockBoxes = Number(eff.safe_stock_boxes || 0)
+    const pendingInBoxes = Number(eff.pending_in_boxes || 0)
+    const pendingOutBoxes = Number(eff.pending_out_boxes || 0)
+    const effectiveBoxes = Number(eff.effective_box_qty || currentMainBoxes)
+
+    // 외부창고 총재고 집계
+    let totalSubWhBoxes = 0
+    const subWhMap = {}
+    whStocks.forEach(ws => {
+      if (ws.warehouse_code !== 'MAIN') {
+        const b = Number(ws.box_qty || 0)
+        totalSubWhBoxes += b
+        subWhMap[ws.warehouse_code] = b
+      }
+    })
+
+    // 3. 트랜잭션 수불 잔고(Running Balance) 역산 계산
+    let runningBoxes = currentMainBoxes
+    let runningUnits = currentMainUnits
+
+    const enrichedTxs = allTxs.map(tx => {
+      const bQty = Number(tx.box_qty || 0)
+      const uQty = Number(tx.unit_qty || 0)
+      const type = (tx.transaction_type || '').toUpperCase()
+
+      const balanceAfterBoxes = runningBoxes
+      const balanceAfterUnits = runningUnits
+
+      // 다음(더 과거) 트랜잭션 이전 잔고로 롤백
+      if (type === 'INBOUND') {
+        runningBoxes -= bQty
+        runningUnits -= uQty
+      } else if (type === 'OUTBOUND') {
+        runningBoxes += bQty
+        runningUnits += uQty
+      } else if (type === 'MOVE') {
+        runningBoxes += bQty
+        runningUnits += uQty
+      } else if (type === 'ADJUST') {
+        runningBoxes -= bQty
+        runningUnits -= uQty
+      }
+
+      return {
+        ...tx,
+        balance_after_boxes: balanceAfterBoxes,
+        balance_after_units: balanceAfterUnits
+      }
+    })
+
+    // 4. 사용자 필터 적용 (startDate, endDate, transactionType, partnerName)
+    const startDate = options.startDate ? new Date(options.startDate + 'T00:00:00Z') : null
+    const endDate = options.endDate ? new Date(options.endDate + 'T23:59:59Z') : null
+    const filterType = options.transactionType && options.transactionType !== 'ALL' ? options.transactionType.toUpperCase() : null
+    const filterPartner = options.partnerName ? options.partnerName.trim().toUpperCase() : null
+
+    const filteredLedger = enrichedTxs.filter(tx => {
+      const txDate = new Date(tx.created_at)
+      if (startDate && txDate < startDate) return false
+      if (endDate && txDate > endDate) return false
+      if (filterType && (tx.transaction_type || '').toUpperCase() !== filterType) return false
+      if (filterPartner) {
+        const pName = String(tx.partner_name || tx.warehouse_code || '').toUpperCase()
+        if (!pName.includes(filterPartner)) return false
+      }
+      return true
+    })
+
+    // 5. 요약 집계 (기간 내)
+    let totalInBoxes = 0
+    let totalInUnits = 0
+    let totalOutBoxes = 0
+    let totalOutUnits = 0
+    let totalMoveBoxes = 0
+    let totalMoveUnits = 0
+    let totalAdjBoxes = 0
+    let totalAdjUnits = 0
+
+    filteredLedger.forEach(tx => {
+      const b = Number(tx.box_qty || 0)
+      const u = Number(tx.unit_qty || 0)
+      const type = (tx.transaction_type || '').toUpperCase()
+      if (type === 'INBOUND') {
+        totalInBoxes += b
+        totalInUnits += u
+      } else if (type === 'OUTBOUND') {
+        totalOutBoxes += b
+        totalOutUnits += u
+      } else if (type === 'MOVE') {
+        totalMoveBoxes += b
+        totalMoveUnits += u
+      } else if (type === 'ADJUST') {
+        totalAdjBoxes += b
+        totalAdjUnits += u
+      }
+    })
+
+    // 6. 거래처 / 8대 서브창고별 물동량 분석 (Flow by Partner)
+    const partnerMap = new Map()
+    filteredLedger.forEach(tx => {
+      const type = (tx.transaction_type || '').toUpperCase()
+      if (type === 'OUTBOUND' || type === 'MOVE') {
+        const partner = String(tx.partner_name || tx.warehouse_code || '기타/미지정').trim()
+        const b = Number(tx.box_qty || 0)
+        const u = Number(tx.unit_qty || 0)
+        if (!partnerMap.has(partner)) {
+          partnerMap.set(partner, { partner, totalBoxes: 0, totalUnits: 0, txCount: 0, lastDate: tx.created_at, type })
+        }
+        const pData = partnerMap.get(partner)
+        pData.totalBoxes += b
+        pData.totalUnits += u
+        pData.txCount++
+        if (new Date(tx.created_at) > new Date(pData.lastDate)) {
+          pData.lastDate = tx.created_at
+        }
+      }
+    })
+
+    const totalOutboundBoxes = totalOutBoxes + totalMoveBoxes
+    const partnerFlow = Array.from(partnerMap.values())
+      .sort((a, b) => b.totalBoxes - a.totalBoxes)
+      .map(p => ({
+        ...p,
+        percent: totalOutboundBoxes > 0 ? Math.round((p.totalBoxes / totalOutboundBoxes) * 100) : 0
+      }))
+
+    // 7. 일자별 물동량 추이 (Daily Trend)
+    const dailyMap = {}
+    filteredLedger.forEach(tx => {
+      const dStr = String(tx.created_at).slice(0, 10)
+      if (!dailyMap[dStr]) {
+        dailyMap[dStr] = { date: dStr, inBoxes: 0, outBoxes: 0, moveBoxes: 0, adjBoxes: 0 }
+      }
+      const b = Number(tx.box_qty || 0)
+      const type = (tx.transaction_type || '').toUpperCase()
+      if (type === 'INBOUND') dailyMap[dStr].inBoxes += b
+      else if (type === 'OUTBOUND') dailyMap[dStr].outBoxes += b
+      else if (type === 'MOVE') dailyMap[dStr].moveBoxes += b
+      else if (type === 'ADJUST') dailyMap[dStr].adjBoxes += b
+    })
+
+    const dailyTrend = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date))
+
+    // 8. 일평균 소진 속도(Velocity) & 런웨이(Runway)
+    const now = new Date()
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
+    let recent14OutBoxes = 0
+    allTxs.forEach(tx => {
+      const type = (tx.transaction_type || '').toUpperCase()
+      if ((type === 'OUTBOUND' || type === 'MOVE') && new Date(tx.created_at) >= fourteenDaysAgo) {
+        recent14OutBoxes += Number(tx.box_qty || 0)
+      }
+    })
+    const avgDailyOut = Math.round((recent14OutBoxes / 14) * 10) / 10
+    const runwayDays = avgDailyOut > 0 ? Math.round(effectiveBoxes / avgDailyOut) : null
+
+    return {
+      success: true,
+      item: {
+        id: item.id,
+        itemName: item.item_name,
+        color: item.color || 'SURTIDO',
+        boxPackagingQty: Number(item.box_packaging_qty || 1),
+        itemCode: item.item_code || '',
+        barcode: item.barcode || ''
+      },
+      stockSnapshot: {
+        mainBoxQty: currentMainBoxes,
+        mainUnitQty: currentMainUnits,
+        totalSubWhBoxes: totalSubWhBoxes,
+        subWhMap: subWhMap,
+        safeStockBoxes: safeStockBoxes,
+        pendingInBoxes: pendingInBoxes,
+        pendingOutBoxes: pendingOutBoxes,
+        effectiveBoxes: effectiveBoxes
+      },
+      summary: {
+        totalInBoxes,
+        totalInUnits,
+        totalOutBoxes,
+        totalOutUnits,
+        totalMoveBoxes,
+        totalMoveUnits,
+        totalAdjBoxes,
+        totalAdjUnits,
+        totalTxs: filteredLedger.length,
+        avgDailyOut,
+        runwayDays
+      },
+      partnerFlow,
+      dailyTrend,
+      ledger: filteredLedger
+    }
   }
 }
 

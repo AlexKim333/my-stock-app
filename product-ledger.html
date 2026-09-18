@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
+  <title>📦 상품수불원장 & 물동량 통합 분석기</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <script type="module" src="/src/wms-entry.js"></script>
+
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --success: #16a34a;
+      --warning: #d97706;
+      --danger: #dc2626;
+      --purple: #7c3aed;
+      --bg-slate: #f8fafc;
+      --border-color: #cbd5e1;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      background: #f1f5f9;
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 상단 네비게이션 헤더 */
+    .top-header {
+      background: #1e293b;
+      color: #ffffff;
+      padding: 10px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .top-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .app-title {
+      font-size: 11.5pt;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .top-header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .header-btn {
+      padding: 5px 12px;
+      font-size: 8.5pt;
+      font-weight: 700;
+      border-radius: 6px;
+      cursor: pointer;
+      border: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+    }
+
+    .btn-return-main {
+      background: #334155;
+      color: #ffffff;
+    }
+    .btn-return-main:hover {
+      background: #475569;
+    }
+
+    .btn-export-excel {
+      background: #15803d;
+      color: #ffffff;
+    }
+    .btn-export-excel:hover {
+      background: #166534;
+    }
+
+    .btn-print {
+      background: #475569;
+      color: #ffffff;
+    }
+    .btn-print:hover {
+      background: #64748b;
+    }
+
+    /* 메인 컨테이너 */
+    .main-container {
+      max-width: 1480px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      flex: 1;
+    }
+
+    /* 상품 고속 검색 및 필터 바 */
+    .control-card {
+      background: #ffffff;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 12px 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .search-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .search-input-wrap {
+      position: relative;
+      flex: 1;
+      min-width: 260px;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 8px 12px 8px 34px;
+      font-size: 10.5pt;
+      font-weight: 700;
+      border: 2px solid #94a3b8;
+      border-radius: 8px;
+      outline: none;
+      background: #f8fafc;
+      transition: border-color 0.2s;
+    }
+
+    .search-input:focus {
+      border-color: var(--primary);
+      background: #ffffff;
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 11pt;
+      color: #64748b;
+    }
+
+    .autocomplete-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      max-height: 280px;
+      overflow-y: auto;
+      z-index: 100;
+      box-shadow: 0 10px 25px -5px rgba(0,0,0,0.2);
+      display: none;
+    }
+
+    .autocomplete-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 9pt;
+      border-bottom: 1px solid #f1f5f9;
+    }
+
+    .autocomplete-item:hover {
+      background: #eff6ff;
+    }
+
+    .autocomplete-item.active {
+      background: #dbeafe;
+    }
+
+    /* 필터 툴바 */
+    .filter-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding-top: 8px;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    .period-btn-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .period-btn {
+      padding: 4px 9px;
+      font-size: 8pt;
+      font-weight: 600;
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #cbd5e1;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .period-btn:hover {
+      background: #e2e8f0;
+    }
+
+    .period-btn.active {
+      background: #1e293b;
+      color: #ffffff;
+      border-color: #0f172a;
+    }
+
+    .custom-date-inputs {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 8pt;
+    }
+
+    .date-input {
+      padding: 4px 6px;
+      font-size: 8pt;
+      border: 1px solid #cbd5e1;
+      border-radius: 5px;
+      background: #ffffff;
+    }
+
+    .filter-select {
+      padding: 4px 8px;
+      font-size: 8pt;
+      border: 1px solid #cbd5e1;
+      border-radius: 5px;
+      background: #ffffff;
+      font-weight: 600;
+    }
+
+    /* 최근 조회 상품 퀵 칩 */
+    .recent-chips-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      font-size: 8pt;
+      color: var(--text-muted);
+    }
+
+    .recent-chip {
+      background: #f1f5f9;
+      color: #334155;
+      padding: 2px 8px;
+      border-radius: 12px;
+      cursor: pointer;
+      border: 1px solid #e2e8f0;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+
+    .recent-chip:hover {
+      background: #e0f2fe;
+      color: #0369a1;
+      border-color: #bae6fd;
+    }
+
+    /* 4대 스냅샷 KPI 카드 */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+
+    .kpi-card {
+      background: #ffffff;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 12px 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      border-left: 4px solid #3b82f6;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .kpi-card.green { border-left-color: #10b981; }
+    .kpi-card.amber { border-left-color: #f59e0b; }
+    .kpi-card.purple { border-left-color: #8b5cf6; }
+
+    .kpi-title {
+      font-size: 8pt;
+      font-weight: 700;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .kpi-value {
+      font-size: 16pt;
+      font-weight: 900;
+      color: #0f172a;
+    }
+
+    .kpi-sub {
+      font-size: 7.8pt;
+      color: var(--text-muted);
+    }
+
+    /* 탭 네비게이션 */
+    .tab-bar {
+      display: flex;
+      gap: 6px;
+      border-bottom: 2px solid #cbd5e1;
+      padding-bottom: 0;
+    }
+
+    .tab-btn {
+      padding: 8px 16px;
+      font-size: 9pt;
+      font-weight: 700;
+      border: none;
+      background: none;
+      color: #64748b;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -2px;
+      transition: all 0.15s;
+    }
+
+    .tab-btn:hover {
+      color: #1e293b;
+    }
+
+    .tab-btn.active {
+      color: #2563eb;
+      border-bottom-color: #2563eb;
+    }
+
+    /* 탭 패널 */
+    .tab-panel {
+      display: none;
+      background: #ffffff;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 14px 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    /* 수불 원장 테이블 */
+    .ledger-table-wrap {
+      max-height: 520px;
+      overflow-y: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+    }
+
+    .ledger-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 8.5pt;
+      text-align: left;
+    }
+
+    .ledger-table th {
+      background: #f8fafc;
+      padding: 8px 10px;
+      font-weight: 700;
+      color: #475569;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1.5px solid #cbd5e1;
+    }
+
+    .ledger-table td {
+      padding: 7px 10px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+
+    .ledger-table tr:hover {
+      background: #f8fafc;
+    }
+
+    .badge-tx {
+      font-size: 7.2pt;
+      font-weight: 800;
+      padding: 2px 7px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .badge-inbound { background: #dcfce7; color: #15803d; }
+    .badge-outbound { background: #fef3c7; color: #b45309; }
+    .badge-move { background: #ede9fe; color: #6d28d9; }
+    .badge-adjust { background: #e0f2fe; color: #0369a1; }
+
+    .balance-pill {
+      font-weight: 800;
+      color: #0f172a;
+      background: #f1f5f9;
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
+    /* 거래처 및 물동량 차트/테이블 */
+    .partner-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .partner-card {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+      background: #f8fafc;
+    }
+
+    /* 인쇄 전용 스타일 */
+    @media print {
+      .top-header, .search-row, .filter-row, .tab-bar, .recent-chips-bar {
+        display: none !important;
+      }
+      body, .main-container {
+        background: #ffffff !important;
+        padding: 0 !important;
+        width: 100% !important;
+      }
+      .tab-panel {
+        display: block !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+      }
+      .ledger-table-wrap {
+        max-height: none !important;
+        overflow: visible !important;
+        border: 1px solid #000 !important;
+      }
+      .ledger-table th {
+        background: #eee !important;
+        color: #000 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 상단 네비게이션 헤더 -->
+  <header class="top-header">
+    <div class="top-header-left">
+      <span class="app-title">📦 상품수불원장 & 물동량 통합 분석기</span>
+      <span id="selectedItemBadge" style="font-size:8pt; background:#334155; padding:3px 8px; border-radius:4px; font-weight:700; color:#a7f3d0;">선택된 상품 없음</span>
+    </div>
+    <div class="top-header-right">
+      <button type="button" class="header-btn btn-export-excel" onclick="exportLedgerToExcel()" title="현재 수불원장을 엑셀/CSV로 다운로드">📥 엑셀 내보내기</button>
+      <button type="button" class="header-btn btn-print" onclick="window.print()" title="수불원장 공식 장부 인쇄">🖨️ 수불부 인쇄</button>
+      <button type="button" class="header-btn btn-return-main" onclick="returnToMainWms()" title="메인 창고 관리 시스템으로 복귀">🏢 메인WMS 닫기</button>
+    </div>
+  </header>
+
+  <!-- 메인 컨테이너 -->
+  <main class="main-container">
+
+    <!-- 상품 고속 검색 및 필터 카드 -->
+    <div class="control-card">
+      <div class="search-row">
+        <div class="search-input-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="itemSearchInput" class="search-input" placeholder="품목명 / 코드 / 바코드 타이핑 시 즉시 검색 (예: LIGA1204, AMOR0425)..." autocomplete="off" oninput="handleItemSearchInput(this.value)">
+          <div id="autocompleteDropdown" class="autocomplete-dropdown"></div>
+        </div>
+        <button type="button" class="header-btn" style="background:#2563eb; color:#ffffff; padding:9px 16px;" onclick="loadCurrentItemLedger()">🔎 원장 조회</button>
+      </div>
+
+      <!-- 최근 조회 칩 -->
+      <div class="recent-chips-bar">
+        <span>최근 조회:</span>
+        <div id="recentChipsContainer" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+      </div>
+
+      <!-- 기간 및 유형 필터 바 -->
+      <div class="filter-row">
+        <div class="period-btn-group">
+          <button type="button" class="period-btn" onclick="setPeriodFilter('today')">오늘</button>
+          <button type="button" class="period-btn active" onclick="setPeriodFilter('7d')">최근 7일</button>
+          <button type="button" class="period-btn" onclick="setPeriodFilter('30d')">최근 30일</button>
+          <button type="button" class="period-btn" onclick="setPeriodFilter('month')">이번 달</button>
+          <button type="button" class="period-btn" onclick="setPeriodFilter('winter')">❄️ 성수기(11~12월)</button>
+          <button type="button" class="period-btn" onclick="setPeriodFilter('all')">전체</button>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <div class="custom-date-inputs">
+            <input type="date" id="filterStartDate" class="date-input" onchange="onCustomDateChange()">
+            <span>~</span>
+            <input type="date" id="filterEndDate" class="date-input" onchange="onCustomDateChange()">
+          </div>
+
+          <select id="filterTxType" class="filter-select" onchange="loadCurrentItemLedger()">
+            <option value="ALL">전체 수불유형</option>
+            <option value="INBOUND">📥 입고만</option>
+            <option value="OUTBOUND">📤 출고만</option>
+            <option value="MOVE">🚚 서브창고 이동만</option>
+            <option value="ADJUST">⚖️ 재고실사조정만</option>
+          </select>
+
+          <input type="text" id="filterPartner" placeholder="거래처/지점명 필터..." class="filter-select" style="width:130px;" oninput="onFilterPartnerInput(this.value)">
+        </div>
+      </div>
+    </div>
+
+    <!-- 4대 스냅샷 KPI 카드 -->
+    <div class="kpi-grid">
+      <!-- 가용 총재고 -->
+      <div class="kpi-card">
+        <div class="kpi-title">
+          <span>📦 본사 가용재고</span>
+          <span style="font-size:7.5pt; color:#2563eb; background:#eff6ff; padding:1px 5px; border-radius:3px;">실시간 유효재고</span>
+        </div>
+        <div class="kpi-value" id="kpiMainStock">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
+        <div class="kpi-sub">
+          낱개: <strong id="kpiMainUnits" style="color:#2563eb;">0</strong>개 | 8대 외부창고: <strong id="kpiSubWhTotal">0</strong>상자
+        </div>
+      </div>
+
+      <!-- 기간 내 입고 -->
+      <div class="kpi-card green">
+        <div class="kpi-title">
+          <span>📥 기간 내 누적 입고</span>
+          <span style="font-size:7.5pt; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:3px;">확정 입고</span>
+        </div>
+        <div class="kpi-value" id="kpiTotalIn" style="color:#065f46;">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
+        <div class="kpi-sub">
+          낱개: <strong id="kpiTotalInUnits">0</strong>개 | 입고 전표: <strong id="kpiInTxCount">0</strong>건
+        </div>
+      </div>
+
+      <!-- 기간 내 출고 및 이동 -->
+      <div class="kpi-card amber">
+        <div class="kpi-title">
+          <span>📤 기간 내 누적 출고/이동</span>
+          <span style="font-size:7.5pt; color:#b45309; background:#fef3c7; padding:1px 5px; border-radius:3px;">거래처+서브창고</span>
+        </div>
+        <div class="kpi-value" id="kpiTotalOut" style="color:#92400e;">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
+        <div class="kpi-sub">
+          출고: <strong id="kpiOutOnly">0</strong>상자 | 이동: <strong id="kpiMoveOnly">0</strong>상자
+        </div>
+      </div>
+
+      <!-- 일평균 속도 & 소진 예상일 -->
+      <div class="kpi-card purple">
+        <div class="kpi-title">
+          <span>⚡ 출고 속도 & 소진 런웨이</span>
+          <span id="kpiRunwayBadge" style="font-size:7.5pt; color:#6d28d9; background:#ede9fe; padding:1px 5px; border-radius:3px; font-weight:700;">안정</span>
+        </div>
+        <div class="kpi-value" id="kpiDailyVelocity" style="color:#5b21b6;">0.0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자/일</span></div>
+        <div class="kpi-sub" id="kpiRunwayText">
+          재고 소진 예상: <strong id="kpiRunwayDays" style="color:#7c3aed;">-</strong>일 잔여
+        </div>
+      </div>
+    </div>
+
+    <!-- 3대 분석 탭 헤더 -->
+    <div class="tab-bar">
+      <button type="button" class="tab-btn active" id="tabBtn_ledger" onclick="switchLedgerTab('ledger')">⏱️ 시간순 수불 상세 원장 (<span id="tabCountLedger">0</span>건)</button>
+      <button type="button" class="tab-btn" id="tabBtn_partner" onclick="switchLedgerTab('partner')">🏢 거래처 & 8대 서브창고별 물동량 (<span id="tabCountPartner">0</span>개소)</button>
+      <button type="button" class="tab-btn" id="tabBtn_trend" onclick="switchLedgerTab('trend')">📈 일자별 물동 추이 & 분석</button>
+    </div>
+
+    <!-- 탭 1: 수불 상세 원장 -->
+    <div id="tabPanel_ledger" class="tab-panel active">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <span style="font-size:9pt; font-weight:700; color:#334155;">📋 해당 기간 거래별 변동 내역 및 잔고 추적</span>
+        <span style="font-size:7.5pt; color:#64748b;">* 전표번호 클릭 시 원본 전표로 이동</span>
+      </div>
+      <div class="ledger-table-wrap">
+        <table class="ledger-table">
+          <thead>
+            <tr>
+              <th style="width:125px;">일시</th>
+              <th style="width:85px; text-align:center;">구분</th>
+              <th style="width:120px;">전표번호</th>
+              <th>거래처 / 출고지 / 지점</th>
+              <th style="width:75px; text-align:right;">상자수</th>
+              <th style="width:75px; text-align:right;">낱개수</th>
+              <th style="width:95px; text-align:right;">변동 후 잔고</th>
+              <th style="width:75px; text-align:center;">작업자</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody id="ledgerTableBody">
+            <tr><td colspan="9" style="text-align:center; padding:24px; color:#94a3b8;">품목을 검색하거나 선택해주세요.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 탭 2: 거래처/서브창고별 물동량 분석 -->
+    <div id="tabPanel_partner" class="tab-panel">
+      <div style="margin-bottom:12px;">
+        <h3 style="font-size:10.5pt; font-weight:800; color:#1e293b; margin-bottom:4px;">🏢 거래처 및 서브창고 물동량 점유율 랭킹</h3>
+        <p style="font-size:8pt; color:#64748b;">선택한 기간 동안 이 상품을 가장 많이 수령한 거래처와 외부창고 순위입니다.</p>
+      </div>
+      <div id="partnerFlowList" class="partner-grid">
+        <div style="grid-column:1/-1; text-align:center; padding:24px; color:#94a3b8;">출고 및 이동 데이터 집계 중...</div>
+      </div>
+    </div>
+
+    <!-- 탭 3: 일자별 물동 추이 -->
+    <div id="tabPanel_trend" class="tab-panel">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <h3 style="font-size:10.5pt; font-weight:800; color:#1e293b; margin-bottom:4px;">📈 일자별 입고 vs 출고 막대 추이</h3>
+          <p style="font-size:8pt; color:#64748b;">특정 일자에 대량 출고가 발생했는지 패턴을 확인합니다.</p>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; font-size:8pt; font-weight:700;">
+          <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:10px; height:10px; background:#10b981; border-radius:2px;"></span> 입고</span>
+          <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:10px; height:10px; background:#f59e0b; border-radius:2px;"></span> 출고/이동</span>
+        </div>
+      </div>
+      <div id="dailyTrendChartContainer" style="height:200px; display:flex; align-items:flex-end; gap:6px; padding:10px 0; border-bottom:1.5px solid #cbd5e1;">
+        <div style="width:100%; text-align:center; color:#94a3b8; align-self:center;">데이터를 불러오는 중...</div>
+      </div>
+      <div id="dailyTrendLabelsContainer" style="display:flex; justify-content:space-between; font-size:7.5pt; color:#64748b; margin-top:4px;"></div>
+    </div>
+
+  </main>
+
+  <script>
+    /* ==========================================================================
+       상품수불원장 컨트롤러 (Product Ledger Controller)
+       ========================================================================== */
+    let currentItemData = null;
+    let currentLedgerResult = null;
+    let catalogCache = [];
+    let recentViewedItems = [];
+
+    // 1. 초기 로드
+    window.addEventListener('DOMContentLoaded', async () => {
+      loadRecentItemsFromStorage();
+      initPeriodDates('7d');
+      await preloadCatalogList();
+
+      // URL 파라미터 확인 (?item=LIGA1204)
+      const urlParams = new URLSearchParams(window.location.search);
+      const itemQuery = urlParams.get('item') || urlParams.get('id');
+
+      if (itemQuery) {
+        document.getElementById('itemSearchInput').value = itemQuery;
+        loadProductLedger(itemQuery);
+      } else if (recentViewedItems.length > 0) {
+        document.getElementById('itemSearchInput').value = recentViewedItems[0];
+        loadProductLedger(recentViewedItems[0]);
+      } else {
+        document.getElementById('itemSearchInput').value = 'LIGA1204';
+        loadProductLedger('LIGA1204');
+      }
+    });
+
+    async function preloadCatalogList() {
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run.withSuccessHandler(items => {
+          if (items && Array.isArray(items)) {
+            catalogCache = items;
+          }
+        }).getStockData();
+      }
+    }
+
+    /* 2. 상품 검색 및 자동완성 */
+    function handleItemSearchInput(val) {
+      const dropdown = document.getElementById('autocompleteDropdown');
+      const q = String(val || '').trim().toUpperCase();
+
+      if (!q || catalogCache.length === 0) {
+        if (dropdown) dropdown.style.display = 'none';
+        return;
+      }
+
+      const matches = catalogCache.filter(it => 
+        String(it.name || '').toUpperCase().includes(q) ||
+        String(it.color || '').toUpperCase().includes(q)
+      ).slice(0, 10);
+
+      if (matches.length === 0) {
+        if (dropdown) dropdown.style.display = 'none';
+        return;
+      }
+
+      dropdown.innerHTML = matches.map(it => `
+        <div class="autocomplete-item" onclick="selectItemFromDropdown('${escapeHtml(it.name)}')">
+          <span style="font-weight:700; color:#1e293b;">${escapeHtml(it.name)} <span style="font-size:7.5pt; color:#64748b;">(${escapeHtml(it.color || 'SURTIDO')})</span></span>
+          <span style="font-size:7.5pt; color:#2563eb; font-weight:600;">재고: ${it.stockBox || 0}상자</span>
+        </div>
+      `).join('');
+
+      dropdown.style.display = 'block';
+    }
+
+    function selectItemFromDropdown(itemName) {
+      const inp = document.getElementById('itemSearchInput');
+      const dropdown = document.getElementById('autocompleteDropdown');
+      if (inp) inp.value = itemName;
+      if (dropdown) dropdown.style.display = 'none';
+      loadProductLedger(itemName);
+    }
+
+    function loadCurrentItemLedger() {
+      const inp = document.getElementById('itemSearchInput');
+      const val = inp?.value?.trim();
+      if (!val) {
+        alert('조회할 상품명을 입력해주세요.');
+        return;
+      }
+      loadProductLedger(val);
+    }
+
+    /* 3. 수불원장 API 호출 */
+    function loadProductLedger(identifier) {
+      const badge = document.getElementById('selectedItemBadge');
+      if (badge) badge.textContent = `조회 중: ${identifier}... ⏳`;
+
+      const options = {
+        startDate: document.getElementById('filterStartDate')?.value || '',
+        endDate: document.getElementById('filterEndDate')?.value || '',
+        transactionType: document.getElementById('filterTxType')?.value || 'ALL',
+        partnerName: document.getElementById('filterPartner')?.value || ''
+      };
+
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(onLedgerDataLoaded)
+          .withFailureHandler(err => {
+            console.error('원장 로드 오류:', err);
+            if (badge) badge.textContent = '조회 실패';
+            alert('상품 원장 조회 실패: ' + err);
+          })
+          .getProductLedger(identifier, options);
+      }
+    }
+
+    /* 4. 원장 데이터 렌더링 */
+    function onLedgerDataLoaded(res) {
+      if (!res || !res.success) {
+        alert(res?.message || '해당 상품의 데이터를 찾을 수 없습니다.');
+        return;
+      }
+
+      currentLedgerResult = res;
+      currentItemData = res.item;
+      saveToRecentItems(res.item.itemName);
+
+      const badge = document.getElementById('selectedItemBadge');
+      if (badge) badge.textContent = `📦 ${res.item.itemName} (${res.item.color || 'SURTIDO'})`;
+
+      const snap = res.stockSnapshot || {};
+      const sum = res.summary || {};
+
+      document.getElementById('kpiMainStock').innerHTML = `${Number(snap.mainBoxQty || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
+      document.getElementById('kpiMainUnits').textContent = Number(snap.mainUnitQty || 0).toLocaleString();
+      document.getElementById('kpiSubWhTotal').textContent = Number(snap.totalSubWhBoxes || 0).toLocaleString();
+
+      document.getElementById('kpiTotalIn').innerHTML = `${Number(sum.totalInBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
+      document.getElementById('kpiTotalInUnits').textContent = Number(sum.totalInUnits || 0).toLocaleString();
+      document.getElementById('kpiInTxCount').textContent = res.ledger.filter(t => t.transaction_type === 'INBOUND').length;
+
+      document.getElementById('kpiTotalOut').innerHTML = `${(Number(sum.totalOutBoxes || 0) + Number(sum.totalMoveBoxes || 0)).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
+      document.getElementById('kpiOutOnly').textContent = Number(sum.totalOutBoxes || 0).toLocaleString();
+      document.getElementById('kpiMoveOnly').textContent = Number(sum.totalMoveBoxes || 0).toLocaleString();
+
+      document.getElementById('kpiDailyVelocity').innerHTML = `${sum.avgDailyOut || '0.0'} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자/일</span>`;
+
+      const runwayBadge = document.getElementById('kpiRunwayBadge');
+      const runwayDaysEl = document.getElementById('kpiRunwayDays');
+      if (sum.runwayDays !== null && sum.runwayDays !== undefined) {
+        if (runwayDaysEl) runwayDaysEl.textContent = sum.runwayDays;
+        if (runwayBadge) {
+          if (sum.runwayDays <= 7) {
+            runwayBadge.textContent = '🚨 결품위험';
+            runwayBadge.style.background = '#fee2e2';
+            runwayBadge.style.color = '#dc2626';
+          } else if (sum.runwayDays <= 14) {
+            runwayBadge.textContent = '⚠️ 주의';
+            runwayBadge.style.background = '#fef3c7';
+            runwayBadge.style.color = '#b45309';
+          } else {
+            runwayBadge.textContent = '✅ 안정';
+            runwayBadge.style.background = '#dcfce7';
+            runwayBadge.style.color = '#15803d';
+          }
+        }
+      } else {
+        if (runwayDaysEl) runwayDaysEl.textContent = '추정불가';
+        if (runwayBadge) runwayBadge.textContent = '출고기록없음';
+      }
+
+      document.getElementById('tabCountLedger').textContent = res.ledger.length;
+      document.getElementById('tabCountPartner').textContent = res.partnerFlow.length;
+
+      renderLedgerTable(res.ledger);
+      renderPartnerFlow(res.partnerFlow);
+      renderDailyTrend(res.dailyTrend);
+    }
+
+    function renderLedgerTable(txList) {
+      const tbody = document.getElementById('ledgerTableBody');
+      if (!tbody) return;
+
+      if (!txList || txList.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:24px; color:#94a3b8;">해당 기간에 등록된 수불 내역이 없습니다.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = txList.map(tx => {
+        const type = String(tx.transaction_type || '').toUpperCase();
+        let typeBadge = '';
+        let sign = '';
+        let numColor = '#0f172a';
+
+        if (type === 'INBOUND') {
+          typeBadge = '<span class="badge-tx badge-inbound">📥 입고</span>';
+          sign = '+';
+          numColor = '#15803d';
+        } else if (type === 'OUTBOUND') {
+          typeBadge = '<span class="badge-tx badge-outbound">📤 출고</span>';
+          sign = '-';
+          numColor = '#b45309';
+        } else if (type === 'MOVE') {
+          typeBadge = '<span class="badge-tx badge-move">🚚 이동</span>';
+          sign = '-';
+          numColor = '#6d28d9';
+        } else if (type === 'ADJUST') {
+          typeBadge = '<span class="badge-tx badge-adjust">⚖️ 실사</span>';
+          sign = Number(tx.box_qty) >= 0 ? '+' : '';
+          numColor = '#0369a1';
+        }
+
+        const dateStr = String(tx.created_at || '').slice(0, 16).replace('T', ' ');
+        const partner = escapeHtml(tx.partner_name || tx.warehouse_code || '-');
+        const invoice = escapeHtml(tx.invoice_no || '-');
+        const handler = escapeHtml(tx.handler_name || '-');
+        const memo = escapeHtml(tx.memo || '');
+        const boxQty = Number(tx.box_qty || 0);
+        const unitQty = Number(tx.unit_qty || 0);
+        const balBoxes = Number(tx.balance_after_boxes || 0);
+
+        return `
+          <tr>
+            <td style="color:#64748b; font-size:8pt;">${dateStr}</td>
+            <td style="text-align:center;">${typeBadge}</td>
+            <td>
+              <strong style="color:#2563eb; cursor:pointer;" onclick="openSearchModifyInvoice('${invoice}')">${invoice}</strong>
+            </td>
+            <td style="font-weight:700; color:#1e293b;">${partner}</td>
+            <td style="text-align:right; font-weight:800; color:${numColor};">${sign}${Math.abs(boxQty)}</td>
+            <td style="text-align:right; color:#64748b;">${sign}${Math.abs(unitQty)}</td>
+            <td style="text-align:right;">
+              <span class="balance-pill">${balBoxes.toLocaleString()} 상자</span>
+            </td>
+            <td style="text-align:center; color:#475569; font-size:8pt;">${handler}</td>
+            <td style="color:#64748b; font-size:8pt;">${memo}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderPartnerFlow(flowList) {
+      const container = document.getElementById('partnerFlowList');
+      if (!container) return;
+
+      if (!flowList || flowList.length === 0) {
+        container.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:24px; color:#94a3b8;">출고 또는 서브창고 이동 실적이 없습니다.</div>`;
+        return;
+      }
+
+      container.innerHTML = flowList.map((p, idx) => {
+        const isSubWh = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR'].includes(p.partner.toUpperCase());
+        const badge = isSubWh 
+          ? '<span style="font-size:7pt; color:#6d28d9; background:#ede9fe; padding:1px 5px; border-radius:3px;">🏢 서브창고</span>'
+          : '<span style="font-size:7pt; color:#1d4ed8; background:#dbeafe; padding:1px 5px; border-radius:3px;">🤝 거래처</span>';
+
+        return `
+          <div class="partner-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="font-weight:800; font-size:9pt; color:#0f172a; display:flex; align-items:center; gap:5px;">
+                <span style="color:#2563eb; font-weight:900;">#${idx + 1}</span>
+                <span>${escapeHtml(p.partner)}</span>
+                ${badge}
+              </span>
+              <span style="font-weight:900; color:#0f172a; font-size:10pt;">${p.totalBoxes.toLocaleString()} 상자</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:7.5pt; color:#64748b; margin-bottom:4px;">
+              <span>물동 점유율: <strong>${p.percent}%</strong></span>
+              <span>총 거래 횟수: <strong>${p.txCount}</strong>회</span>
+            </div>
+            <div style="background:#e2e8f0; border-radius:4px; height:6px; overflow:hidden;">
+              <div style="background:linear-gradient(90deg, #3b82f6, #6366f1); width:${p.percent}%; height:100%;"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderDailyTrend(dailyList) {
+      const chart = document.getElementById('dailyTrendChartContainer');
+      const labels = document.getElementById('dailyTrendLabelsContainer');
+      if (!chart || !labels) return;
+
+      if (!dailyList || dailyList.length === 0) {
+        chart.innerHTML = `<div style="width:100%; text-align:center; color:#94a3b8; align-self:center;">표시할 일자별 추이가 없습니다.</div>`;
+        labels.innerHTML = '';
+        return;
+      }
+
+      let maxVal = 1;
+      dailyList.forEach(d => {
+        const outSum = d.outBoxes + d.moveBoxes;
+        if (d.inBoxes > maxVal) maxVal = d.inBoxes;
+        if (outSum > maxVal) maxVal = outSum;
+      });
+
+      let chartHtml = '';
+      let labelsHtml = '';
+
+      dailyList.forEach(d => {
+        const outSum = d.outBoxes + d.moveBoxes;
+        const inH = Math.max(4, Math.round((d.inBoxes / maxVal) * 160));
+        const outH = Math.max(4, Math.round((outSum / maxVal) * 160));
+        const shortDate = d.date.slice(5);
+
+        chartHtml += `
+          <div style="flex:1; display:flex; justify-content:center; align-items:flex-end; gap:3px; height:100%;" title="${d.date} - 입고: ${d.inBoxes}상자 / 출고: ${outSum}상자">
+            <div style="width:12px; height:${inH}px; background:#10b981; border-radius:3px 3px 0 0;"></div>
+            <div style="width:12px; height:${outH}px; background:#f59e0b; border-radius:3px 3px 0 0;"></div>
+          </div>
+        `;
+        labelsHtml += `<span style="flex:1; text-align:center;">${shortDate}</span>`;
+      });
+
+      chart.innerHTML = chartHtml;
+      labels.innerHTML = labelsHtml;
+    }
+
+    /* 5. 탭 전환 */
+    function switchLedgerTab(tabKey) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+
+      const btn = document.getElementById(`tabBtn_${tabKey}`);
+      const panel = document.getElementById(`tabPanel_${tabKey}`);
+      if (btn) btn.classList.add('active');
+      if (panel) panel.classList.add('active');
+    }
+
+    /* 6. 기간 빠른 필터 */
+    function setPeriodFilter(period) {
+      document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+      const activeBtn = Array.from(document.querySelectorAll('.period-btn')).find(b => b.getAttribute('onclick')?.includes(period));
+      if (activeBtn) activeBtn.classList.add('active');
+
+      initPeriodDates(period);
+      loadCurrentItemLedger();
+    }
+
+    function initPeriodDates(period) {
+      const startInp = document.getElementById('filterStartDate');
+      const endInp = document.getElementById('filterEndDate');
+      const now = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const fmt = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+      endInp.value = fmt(now);
+
+      if (period === 'today') {
+        startInp.value = fmt(now);
+      } else if (period === '7d') {
+        const d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        startInp.value = fmt(d);
+      } else if (period === '30d') {
+        const d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        startInp.value = fmt(d);
+      } else if (period === 'month') {
+        startInp.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
+      } else if (period === 'winter') {
+        startInp.value = `${now.getFullYear() - 1}-11-01`;
+        endInp.value = `${now.getFullYear() - 1}-12-31`;
+      } else if (period === 'all') {
+        startInp.value = '';
+        endInp.value = '';
+      }
+    }
+
+    function onCustomDateChange() {
+      document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+      loadCurrentItemLedger();
+    }
+
+    let filterPartnerTimer = null;
+    function onFilterPartnerInput() {
+      clearTimeout(filterPartnerTimer);
+      filterPartnerTimer = setTimeout(() => {
+        loadCurrentItemLedger();
+      }, 300);
+    }
+
+    /* 7. 최근 조회 상품 칩 관리 */
+    function loadRecentItemsFromStorage() {
+      try {
+        const saved = localStorage.getItem('wms_recent_ledger_items');
+        if (saved) recentViewedItems = JSON.parse(saved);
+      } catch (e) {}
+      renderRecentChips();
+    }
+
+    function saveToRecentItems(name) {
+      if (!name) return;
+      recentViewedItems = [name, ...recentViewedItems.filter(i => i !== name)].slice(0, 6);
+      try {
+        localStorage.setItem('wms_recent_ledger_items', JSON.stringify(recentViewedItems));
+      } catch (e) {}
+      renderRecentChips();
+    }
+
+    function renderRecentChips() {
+      const container = document.getElementById('recentChipsContainer');
+      if (!container) return;
+      container.innerHTML = recentViewedItems.map(name => `
+        <span class="recent-chip" onclick="selectItemFromDropdown('${escapeHtml(name)}')">${escapeHtml(name)}</span>
+      `).join('');
+    }
+
+    /* 8. 엑셀 내보내기 */
+    function exportLedgerToExcel() {
+      if (!currentLedgerResult || !currentLedgerResult.ledger) {
+        alert('내보낼 수불 데이터가 없습니다.');
+        return;
+      }
+      const item = currentItemData?.itemName || '상품';
+      const rows = [
+        ['일시', '구분', '전표번호', '거래처/출고지', '상자수', '낱개수', '변동후잔고(상자)', '작업자', '비고']
+      ];
+      currentLedgerResult.ledger.forEach(tx => {
+        rows.push([
+          String(tx.created_at || '').slice(0, 16).replace('T', ' '),
+          tx.transaction_type || '',
+          tx.invoice_no || '',
+          tx.partner_name || tx.warehouse_code || '',
+          tx.box_qty || 0,
+          tx.unit_qty || 0,
+          tx.balance_after_boxes || 0,
+          tx.handler_name || '',
+          tx.memo || ''
+        ]);
+      });
+
+      const csvContent = '\uFEFF' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `수불원장_${item}_${new Date().toISOString().slice(0,10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    function returnToMainWms() {
+      if (window.parent && window.parent !== window && typeof window.parent.closeProductLedgerModal === 'function') {
+        window.parent.closeProductLedgerModal();
+      } else {
+        window.location.href = '/index.html';
+      }
+    }
+
+    function openSearchModifyInvoice(invoiceNo) {
+      if (invoiceNo && invoiceNo !== '-') {
+        if (window.parent && typeof window.parent.openSearchModifyModal === 'function') {
+          window.parent.openSearchModifyModal();
+        } else {
+          window.open(`/searchmodify.html?invoice=${encodeURIComponent(invoiceNo)}`, '_blank');
+        }
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+  </script>
+
+</body>
+</html>
