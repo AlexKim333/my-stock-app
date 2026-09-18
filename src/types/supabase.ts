@@ -489,32 +489,40 @@ export type Database = {
       }
     }
     Functions: {
-      rpc_process_transaction:
-        | {
-            Args: {
-              p_handler: string
-              p_invoice: string
-              p_items: Json
-              p_memo: string
-              p_partner: string
-              p_tx_type: string
-              p_warehouse: string
-            }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_handler: string
-              p_invoice: string
-              p_items: Json
-              p_memo: string
-              p_partner: string
-              p_target_warehouse?: string
-              p_tx_type: string
-              p_warehouse: string
-            }
-            Returns: Json
-          }
+      rpc_apply_recommended_safe_stock: {
+        Args: { p_recommendations: Json }
+        Returns: Json
+      }
+      rpc_complete_inbound_pending_orders: {
+        Args: { p_items: Json; p_source_warehouse: string }
+        Returns: Json
+      }
+      rpc_process_transaction: {
+        Args: {
+          p_handler: string
+          p_invoice: string
+          p_items: Json
+          p_memo: string
+          p_partner: string
+          p_target_warehouse?: string
+          p_tx_type: string
+          p_warehouse: string
+        }
+        Returns: Json
+      }
+      rpc_submit_warehouse_order_drafts: {
+        Args: { p_admin: string; p_by_warehouse: Json }
+        Returns: Json
+      }
+      rpc_update_transaction_records: {
+        Args: {
+          p_admin: string
+          p_invoice_no: string
+          p_new_records: Json
+          p_tx_type: string
+        }
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never

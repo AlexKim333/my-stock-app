@@ -24,6 +24,7 @@ dist-ssr
 service-account*.json
 .clasprc.json
 .vercel
+scratch/
 
 
 # Editor directories and files

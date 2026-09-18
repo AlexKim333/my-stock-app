@@ -466,6 +466,24 @@ export const serverMethods = {
       throw new Error(rpcErr.message || '재고 트랜잭션 처리 실패')
     }
 
+    // 🚚 서브창고 입고 확정 시 pending_orders 상태 완료 및 서브창고 재고 차감 연동
+    if (mode === 'in' && partner) {
+      const whList = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
+      const cleanOrigin = partner.toUpperCase().trim()
+      const matchedWh = whList.find(w => cleanOrigin.includes(w))
+      if (matchedWh) {
+        try {
+          await supabase.rpc('rpc_complete_inbound_pending_orders', {
+            p_source_warehouse: matchedWh,
+            p_items: itemsPayload
+          })
+          console.log(`[processForm] 서브창고(${matchedWh}) 발주 완료 및 재고 차감 동기화 완료`)
+        } catch (subErr) {
+          console.warn(`[processForm] 서브창고 동기화 경고:`, subErr)
+        }
+      }
+    }
+
     // 🛡️ [정합성 100% 무결성 보장] 메인창고 재고 캐시 즉각 동기화를 위해 방금 커밋된 최종 재고 조회
     const itemIds = itemsPayload.map(i => i.item_id)
     const { data: freshStocks } = await supabase
@@ -548,14 +566,19 @@ export const serverMethods = {
    * 12. 전표 검색 및 수정 (SearchModify 연동)
    */
   async searchRecords(type, invoiceNumber) {
-    const targetInv = String(invoiceNumber || '').trim().replace(/-/g, '/')
+    const rawInv = String(invoiceNumber || '').trim()
+    const slashInv = rawInv.replace(/-/g, '/')
+    const dashInv = rawInv.replace(/\//g, '-')
     const txType = type === 'in' ? 'INBOUND' : 'OUTBOUND'
 
+    // 전표번호 검색 (슬래시 및 대시 형식 모두 지원)
     const { data, error } = await supabase
       .from('stock_transactions')
       .select(`
+        id,
         invoice_no,
         transaction_type,
+        item_id,
         box_qty,
         unit_qty,
         partner_name,
@@ -563,17 +586,22 @@ export const serverMethods = {
         memo,
         created_at,
         items (
+          id,
           item_name,
           color,
           box_packaging_qty
         )
       `)
-      .like('invoice_no', `%${targetInv.split('/').pop() || ''}%`)
+      .or(`invoice_no.eq.${slashInv},invoice_no.eq.${dashInv}`)
       .eq('transaction_type', txType)
 
-    if (error) throw error
+    if (error) {
+      console.error('[SupabaseAdapter] searchRecords 실패:', error)
+      throw error
+    }
 
     return (data || []).map(row => ({
+      item_id: row.item_id || row.items?.id,
       itemName: row.items?.item_name || '',
       color: row.items?.color || 'SURTIDO',
       boxQty: row.box_qty,
@@ -588,7 +616,58 @@ export const serverMethods = {
   },
 
   async updatePendingRecords(invoiceNumber, type, newRecords, admin) {
-    return { success: true, message: '전표가 성공적으로 수정되었습니다.' }
+    const txType = type === 'in' ? 'INBOUND' : 'OUTBOUND'
+    const targetInv = String(invoiceNumber || '').trim()
+
+    // 1. 새 레코드의 item_id 보정
+    const payloadRecords = []
+    for (const rec of (newRecords || [])) {
+      let itemId = rec.item_id
+      if (!itemId) {
+        const name = String(rec.itemName || '').trim()
+        const color = String(rec.color || 'SURTIDO').trim()
+        const boxContent = Number(rec.boxContent || 1)
+        const key = `${name}_${color}_${boxContent}`
+        itemId = itemIdCache.get(key)
+        if (!itemId) {
+          const { data: found } = await supabase
+            .from('items')
+            .select('id')
+            .eq('item_name', name)
+            .eq('color', color)
+            .eq('box_packaging_qty', boxContent)
+            .maybeSingle()
+          if (found) {
+            itemId = found.id
+            itemIdCache.set(key, itemId)
+          }
+        }
+      }
+      payloadRecords.push({
+        item_id: itemId,
+        item_name: String(rec.itemName || rec.item_name || '').trim(),
+        color: String(rec.color || 'SURTIDO').trim(),
+        box_content: Number(rec.boxContent || rec.box_packaging_qty || 1),
+        box_qty: Math.abs(Number(rec.boxQty || rec.box_qty || 0)),
+        unit_qty: Math.abs(Number(rec.individualQty || rec.unit_qty || 0)),
+        partner_name: String(rec.location || rec.partner_name || '').trim()
+      })
+    }
+
+    // 2. 원자적 롤백 & 재반영 RPC 실행
+    const { data, error } = await supabase.rpc('rpc_update_transaction_records', {
+      p_invoice_no: targetInv,
+      p_tx_type: txType,
+      p_new_records: payloadRecords,
+      p_admin: admin || 'ADMIN'
+    })
+
+    if (error) {
+      console.error('[SupabaseAdapter] updatePendingRecords 실패:', error)
+      throw new Error(error.message || '전표 수정에 실패했습니다.')
+    }
+
+    return data || { success: true, message: '전표가 성공적으로 수정되었습니다.' }
   },
 
   /**
@@ -726,10 +805,11 @@ export const serverMethods = {
    * 14. 재고 정합성 자동 검사기 (전수 대사 & 오차 탐지)
    */
   async verifyStockIntegrity() {
-    const [res1, res2, txRes] = await Promise.all([
+    const [res1, res2, txRes, itemsRes] = await Promise.all([
       supabase.from('view_effective_stocks').select('*').range(0, 999),
       supabase.from('view_effective_stocks').select('*').range(1000, 1999),
-      supabase.from('stock_transactions').select('*')
+      supabase.from('stock_transactions').select('*'),
+      supabase.from('items').select('id, initial_stock_boxes, initial_stock_units, box_packaging_qty')
     ])
 
     if (res1.error) throw res1.error
@@ -738,11 +818,12 @@ export const serverMethods = {
 
     const allStocks = [...(res1.data || []), ...(res2.data || [])]
     const allTxs = txRes.data || []
+    const itemsMap = new Map((itemsRes.data || []).map(it => [it.id, it]))
 
     const discrepancies = []
     let checkedCount = 0
 
-    // 트랜잭션 항목별 집계
+    // 트랜잭션 항목별 집계 (총 입고, 총 출고, 재고조사 건수)
     const txByItem = new Map()
     allTxs.forEach(tx => {
       if (!txByItem.has(tx.item_id)) {
@@ -760,7 +841,7 @@ export const serverMethods = {
       if (tx.transaction_type === 'INBOUND' || tx.transaction_type === '재고추가') {
         t.inBoxTotal += b
         t.inIndivTotal += u
-      } else if (tx.transaction_type === 'OUTBOUND') {
+      } else if (tx.transaction_type === 'OUTBOUND' || (tx.transaction_type === 'MOVE' && tx.warehouse_code === 'MAIN')) {
         t.outBoxTotal += b
         t.outIndivTotal += u
       } else if (tx.transaction_type === 'ADJUST') {
@@ -775,6 +856,16 @@ export const serverMethods = {
       const currentIndividual = Number(st.main_unit_qty || 0)
       const currentTotal = (currentBox * boxContent) + currentIndividual
 
+      const itemMeta = itemsMap.get(st.item_id) || {}
+      const initBox = Number(itemMeta.initial_stock_boxes || 0)
+      const initIndiv = Number(itemMeta.initial_stock_units || 0)
+      const initTotal = (initBox * boxContent) + initIndiv
+
+      const tInfo = txByItem.get(st.item_id) || { inBoxTotal: 0, inIndivTotal: 0, outBoxTotal: 0, outIndivTotal: 0, adjustCount: 0 }
+      const inTotal = (tInfo.inBoxTotal * boxContent) + tInfo.inIndivTotal
+      const outTotal = (tInfo.outBoxTotal * boxContent) + tInfo.outIndivTotal
+      const expectedTotal = initTotal + inTotal - outTotal
+
       // 1) 음수 재고 검증
       if (currentBox < 0 || currentIndividual < 0) {
         discrepancies.push({
@@ -784,13 +875,31 @@ export const serverMethods = {
           currentBox: currentBox,
           currentIndividual: currentIndividual,
           currentTotal: currentTotal,
-          expectedTotal: 0,
+          expectedTotal: expectedTotal,
           diffTotal: currentTotal,
           diffBoxes: currentBox,
           diffIndividuals: currentIndividual,
-          initialStock: 0,
-          inSummary: '음수 재고 오류',
+          initialStock: initBox,
+          inSummary: '음수 재고 감지',
           outSummary: ''
+        })
+      } else if (tInfo.adjustCount === 0 && currentTotal !== expectedTotal && (inTotal > 0 || outTotal > 0)) {
+        // 2) 재고실사 이력이 없는 품목의 트랜잭션 전수 대사 불일치 감지
+        const diff = currentTotal - expectedTotal
+        discrepancies.push({
+          name: st.item_name,
+          color: st.color || 'SURTIDO',
+          boxContent: boxContent,
+          currentBox: currentBox,
+          currentIndividual: currentIndividual,
+          currentTotal: currentTotal,
+          expectedTotal: expectedTotal,
+          diffTotal: diff,
+          diffBoxes: boxContent > 0 ? Math.floor(diff / boxContent) : diff,
+          diffIndividuals: boxContent > 0 ? (diff % boxContent) : 0,
+          initialStock: initBox,
+          inSummary: `입고 ${tInfo.inBoxTotal}박스`,
+          outSummary: `출고 ${tInfo.outBoxTotal}박스`
         })
       }
     })
@@ -1035,19 +1144,22 @@ export const serverMethods = {
 
   /**
    * 14. 8대 서브창고 주문 매트릭스 조회 (PANTACO, IKEA, LERMA, PINO, YARE, ALMINTER, TLANE, STAR)
+   * ⚡ In-Transit(이동 중 수량) 실시간 동적 집계 반영
    */
   async getSubWarehouseStockMatrix(forceRefresh) {
     const whList = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
 
-    // 1. 전체 유효 재고 및 8대 서브창고 재고 병렬 조회 (sub-50ms)
-    const [res1, res2, subRes] = await Promise.all([
+    // 1. 전체 유효 재고, 8대 서브창고 재고 및 이동 중(PENDING) 주문 병렬 조회 (sub-50ms)
+    const [res1, res2, subRes, pendingRes] = await Promise.all([
       supabase.from('view_effective_stocks').select('*').range(0, 999),
       supabase.from('view_effective_stocks').select('*').range(1000, 1999),
-      supabase.from('inventory_stocks').select('warehouse_code, box_qty, item_id').in('warehouse_code', whList)
+      supabase.from('inventory_stocks').select('warehouse_code, box_qty, item_id').in('warehouse_code', whList),
+      supabase.from('pending_orders').select('item_id, from_warehouse, box_qty').eq('to_warehouse', 'MAIN').in('status', ['PENDING', 'IN_TRANSIT'])
     ])
 
     const allMainItems = [...(res1.data || []), ...(res2.data || [])]
     const subStocks = subRes.data || []
+    const pendingOrders = pendingRes.data || []
 
     // 2. 품목 ID별 서브창고 재고 맵 구성
     const subMap = new Map()
@@ -1056,7 +1168,13 @@ export const serverMethods = {
       subMap.get(row.item_id)[row.warehouse_code] = Number(row.box_qty || 0)
     })
 
-    // 3. WMS 모달 매트릭스 규격으로 포맷팅
+    // 3. 품목 ID별 이동 중(In-Transit) 수량 맵 구성
+    const pendingMap = new Map()
+    pendingOrders.forEach(po => {
+      pendingMap.set(po.item_id, (pendingMap.get(po.item_id) || 0) + Number(po.box_qty || 0))
+    })
+
+    // 4. WMS 모달 매트릭스 규격으로 포맷팅
     const matrixItems = allMainItems.map(row => {
       const sMap = subMap.get(row.item_id) || {}
       const stocks = {}
@@ -1070,14 +1188,15 @@ export const serverMethods = {
 
       const mainStock = Number(row.main_box_qty || 0)
       const safeStock = Number(row.safe_stock_boxes || 0)
-      const effectiveStock = Number(row.effective_box_qty || mainStock)
+      const inTransit = pendingMap.get(row.item_id) || Number(row.pending_in_boxes || 0)
+      const effectiveStock = mainStock + inTransit
 
       return {
         codigo: row.item_name,
         color: row.color || 'SURTIDO',
         mainStock: mainStock,
         safeStock: safeStock,
-        inTransit: 0,
+        inTransit: inTransit,
         effectiveStock: effectiveStock,
         boxContent: Number(row.box_packaging_qty || 1),
         stocks: stocks,
@@ -1091,6 +1210,281 @@ export const serverMethods = {
       items: matrixItems,
       totalLoadedCount: matrixItems.length,
       updatedAt: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+    }
+  },
+
+  /**
+   * 15. 8대 서브창고 발주 드래프트 일괄 전송 (submitSubWarehouseOrderDrafts)
+   */
+  async submitSubWarehouseOrderDrafts(byWarehouse, admin) {
+    if (!byWarehouse || Object.keys(byWarehouse).length === 0) {
+      throw new Error('제출할 발주 목록이 없습니다.')
+    }
+
+    // 페이로드 표준 스네이크 케이스 정규화
+    const normalizedByWh = {}
+    for (const [wh, items] of Object.entries(byWarehouse)) {
+      normalizedByWh[wh] = (items || []).map(it => ({
+        item_id: it.item_id || null,
+        item_name: String(it.itemName || it.item_name || it.name || '').trim(),
+        color: String(it.color || 'SURTIDO').trim(),
+        box_content: Number(it.boxContent || it.box_packaging_qty || 1),
+        box_qty: Math.abs(Number(it.boxQty || it.box_qty || 0))
+      }))
+    }
+
+    const { data, error } = await supabase.rpc('rpc_submit_warehouse_order_drafts', {
+      p_by_warehouse: normalizedByWh,
+      p_admin: admin || 'ADMIN'
+    })
+
+    if (error) {
+      console.error('[SupabaseAdapter] submitSubWarehouseOrderDrafts 실패:', error)
+      throw new Error(error.message || '발주 드래프트 저장 실패')
+    }
+
+    return data || { success: true, count: 0 }
+  },
+
+  /**
+   * 16. 과거 피크 출고량 분석 및 과학적 안전재고(Safe Stock) 산출 엔진
+   */
+  async analyzeWinterPeakDemandAndSafeStock() {
+    // 1. 전체 품목 마스터 및 트랜잭션 병렬 조회
+    const [stocksRes, txRes] = await Promise.all([
+      supabase.from('view_effective_stocks').select('*'),
+      supabase.from('stock_transactions')
+        .select('item_id, transaction_type, box_qty, unit_qty, created_at, invoice_no')
+        .in('transaction_type', ['OUTBOUND', 'MOVE'])
+        .order('created_at', { ascending: false })
+        .limit(10000)
+    ])
+
+    const allStocks = stocksRes.data || []
+    const allTxs = txRes.data || []
+
+    // 2. 일자별 / 품목별 출고 수량 집계
+    const itemDailyMap = new Map()
+    const itemNovBoxes = new Map()
+    const itemDecBoxes = new Map()
+    const itemWinterTotal = new Map()
+    let validTxCount = 0
+
+    allTxs.forEach(tx => {
+      const b = Math.abs(Number(tx.box_qty || 0))
+      if (b <= 0) return
+
+      const dt = new Date(tx.created_at)
+      const m = dt.getMonth() + 1
+      const y = dt.getFullYear()
+      const d = dt.getDate()
+      const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+
+      validTxCount++
+      const itemId = tx.item_id
+      if (!itemDailyMap.has(itemId)) itemDailyMap.set(itemId, new Map())
+      const dMap = itemDailyMap.get(itemId)
+      dMap.set(dateStr, (dMap.get(dateStr) || 0) + b)
+
+      if (m === 11) {
+        itemNovBoxes.set(itemId, (itemNovBoxes.get(itemId) || 0) + b)
+      } else if (m === 12) {
+        itemDecBoxes.set(itemId, (itemDecBoxes.get(itemId) || 0) + b)
+      }
+      itemWinterTotal.set(itemId, (itemWinterTotal.get(itemId) || 0) + b)
+    })
+
+    // 3. 품목별 피크 일출고량 및 권장 안전재고 산출
+    let hotCount = 0
+    const items = allStocks.map(st => {
+      const dMap = itemDailyMap.get(st.item_id) || new Map()
+      let peakBoxes = 0
+      let peakDate = '-'
+      for (const [dStr, qty] of dMap.entries()) {
+        if (qty > peakBoxes) {
+          peakBoxes = qty
+          peakDate = dStr
+        }
+      }
+
+      const nov = itemNovBoxes.get(st.item_id) || 0
+      const dec = itemDecBoxes.get(st.item_id) || 0
+      const totalWinter = itemWinterTotal.get(st.item_id) || (nov + dec)
+      const currentSafe = Number(st.safe_stock_boxes || 0)
+      const currentBox = Number(st.main_box_qty || 0)
+
+      // 서브창고 리드타임 1일 + 버퍼 1.3배
+      const recommendedSafe = peakBoxes > 0 ? Math.ceil(peakBoxes * 1.3) : currentSafe
+      const isHot = peakBoxes >= 20 || totalWinter >= 50
+      if (isHot) hotCount++
+
+      return {
+        item_id: st.item_id,
+        name: st.item_name,
+        color: st.color || 'SURTIDO',
+        boxContent: Number(st.box_packaging_qty || 1),
+        currentSafeStock: currentSafe,
+        peakDailyBoxes: peakBoxes,
+        peakDate: peakDate,
+        novBoxes: nov,
+        decBoxes: dec,
+        totalWinterBoxes: totalWinter,
+        recommendedSafeStock: recommendedSafe,
+        safeStockDiff: Math.max(0, recommendedSafe - currentSafe),
+        currentBox: currentBox,
+        isHot: isHot,
+        isHotInSubWh: false
+      }
+    })
+
+    // 피크 출고량 내림차순 정렬
+    items.sort((a, b) => b.peakDailyBoxes - a.peakDailyBoxes)
+
+    return {
+      success: true,
+      totalAnalyzedItems: items.length,
+      hotItemsCount: hotCount,
+      winterTxCount: validTxCount,
+      items: items
+    }
+  },
+
+  /**
+   * 17. 추천 안전재고 원장 일괄 반영
+   */
+  async applyRecommendedSafeStockToMaster(customRecommendations) {
+    let recList = customRecommendations
+    if (!recList || recList.length === 0) {
+      const analysis = await this.analyzeWinterPeakDemandAndSafeStock()
+      recList = analysis.items || []
+    }
+
+    const { data, error } = await supabase.rpc('rpc_apply_recommended_safe_stock', {
+      p_recommendations: recList.map(r => ({
+        item_id: r.item_id,
+        recommended_safe_stock: r.recommendedSafeStock || r.safe_stock || 0
+      }))
+    })
+
+    if (error) {
+      console.error('[SupabaseAdapter] applyRecommendedSafeStockToMaster 실패:', error)
+      throw new Error(error.message || '안전재고 갱신 실패')
+    }
+
+    return {
+      success: true,
+      updatedCount: data?.count || recList.length,
+      backupSheetName: 'Supabase PostgreSQL (ACID)',
+      message: data?.message || '안전재고가 원장에 일괄 반영되었습니다.'
+    }
+  },
+
+  /**
+   * 18. 색상 데이터 정규화 사전 분석 (analyzeColorNormalization)
+   */
+  async analyzeColorNormalization() {
+    const PURE_COLORS = new Set([
+      'SURTIDO', 'NEGRO', 'BLANCO', 'AZUL', 'MARINO', 'MEZCLILLA', 'ROJO', 'GRIS',
+      'ROSA', 'AMARILLO', 'VERDE', 'BEIGE', 'CAFE', 'VINO', 'PALOROSA', 'PALO ROSA',
+      'TURQUEZA', 'TURQUESA', 'MOSTAZA', 'UVA', 'CORAL', 'FIUSHA', 'LILA', 'NARANJA',
+      'KAKI', 'CHEDRON', 'JASPE', 'OXFORD', 'REY', 'CIELO', 'PETROLEO', 'VERDE MILITAR',
+      'COCO', 'VERDE BOTELLA', 'PISTACHE', 'SHEDRON', 'MILITAR', 'BALCK', 'NAVY',
+      'BURGUNDY', 'CHARCOAL', 'OLIVE', 'PINK(ROSA PASTEL)', 'IPLUM', 'JADE',
+      'AZUL(TURQUEZA)', 'PURPLISH RED', 'COCOA', 'MARINO(AZUL OSCURO)', 'PIEL(NUDE)',
+      'PURPURA', 'ROJO GRAND', 'VERDE CLARO', 'ARMY GREEN', 'BLUE', 'ROJO CIRUELA',
+      'AZULCELE', 'PETROLEO / JADE'
+    ])
+
+    const { data: allItems, error } = await supabase
+      .from('items')
+      .select('id, item_name, color, box_packaging_qty')
+      .eq('is_active', true)
+
+    if (error) throw error
+
+    const modifiedItems = []
+    let modifiedCount = 0
+
+    ;(allItems || []).forEach(item => {
+      const rawColor = String(item.color || '').trim()
+      const colorUpper = rawColor.toUpperCase()
+      const name = item.item_name
+
+      if (PURE_COLORS.has(colorUpper)) return
+
+      let newName = name
+      let newColor = 'SURTIDO'
+      let reason = ''
+      let isModified = false
+
+      if (/^\d{2,3}\s*CM$/i.test(rawColor)) {
+        const cm = colorUpper.replace(/\s+/g, '')
+        if (!newName.toUpperCase().includes(cm)) newName = `${name}/${cm}`
+        reason = 'CM_LENGTH'
+        isModified = true
+      } else if (name.includes('3678') || /^(?:BIKE|ARCO|MANCH|MALLA)/i.test(rawColor)) {
+        newName = `${name} ${rawColor}`
+        reason = 'PATTERN_CODE'
+        isModified = true
+      } else if (/^[A-Za-z]$/.test(rawColor)) {
+        if (name === 'NSTP' && (colorUpper === 'M' || colorUpper === 'L')) {
+          newName = `${name}-${colorUpper}`
+        } else {
+          newName = `${name}${colorUpper}`
+        }
+        reason = 'LETTER_VARIANT'
+        isModified = true
+      }
+
+      if (isModified) {
+        modifiedCount++
+        modifiedItems.push({
+          itemId: item.id,
+          originalName: name,
+          originalColor: rawColor,
+          normalizedName: newName,
+          normalizedColor: newColor,
+          reason: reason,
+          boxContent: Number(item.box_packaging_qty || 1)
+        })
+      }
+    })
+
+    return {
+      success: true,
+      originalRowCount: (allItems || []).length,
+      modifiedRowCount: modifiedCount,
+      finalRowCount: (allItems || []).length,
+      reducedRowsCount: 0,
+      modifiedItems: modifiedItems
+    }
+  },
+
+  /**
+   * 19. 색상 데이터 정규화 실행 (executeColorNormalization)
+   */
+  async executeColorNormalization() {
+    const analysis = await this.analyzeColorNormalization()
+    let executedCount = 0
+
+    for (const mod of analysis.modifiedItems) {
+      const { error } = await supabase
+        .from('items')
+        .update({
+          item_name: mod.normalizedName,
+          color: mod.normalizedColor
+        })
+        .eq('id', mod.itemId)
+
+      if (!error) executedCount++
+    }
+
+    await preloadItemIdCache()
+
+    return {
+      success: true,
+      totalExecuted: executedCount,
+      analysis: analysis
     }
   },
 

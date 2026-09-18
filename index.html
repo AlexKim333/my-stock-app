@@ -3930,6 +3930,14 @@ try {
   }
 } catch (e) {}
 let locationCache = [];
+let inLocationsCache = [];
+let outLocationsCache = [];
+try {
+  const savedInLocs = localStorage.getItem('wms_cached_in_locations');
+  if (savedInLocs) inLocationsCache = JSON.parse(savedInLocs);
+  const savedOutLocs = localStorage.getItem('wms_cached_out_locations');
+  if (savedOutLocs) outLocationsCache = JSON.parse(savedOutLocs);
+} catch (e) {}
 let debounceTimeout;
 let subWhDebounceTimeout;
 // isLoadingStockData는 Shared.html이 소유한다.
@@ -4342,6 +4350,10 @@ function setPage(page, initialData = null) {
     if (locTabLabel) {
       locTabLabel.textContent = currentType === 'in' ? '입고처' : '출고처';
     }
+    // 🏢 탭 전환 시 현재 모드(입고 vs 출고)의 핫키 즉시 재로드 및 렌더링
+    if (typeof initLocationHotkeys === 'function') {
+      initLocationHotkeys();
+    }
     const tabBtnLocation = document.getElementById('tabBtn_location');
     if (tabBtnLocation) {
       tabBtnLocation.style.display = (currentType === 'adj' || currentType === 'product') ? 'none' : '';
@@ -4400,8 +4412,14 @@ function setPage(page, initialData = null) {
       }
     }
 
-    // locationCache 초기화
-    locationCache = [];
+    // 현재 모드(입고 vs 출고)에 맞게 locationCache 초기화 및 사전 캐시 동기화
+    if (currentType === 'in') {
+      locationCache = inLocationsCache && inLocationsCache.length > 0 ? [...inLocationsCache] : [];
+    } else if (currentType === 'out') {
+      locationCache = outLocationsCache && outLocationsCache.length > 0 ? [...outLocationsCache] : [];
+    } else {
+      locationCache = [];
+    }
 
     try {
       if (currentType !== 'product') {
@@ -4503,6 +4521,35 @@ function setPage(page, initialData = null) {
   }
 }
 
+function prefetchLocationCaches() {
+  callServer('getInLocations', [], {
+    key: 'preload_in_locations',
+    mode: 'latest',
+    onSuccess: inList => {
+      if (Array.isArray(inList) && inList.length > 0) {
+        inLocationsCache = inList;
+        try { localStorage.setItem('wms_cached_in_locations', JSON.stringify(inLocationsCache)); } catch (e) {}
+        if (currentType === 'in') {
+          initLocationHotkeys();
+        }
+      }
+    }
+  });
+  callServer('getOutLocations', [], {
+    key: 'preload_out_locations',
+    mode: 'latest',
+    onSuccess: outList => {
+      if (Array.isArray(outList) && outList.length > 0) {
+        outLocationsCache = outList;
+        try { localStorage.setItem('wms_cached_out_locations', JSON.stringify(outLocationsCache)); } catch (e) {}
+        if (currentType === 'out') {
+          initLocationHotkeys();
+        }
+      }
+    }
+  });
+}
+
 function initPage() {
   let initialPage = '상품등록';
   if (currentType === 'in') initialPage = '입고입력';
@@ -4514,6 +4561,7 @@ function initPage() {
   loadStockData();
   loadServerAliases();
   updateOrderDraftBadge();
+  prefetchLocationCaches();
 }
 
 function saveTableData() {
@@ -4555,18 +4603,28 @@ function updateClock() {
 }
 
 function loadDropdowns() {
-  if (locationCache.length > 0) {
+  const currentCached = currentType === 'in' ? inLocationsCache : outLocationsCache;
+  if (currentCached && currentCached.length > 0) {
+    locationCache = [...currentCached];
     const select = document.getElementById('location');
-    select.innerHTML = '<option value="">선택</option>' + locationCache.map(loc => `<option value="${escapeHtml(loc)}">${escapeHtml(loc)}</option>`).join('');
+    if (select) {
+      select.innerHTML = '<option value="">선택</option>' + locationCache.map(loc => `<option value="${escapeHtml(loc)}">${escapeHtml(loc)}</option>`).join('');
+    }
     restoreMetadata();
     initLocationHotkeys();
-    return;
   }
   // 탭 전환 중 응답이 뒤바뀌면 엉뚱한 거래처 목록이 박히므로 최신 응답만 반영한다.
   callServer(typeConfig[currentType].locationsFunction, [], {
     key: 'locations',
     mode: 'latest',
     onSuccess: data => {
+      if (currentType === 'in') {
+        inLocationsCache = data;
+        try { localStorage.setItem('wms_cached_in_locations', JSON.stringify(data)); } catch (e) {}
+      } else if (currentType === 'out') {
+        outLocationsCache = data;
+        try { localStorage.setItem('wms_cached_out_locations', JSON.stringify(data)); } catch (e) {}
+      }
       locationCache = data;
       const select = document.getElementById('location');
       if (!select) return;
@@ -6886,10 +6944,27 @@ function setupMetadataEvents() {
 // =======================================================
 
 const HOTKEY_STORAGE_KEYS = {
-  LOCATION: 'wms_hotkeys_locations',
+  LOCATION_IN: 'wms_hotkeys_locations_in',
+  LOCATION_OUT: 'wms_hotkeys_locations_out',
+  LOCATION: 'wms_hotkeys_locations_out', // 하위 호환성 유지
   BESTSELLER: 'wms_hotkeys_bestsellers',
   GRID: 'wms_hotkeys_grid'
 };
+
+function getLocationStorageKey() {
+  return currentType === 'in' ? HOTKEY_STORAGE_KEYS.LOCATION_IN : HOTKEY_STORAGE_KEYS.LOCATION_OUT;
+}
+
+// 구버전 단일 키('wms_hotkeys_locations') 자동 마이그레이션
+(function migrateOldLocationHotkeys() {
+  try {
+    const oldKey = 'wms_hotkeys_locations';
+    const oldSaved = localStorage.getItem(oldKey);
+    if (oldSaved && !localStorage.getItem(HOTKEY_STORAGE_KEYS.LOCATION_OUT)) {
+      localStorage.setItem(HOTKEY_STORAGE_KEYS.LOCATION_OUT, oldSaved);
+    }
+  } catch (e) {}
+})();
 
 let hotkeyLocations = [];
 let hotkeyBestsellers = [];
@@ -6934,10 +7009,22 @@ function openCurrentHotkeyConfig() {
 // ---------------- 출고/입고처 핫키 ----------------
 
 function initLocationHotkeys() {
+  const storageKey = getLocationStorageKey();
   try {
-    const saved = localStorage.getItem(HOTKEY_STORAGE_KEYS.LOCATION);
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       hotkeyLocations = JSON.parse(saved);
+      while (hotkeyLocations.length < 8) hotkeyLocations.push('');
+      if (hotkeyLocations.length > 8) hotkeyLocations = hotkeyLocations.slice(0, 8);
+
+      // 입고 모드인데 저장된 슬롯 내용 중 입고처가 아닌 이전 출고처 목록이 남아 있는 경우 자동 재정규화
+      if (currentType === 'in' && inLocationsCache && inLocationsCache.length > 0) {
+        const hasValidInLoc = hotkeyLocations.some(loc => loc && inLocationsCache.includes(loc));
+        const hasAnySlot = hotkeyLocations.some(Boolean);
+        if (hasAnySlot && !hasValidInLoc) {
+          autoPopulateLocationHotkeys();
+        }
+      }
     } else {
       autoPopulateLocationHotkeys();
     }
@@ -6950,21 +7037,27 @@ function initLocationHotkeys() {
 
 function autoPopulateLocationHotkeys() {
   hotkeyLocations = [];
-  if (Array.isArray(locationCache) && locationCache.length > 0) {
+  const candidateList = currentType === 'in'
+    ? (inLocationsCache && inLocationsCache.length > 0 ? inLocationsCache : [])
+    : (outLocationsCache && outLocationsCache.length > 0 ? outLocationsCache : (locationCache || []));
+
+  if (Array.isArray(candidateList) && candidateList.length > 0) {
     for (let i = 0; i < 8; i++) {
-      hotkeyLocations.push(locationCache[i] || '');
+      hotkeyLocations.push(candidateList[i] || '');
     }
   } else {
     for (let i = 0; i < 8; i++) hotkeyLocations.push('');
   }
   try {
-    localStorage.setItem(HOTKEY_STORAGE_KEYS.LOCATION, JSON.stringify(hotkeyLocations));
+    localStorage.setItem(getLocationStorageKey(), JSON.stringify(hotkeyLocations));
   } catch (e) {}
 }
 
 function renderLocationHotkeys() {
   const grid = document.getElementById('locationHotkeyGrid');
   if (!grid) return;
+  const isInputMode = (currentType === 'in');
+  const modeName = isInputMode ? '입고처' : '출고처';
   let html = '';
   for (let i = 0; i < 8; i++) {
     const loc = hotkeyLocations[i] || '';
@@ -6974,7 +7067,7 @@ function renderLocationHotkeys() {
         id="locBtn_${i}"
         onclick="selectLocationHotkey(${i})" 
         oncontextmenu="event.preventDefault(); openHotkeyConfigModal('location');"
-        title="${loc ? `${i + 1}번 거래처 선택 (Alt+${i + 1})` : '클릭하여 거래처 설정'}">
+        title="${loc ? `${i + 1}번 ${modeName} 선택 (Alt+${i + 1})` : `클릭하여 ${modeName} 설정`}">
         <div class="btn-text"><span class="btn-num">${i + 1}.</span>${escapeHtml(loc || '+ 슬롯 설정')}</div>
       </button>
     `;
@@ -7339,7 +7432,13 @@ function openHotkeyConfigModal(type) {
 
   if (currentConfigType === 'location') {
     title.textContent = (currentType === 'in' ? '🏢 빠른 입고처' : '🏢 빠른 출고처') + ' 핫키 슬롯 설정 (8개)';
-    configTempSlots = [...(hotkeyLocations || [])];
+    const storageKey = getLocationStorageKey();
+    try {
+      const saved = localStorage.getItem(storageKey);
+      configTempSlots = saved ? JSON.parse(saved) : [...(hotkeyLocations || [])];
+    } catch (e) {
+      configTempSlots = [...(hotkeyLocations || [])];
+    }
     while (configTempSlots.length < 8) configTempSlots.push('');
   } else if (currentConfigType === 'bestseller') {
     title.textContent = '⭐ 베스트셀러 단일 품목 슬롯 설정 (8개)';
@@ -7467,12 +7566,16 @@ function renderConfigSearchMatrix() {
   const query = currentLiveSearchQuery;
 
   if (currentConfigType === 'location') {
-    const locList = locationCache || [];
+    const isInputMode = (currentType === 'in');
+    const partnerLabel = isInputMode ? '입고처' : '출고처';
+    const locList = isInputMode
+      ? (inLocationsCache && inLocationsCache.length > 0 ? inLocationsCache : locationCache || [])
+      : (outLocationsCache && outLocationsCache.length > 0 ? outLocationsCache : locationCache || []);
     const itemsToRender = locList.filter(loc => !query || loc.toLowerCase().includes(query));
-    if (countSpan) countSpan.textContent = `거래처 검색 결과: ${itemsToRender.length}개`;
+    if (countSpan) countSpan.textContent = `${partnerLabel} 검색 결과: ${itemsToRender.length}개`;
 
     if (itemsToRender.length === 0) {
-      container.innerHTML = `<div class="cfg-no-results">일치하는 거래처가 없습니다.</div>`;
+      container.innerHTML = `<div class="cfg-no-results">일치하는 ${partnerLabel}가 없습니다.</div>`;
       return;
     }
 
@@ -7615,7 +7718,8 @@ function assignGridToSlot(name) {
 function saveHotkeyConfig() {
   if (currentConfigType === 'location') {
     hotkeyLocations = [...configTempSlots];
-    localStorage.setItem(HOTKEY_STORAGE_KEYS.LOCATION, JSON.stringify(hotkeyLocations));
+    const storageKey = getLocationStorageKey();
+    localStorage.setItem(storageKey, JSON.stringify(hotkeyLocations));
     renderLocationHotkeys();
   } else if (currentConfigType === 'bestseller') {
     hotkeyBestsellers = configTempSlots.filter(Boolean);
@@ -7628,11 +7732,13 @@ function saveHotkeyConfig() {
   }
 
   closeHotkeyConfigModal();
-  alert('핫키 슬롯 설정이 성공적으로 저장되었습니다.');
+  const modeLabel = currentConfigType === 'location' ? (currentType === 'in' ? '입고처' : '출고처') : '';
+  alert(`${modeLabel ? `[${modeLabel}] ` : ''}핫키 슬롯 설정이 성공적으로 저장되었습니다.`);
 }
 
 function resetCurrentHotkeySlots() {
-  if (!confirm('현재 탭의 8개 슬롯을 추천 기본값으로 자동 채우시겠습니까?')) return;
+  const modeLabel = currentConfigType === 'location' ? (currentType === 'in' ? '입고처' : '출고처') : '';
+  if (!confirm(`현재 [${modeLabel || '핫키'}] 탭의 8개 슬롯을 추천 기본값으로 자동 채우시겠습니까?`)) return;
   if (currentConfigType === 'location') {
     autoPopulateLocationHotkeys();
     configTempSlots = [...hotkeyLocations];
