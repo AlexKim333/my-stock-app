@@ -312,8 +312,21 @@
     .dropdown-container ul { list-style: none; padding: 0; margin: 0; }
     .dropdown-container li { padding: 5px 10px; font-size: 10pt; cursor: pointer; }
     .dropdown-container li:hover { background-color: #f0f0f0; }
-    .editable { background-color: #fff; cursor: text; }
-    .editable:focus { outline: 2px solid var(--submit-color); }
+    .editable {
+      background-color: #fff;
+      cursor: text;
+      box-sizing: border-box !important;
+      transition: background-color 0.1s ease, box-shadow 0.1s ease;
+      line-height: 1.4;
+      vertical-align: middle;
+      user-select: text;
+    }
+    .editable:focus {
+      outline: none !important;
+      box-shadow: inset 0 0 0 2px var(--submit-color, #0284c7) !important;
+      background-color: #f0fdf4 !important;
+      caret-color: var(--submit-color, #0284c7);
+    }
     #printFrame { display: none; }
     .processing-button {
       background-color: #add8e6;
@@ -1301,6 +1314,30 @@ function deleteRecord() {
   toggleScroll();
 }
 
+function handleEditableFocus(el, e) {
+  if (e) e.stopPropagation();
+  try {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } catch (err) {}
+}
+
+function handleEditableKeyDown(e, el, idx, field) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    el.blur();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    if (records && records[idx]) {
+      el.textContent = Math.abs(records[idx][field] || 0);
+    }
+    el.blur();
+  }
+}
+
 function updateTable() {
   const tbody = document.getElementById('tableBody');
   let html = '';
@@ -1310,8 +1347,8 @@ function updateTable() {
         <td><input type="checkbox" class="rowCheckbox" data-index="${idx}"></td>
         <td>${escapeHtml(rec.itemName)}</td>
         <td>${escapeHtml(rec.color)}</td>
-        <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${Math.abs(rec.boxQty)}</td>
-        <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${Math.abs(rec.individualQty)}</td>
+        <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${Math.abs(rec.boxQty)}</td>
+        <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${Math.abs(rec.individualQty)}</td>
         <td>${rec.boxContent}</td>
         <td>${escapeHtml(rec.location)}</td>
       </tr>
@@ -1321,9 +1358,17 @@ function updateTable() {
 }
 
 function updateRecord(index, field, value) {
-  const type = document.querySelector('input[name="recordType"]:checked').value;
-  value = parseInt(value) || 0;
-  records[index][field] = type === 'in' ? value : -value;
+  if (index < 0 || index >= records.length) return;
+  const typeRadio = document.querySelector('input[name="recordType"]:checked');
+  const type = typeRadio ? typeRadio.value : 'out';
+  const numVal = parseInt(value) || 0;
+  const targetVal = type === 'in' ? numVal : -numVal;
+
+  if (records[index][field] === targetVal) {
+    return; // 변경 사항 없으면 재렌더링 차단
+  }
+
+  records[index][field] = targetVal;
   if (records[index].boxQty !== 0) {
     records[index].unitType = 'box';
   } else {

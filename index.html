@@ -702,8 +702,21 @@
     }
     .dropdown-container li:hover { background-color: #f0fdf4; color: #15803d; }
     .dropdown-container li:last-child { border-bottom: none; }
-    .editable { background-color: #fff; cursor: text; }
-    .editable:focus { outline: 2px solid var(--submit-color); }
+    .editable {
+      background-color: #fff;
+      cursor: text;
+      box-sizing: border-box !important;
+      transition: background-color 0.1s ease, box-shadow 0.1s ease;
+      line-height: 1.4;
+      vertical-align: middle;
+      user-select: text;
+    }
+    .editable:focus {
+      outline: none !important;
+      box-shadow: inset 0 0 0 2px var(--submit-color, #0284c7) !important;
+      background-color: #f0fdf4 !important;
+      caret-color: var(--submit-color, #0284c7);
+    }
 
     .table-top-bar {
       margin-bottom: 8px;
@@ -859,7 +872,8 @@
     .scrollable-table {
       flex: 1;
       overflow-x: auto;
-      overflow-y: auto;
+      overflow-y: scroll;
+      scrollbar-gutter: stable;
       border: 1px solid #cbd5e1;
       border-radius: 6px;
       background: #ffffff;
@@ -4023,7 +4037,7 @@ const typeConfig = {
       </div>
       <div class="input-row"><label for="itemName">품명:</label><input type="text" id="itemName" name="itemName" autocomplete="off" oninput="filterItems(this.value)" onchange="autoFillColor()" tabindex="2"><div id="customDropdown" class="dropdown-container" style="display: none;"><ul id="itemSuggestionsList"></ul></div></div>
       <div class="input-row"><label for="color">색상:</label><input type="text" id="color" name="color" value="SURTIDO" tabindex="3"></div>
-      <div class="input-row"><label id="qtyLabel"></label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" oninput="handleQtyInput(this)"></div>
+      <div class="input-row"><label id="qtyLabel"></label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this)"></div>
       <div class="input-row"><label for="boxContent">박스당수량:</label><input type="number" id="boxContent" name="boxContent" tabindex="5"></div>
     `
   },
@@ -4054,7 +4068,7 @@ const typeConfig = {
       </div>
       <div class="input-row"><label for="itemName">품명:</label><input type="text" id="itemName" name="itemName" autocomplete="off" oninput="filterItems(this.value)" onchange="autoFillColor()" tabindex="2"><div id="customDropdown" class="dropdown-container" style="display: none;"><ul id="itemSuggestionsList"></ul></div></div>
       <div class="input-row"><label for="color">색상:</label><input type="text" id="color" name="color" value="SURTIDO" tabindex="3"></div>
-      <div class="input-row"><label id="qtyLabel"></label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" oninput="handleQtyInput(this)"></div>
+      <div class="input-row"><label id="qtyLabel"></label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this)"></div>
       <div class="input-row"><label for="boxContent">박스당수량:</label><input type="number" id="boxContent" name="boxContent" tabindex="5"></div>
     `
   },
@@ -4115,7 +4129,7 @@ const typeConfig = {
       <div class="input-row"><label for="itemName">품명:</label><input type="text" id="itemName" name="itemName" autocomplete="off" oninput="filterItems(this.value)" onchange="autoFillColor(); checkItemAuditHint(this.value);" tabindex="2"><div id="customDropdown" class="dropdown-container" style="display: none;"><ul id="itemSuggestionsList"></ul></div></div>
       <div id="itemAuditHintBox" style="display: none; margin-bottom: 6px; padding: 4px 8px; border-radius: 5px; font-size: 8pt; font-weight: 600;"></div>
       <div class="input-row"><label for="color">색상:</label><input type="text" id="color" name="color" value="SURTIDO" tabindex="3"></div>
-      <div class="input-row"><label id="qtyLabel">실사수량:</label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" oninput="handleQtyInput(this); updateLiveAdjPreview();"></div>
+      <div class="input-row"><label id="qtyLabel">실사수량:</label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this); updateLiveAdjPreview();"></div>
       <div id="liveAdjPreviewBox" style="display: none; margin-bottom: 6px; padding: 5px 8px; border-radius: 5px; font-size: 8.2pt; font-weight: 700;"></div>
       <div class="input-row"><label for="boxContent">박스당수량:</label><input type="number" id="boxContent" name="boxContent" tabindex="5"></div>
     `
@@ -5265,8 +5279,8 @@ function updateTable() {
         <tr class="${editingClass}" ondblclick="enterEditMode(${idx})" title="더블클릭하여 품목 수정">
           <td><input type="checkbox" class="rowCheckbox" data-index="${idx}" ${isEditingThisRow ? 'checked' : ''}></td>
           <td>${escapeHtml(rec.itemName)}</td>
-          <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'color', this.textContent)">${escapeHtml(rec.color)}</td>
-          <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'color')" onblur="updateRecord(${idx}, 'color', this.textContent)">${escapeHtml(rec.color)}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
           <td>${rec.safeStock}</td>
           <td>${rec.initialStock}</td>
           <td>${escapeHtml(rec.manufacturer || '')}</td>
@@ -5319,10 +5333,10 @@ function updateTable() {
             ${previewTag}
           </td>
           <td>${escapeHtml(rec.color)}</td>
-          <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${rec.boxQty}</td>
-          <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${rec.individualQty}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${rec.boxQty}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${rec.individualQty}</td>
           <td style="text-align: center;">${adjBadgeHtml}</td>
-          <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
           <td style="text-align: center; vertical-align: middle;">
             <span style="font-weight: 700; font-size: 7.5pt; padding: 2px 5px; border-radius: 9999px; display: inline-flex; align-items: center; justify-content: center; background: #dcfce7; color: #15803d; border: 1px solid #86efac;">
               ${rate}%
@@ -5475,9 +5489,9 @@ function updateTable() {
             ${siblingChipsHtml}
           </td>
           <td>${escapeHtml(rec.color)}</td>
-          <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${currentType === 'in' ? rec.boxQty : Math.abs(rec.boxQty)}</td>
-          <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${currentType === 'in' ? rec.individualQty : Math.abs(rec.individualQty)}</td>
-          <td contenteditable="true" class="editable" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${currentType === 'in' ? rec.boxQty : Math.abs(rec.boxQty)}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${currentType === 'in' ? rec.individualQty : Math.abs(rec.individualQty)}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
           <td style="text-align: center; vertical-align: middle;">
             <span style="font-weight: 700; font-size: 7.5pt; padding: 2px 5px; border-radius: 9999px; display: inline-flex; align-items: center; justify-content: center; background: ${badgeBg}; color: ${badgeColor}; border: 1px solid ${badgeBorder}; cursor: help;" title="${matchTooltip}">
               ${badgeText}
@@ -5490,12 +5504,55 @@ function updateTable() {
   tbody.innerHTML = html;
 }
 
+function handleEditableFocus(el, e) {
+  if (e) e.stopPropagation();
+  // 부드럽게 텍스트 전체 선택 (더블클릭/연타 불필요, 클릭 즉시 새 수량 타이핑 가능)
+  try {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } catch (err) {}
+}
+
+function handleEditableKeyDown(e, el, idx, field) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    el.blur(); // Enter 시 줄바꿈 방지 및 변경사항 즉시 저장
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    // Escape 시 원래 값 복원 후 blur
+    if (records && records[idx]) {
+      const rec = records[idx];
+      let origVal = '';
+      if (field === 'boxQty') origVal = currentType === 'in' ? rec.boxQty : Math.abs(rec.boxQty);
+      else if (field === 'individualQty') origVal = currentType === 'in' ? rec.individualQty : Math.abs(rec.individualQty);
+      else if (field === 'boxContent') origVal = rec.boxContent;
+      else origVal = rec[field] || '';
+      el.textContent = origVal;
+    }
+    el.blur();
+  }
+}
+
 function updateRecord(index, field, value) {
   if (index < 0 || index >= records.length) return;
+  const rec = records[index];
+  let changed = false;
+
   if (field === 'isDelta') {
-    records[index].isDelta = !!value;
+    const newVal = !!value;
+    if (rec.isDelta !== newVal) {
+      rec.isDelta = newVal;
+      changed = true;
+    }
   } else if (field === 'boxContent' || field === 'safeStock' || field === 'initialStock') {
-    records[index][field] = parseInt(value) || 0;
+    const newVal = parseInt(value) || 0;
+    if (rec[field] !== newVal) {
+      rec[field] = newVal;
+      changed = true;
+    }
   } else if (field === 'boxQty' || field === 'individualQty') {
     const valStr = String(value || '').trim();
     const isP = /[pP]$/i.test(valStr) || /pz$/i.test(valStr);
@@ -5503,17 +5560,33 @@ function updateRecord(index, field, value) {
     const targetVal = currentType === 'in' ? parsedNum : -Math.abs(parsedNum);
 
     if (isP || field === 'individualQty') {
-      records[index].individualQty = targetVal;
-      records[index].boxQty = 0;
-      records[index].unitType = 'individual';
+      if (rec.individualQty !== targetVal || rec.boxQty !== 0 || rec.unitType !== 'individual') {
+        rec.individualQty = targetVal;
+        rec.boxQty = 0;
+        rec.unitType = 'individual';
+        changed = true;
+      }
     } else {
-      records[index].boxQty = targetVal;
-      records[index].individualQty = 0;
-      records[index].unitType = 'box';
+      if (rec.boxQty !== targetVal || rec.individualQty !== 0 || rec.unitType !== 'box') {
+        rec.boxQty = targetVal;
+        rec.individualQty = 0;
+        rec.unitType = 'box';
+        changed = true;
+      }
     }
   } else {
-    records[index][field] = value.trim();
+    const newVal = (value || '').trim();
+    if (rec[field] !== newVal) {
+      rec[field] = newVal;
+      changed = true;
+    }
   }
+
+  // ★ 실제 데이터 변경이 없으면 무의미한 updateTable() 호출 및 깜빡임 원천 차단!
+  if (!changed) {
+    return;
+  }
+
   saveTableData();
   updateTable();
   updateTotals();
