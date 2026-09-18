@@ -706,16 +706,19 @@
       background-color: #fff;
       cursor: text;
       box-sizing: border-box !important;
-      transition: background-color 0.1s ease, box-shadow 0.1s ease;
+      transition: none !important;
       line-height: 1.4;
       vertical-align: middle;
       user-select: text;
     }
     .editable:focus {
       outline: none !important;
-      box-shadow: inset 0 0 0 2px var(--submit-color, #0284c7) !important;
-      background-color: #f0fdf4 !important;
+      box-shadow: inset 0 0 0 1.5px var(--submit-color, #0284c7) !important;
+      background-color: #ffffff !important;
       caret-color: var(--submit-color, #0284c7);
+    }
+    tr:hover td.editable:focus {
+      background-color: #ffffff !important;
     }
 
     .table-top-bar {
@@ -885,7 +888,7 @@
     }
     #recordTable {
       width: 100%;
-      min-width: 580px;
+      min-width: 460px;
       table-layout: fixed !important;
       border-collapse: collapse;
     }
@@ -914,13 +917,13 @@
     tr:hover td {
       background-color: #f8fafc;
     }
-    #recordTable th:nth-child(1), #recordTable td:nth-child(1) { width: 34px !important; min-width: 34px !important; max-width: 34px !important; text-align: center; padding: 4px 1px; }
-    #recordTable th:nth-child(2), #recordTable td:nth-child(2) { width: auto !important; min-width: 180px !important; text-align: left; padding: 4px 6px; white-space: normal; word-break: break-all; }
-    #recordTable th:nth-child(3), #recordTable td:nth-child(3) { width: 75px !important; min-width: 65px !important; max-width: 90px !important; text-align: center; padding: 4px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #recordTable th:nth-child(4), #recordTable td:nth-child(4) { width: 62px !important; min-width: 55px !important; max-width: 75px !important; text-align: center; padding: 4px 2px; }
-    #recordTable th:nth-child(5), #recordTable td:nth-child(5) { width: 62px !important; min-width: 55px !important; max-width: 75px !important; text-align: center; padding: 4px 2px; }
-    #recordTable th:nth-child(6), #recordTable td:nth-child(6) { width: 68px !important; min-width: 60px !important; max-width: 80px !important; text-align: center; padding: 4px 2px; }
-    #recordTable th:nth-child(7), #recordTable td:nth-child(7) { width: 68px !important; min-width: 60px !important; max-width: 80px !important; text-align: center; padding: 4px 2px; }
+    #recordTable th:nth-child(1), #recordTable td:nth-child(1) { width: 30px !important; min-width: 30px !important; max-width: 30px !important; text-align: center; padding: 4px 1px; }
+    #recordTable th:nth-child(2), #recordTable td:nth-child(2) { width: auto !important; min-width: 140px !important; text-align: left; padding: 4px 5px; white-space: normal; word-break: break-all; }
+    #recordTable th:nth-child(3), #recordTable td:nth-child(3) { width: 65px !important; min-width: 55px !important; max-width: 75px !important; text-align: center; padding: 4px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #recordTable th:nth-child(4), #recordTable td:nth-child(4) { width: 55px !important; min-width: 48px !important; max-width: 65px !important; text-align: center; padding: 4px 2px; }
+    #recordTable th:nth-child(5), #recordTable td:nth-child(5) { width: 55px !important; min-width: 48px !important; max-width: 65px !important; text-align: center; padding: 4px 2px; }
+    #recordTable th:nth-child(6), #recordTable td:nth-child(6) { width: 58px !important; min-width: 50px !important; max-width: 70px !important; text-align: center; padding: 4px 2px; }
+    #recordTable th:nth-child(7), #recordTable td:nth-child(7) { width: 58px !important; min-width: 50px !important; max-width: 70px !important; text-align: center; padding: 4px 2px; }
     .modal {
       display: none;
       position: fixed;
@@ -2227,13 +2230,13 @@
           <div class="scrollable-table" id="scrollableTable">
             <table id="recordTable">
               <colgroup>
-                <col style="width: 34px;">
-                <col style="width: auto; min-width: 180px;">
-                <col style="width: 75px;">
-                <col style="width: 62px;">
-                <col style="width: 62px;">
-                <col style="width: 68px;">
-                <col style="width: 68px;">
+                <col style="width: 30px;">
+                <col style="width: auto; min-width: 140px;">
+                <col style="width: 65px;">
+                <col style="width: 55px;">
+                <col style="width: 55px;">
+                <col style="width: 58px;">
+                <col style="width: 58px;">
               </colgroup>
               <thead id="tableHeader">
                 <tr>
@@ -3990,6 +3993,10 @@ window.addEventListener('storage', function(e) {
 // 창 포커스 복귀 시 실시간 동기화 (실제 변경 사항이 있을 때만 안전하게 렌더링)
 window.addEventListener('focus', function() {
   try {
+    // 사용자가 장바구니에 품목을 올려두고 작업 중인 경우 창 포커스 복귀 시 테이블 전체 재렌더링 차단 (작업 중 깜빡임 방지)
+    if (records && records.length > 0) {
+      return;
+    }
     const updatedTime = localStorage.getItem('stock_data_updated') || '';
     if (lastSyncedStockTime && updatedTime && updatedTime === lastSyncedStockTime) {
       return; // 변경된 데이터가 없으면 불필요한 전체 재렌더링 방지
@@ -5279,8 +5286,8 @@ function updateTable() {
         <tr class="${editingClass}" ondblclick="enterEditMode(${idx})" title="더블클릭하여 품목 수정">
           <td><input type="checkbox" class="rowCheckbox" data-index="${idx}" ${isEditingThisRow ? 'checked' : ''}></td>
           <td>${escapeHtml(rec.itemName)}</td>
-          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'color')" onblur="updateRecord(${idx}, 'color', this.textContent)">${escapeHtml(rec.color)}</td>
-          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'color')" onblur="updateRecord(${idx}, 'color', this.textContent)">${escapeHtml(rec.color)}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
           <td>${rec.safeStock}</td>
           <td>${rec.initialStock}</td>
           <td>${escapeHtml(rec.manufacturer || '')}</td>
@@ -5333,10 +5340,10 @@ function updateTable() {
             ${previewTag}
           </td>
           <td>${escapeHtml(rec.color)}</td>
-          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${rec.boxQty}</td>
-          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${rec.individualQty}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${rec.boxQty}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${rec.individualQty}</td>
           <td style="text-align: center;">${adjBadgeHtml}</td>
-          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
           <td style="text-align: center; vertical-align: middle;">
             <span style="font-weight: 700; font-size: 7.5pt; padding: 2px 5px; border-radius: 9999px; display: inline-flex; align-items: center; justify-content: center; background: #dcfce7; color: #15803d; border: 1px solid #86efac;">
               ${rate}%
@@ -5489,9 +5496,9 @@ function updateTable() {
             ${siblingChipsHtml}
           </td>
           <td>${escapeHtml(rec.color)}</td>
-          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${currentType === 'in' ? rec.boxQty : Math.abs(rec.boxQty)}</td>
-          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${currentType === 'in' ? rec.individualQty : Math.abs(rec.individualQty)}</td>
-          <td contenteditable="true" tabindex="0" class="editable" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${currentType === 'in' ? rec.boxQty : Math.abs(rec.boxQty)}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${currentType === 'in' ? rec.individualQty : Math.abs(rec.individualQty)}</td>
+          <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxContent')" onblur="updateRecord(${idx}, 'boxContent', this.textContent)">${rec.boxContent}</td>
           <td style="text-align: center; vertical-align: middle;">
             <span style="font-weight: 700; font-size: 7.5pt; padding: 2px 5px; border-radius: 9999px; display: inline-flex; align-items: center; justify-content: center; background: ${badgeBg}; color: ${badgeColor}; border: 1px solid ${badgeBorder}; cursor: help;" title="${matchTooltip}">
               ${badgeText}
@@ -5506,14 +5513,24 @@ function updateTable() {
 
 function handleEditableFocus(el, e) {
   if (e) e.stopPropagation();
-  // 부드럽게 텍스트 전체 선택 (더블클릭/연타 불필요, 클릭 즉시 새 수량 타이핑 가능)
-  try {
-    const selection = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  } catch (err) {}
+  const container = document.getElementById('scrollableTable');
+  const prevLeft = container ? container.scrollLeft : 0;
+  const prevTop = container ? container.scrollTop : 0;
+
+  // 브라우저 포커스 시 발생하는 Scroll Snap 및 마우스 경합 깜빡임 원천 차단
+  requestAnimationFrame(() => {
+    if (container) {
+      container.scrollLeft = prevLeft;
+      container.scrollTop = prevTop;
+    }
+    try {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (err) {}
+  });
 }
 
 function handleEditableKeyDown(e, el, idx, field) {
