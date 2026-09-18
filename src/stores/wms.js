@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { supabase } from '../lib/supabase.js'
-import { resolveBranchCode, takeIdempotencyKey, clearIdempotencyKey, shouldKeepIdempotencyKey, serverMethods } from '../lib/supabaseAdapter.js'
+import { resolveBranchCode, takeIdempotencyKey, clearIdempotencyKey, shouldKeepIdempotencyKey, serverMethods, resolveActiveSubWarehouses } from '../lib/supabaseAdapter.js'
 import FlexSearch from 'flexsearch'
 
 export const useWmsStore = defineStore('wms', () => {
@@ -18,6 +18,7 @@ export const useWmsStore = defineStore('wms', () => {
   const catalogItems = ref([])    // FlexSearch용 유효재고 카탈로그
   const pendingOrders = ref([])
   const dashboard = ref(null)
+  const systemSettings = ref(null)
   const isLoading = ref(false)
   const isSubmitting = ref(false)
   const lastError = ref('')
@@ -117,6 +118,7 @@ export const useWmsStore = defineStore('wms', () => {
       managers.value = membersRes.data || []
       warehouses.value = whRes.data || []
 
+      await loadSettings().catch(() => ({}))
       await Promise.all([loadTruckGauges(), loadTopHotkeys(), loadGridHotkeys(), loadCatalog()])
     } catch (err) {
       console.error('[WMS Store] loadMasters error:', err)
@@ -135,7 +137,13 @@ export const useWmsStore = defineStore('wms', () => {
         .order('sort_order')
 
       if (error) throw error
-      truckGauges.value = data || []
+      const rows = data || []
+      const active = resolveActiveSubWarehouses(systemSettings.value)
+      truckGauges.value = rows.filter(row => {
+        const code = String(row.warehouse_code || '').toUpperCase()
+        if (!code || code === 'MAIN') return true
+        return active.includes(code)
+      })
     } catch (err) {
       console.error('[WMS Store] loadTruckGauges error:', err)
     }
@@ -516,7 +524,8 @@ export const useWmsStore = defineStore('wms', () => {
   async function loadSettings() {
     const { data, error } = await supabase.rpc('rpc_get_system_settings')
     if (error) throw error
-    return data?.settings || {}
+    systemSettings.value = data?.settings || {}
+    return systemSettings.value
   }
 
   async function saveSettings(settings) {
@@ -524,6 +533,7 @@ export const useWmsStore = defineStore('wms', () => {
       p_settings: settings
     })
     if (error) throw error
+    systemSettings.value = data?.settings || settings
     await loadTruckGauges()
     return data
   }
@@ -569,6 +579,7 @@ export const useWmsStore = defineStore('wms', () => {
     catalogItems,
     pendingOrders,
     dashboard,
+    systemSettings,
     isLoading,
     isSubmitting,
     lastError,

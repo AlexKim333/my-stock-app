@@ -10,7 +10,7 @@ alwaysApply: true
 ## 1. 단일 진실 공급원 (테이블·컬럼·FK)
 
 - `src/types/supabase.ts` — Supabase 원격 DB에서 `npm run update-types`로 생성
-- 프로젝트 ID: `npcytppgaxwzrhdoxdrh`
+- 프로젝트 ID: `xfxmodlrczofwylyedjh` (GASWMSMIGRATION)
 
 ## 2. DB 로직 (트리거·제약·RLS)
 

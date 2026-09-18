@@ -1,0 +1,10 @@
+{
+  "rewrites": [
+    { "source": "/wms.html", "destination": "/wms.html" },
+    { "source": "/searchmodify.html", "destination": "/searchmodify.html" },
+    { "source": "/product-ledger.html", "destination": "/product-ledger.html" },
+    { "source": "/pos.html", "destination": "/index.html" },
+    { "source": "/login", "destination": "/index.html" },
+    { "source": "/login/:path*", "destination": "/index.html" }
+  ]
+}

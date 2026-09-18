@@ -5,6 +5,30 @@ import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 import ocrHandler from './api/ocr.js'
 
+function vueSpaFallback() {
+  const rewriteToIndex = (req) => {
+    const url = String(req.url || '').split('?')[0]
+    if (url === '/login' || url.startsWith('/login/')) {
+      req.url = '/index.html'
+    }
+  }
+  return {
+    name: 'vue-spa-fallback',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        rewriteToIndex(req)
+        next()
+      })
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use((req, res, next) => {
+        rewriteToIndex(req)
+        next()
+      })
+    }
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   process.env.GEMINI_API_KEY = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY
@@ -12,6 +36,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       vue(),
+      vueSpaFallback(),
       {
         name: 'api-ocr-dev-server',
         configureServer(server) {
@@ -44,6 +69,7 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           main: resolve(__dirname, 'index.html'),
+          wms: resolve(__dirname, 'wms.html'),
           searchmodify: resolve(__dirname, 'searchmodify.html'),
           pos: resolve(__dirname, 'pos.html'),
           productLedger: resolve(__dirname, 'product-ledger.html')

@@ -84,6 +84,15 @@ export function shouldKeepIdempotencyKey(err) {
 
 export const SUB_WAREHOUSES = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
 
+export function resolveActiveSubWarehouses(settings) {
+  const list = settings?.activeSubWarehouses
+  if (Array.isArray(list) && list.length) {
+    const wanted = new Set(list.map(code => String(code || '').toUpperCase().trim()).filter(Boolean))
+    return SUB_WAREHOUSES.filter(code => wanted.has(code))
+  }
+  return [...SUB_WAREHOUSES]
+}
+
 export const BRANCH_MAP = {
   MAIN: 'MAIN', '메인허브 (알라르꼰)': 'MAIN', 메인허브: 'MAIN', 알라르꼰: 'MAIN',
   PANTACO: 'PANTACO', 판타코: 'PANTACO',
@@ -1180,7 +1189,8 @@ export const serverMethods = {
    * ⚡ In-Transit(이동 중 수량) 실시간 동적 집계 반영
    */
   async getSubWarehouseStockMatrix(forceRefresh) {
-    const whList = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
+    const settings = await this.getSystemSettings()
+    const whList = resolveActiveSubWarehouses(settings)
 
     // 1. 전체 유효 재고, 8대 서브창고 재고 및 이동 중(PENDING) 주문 병렬 조회 (sub-50ms)
     const [allMainItems, subStocks, pendingOrders] = await Promise.all([
