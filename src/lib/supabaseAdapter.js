@@ -1194,22 +1194,37 @@ export const serverMethods = {
       subMap.get(row.item_id)[row.warehouse_code] = Number(row.box_qty || 0)
     })
 
-    // 3. 품목 ID별 이동 중(In-Transit) 수량 맵 구성
+    // 3. 품목 ID별 이동 중(In-Transit) 수량 맵 및 서브창고별 발주진행(Committed) 수량 맵 구성
     const pendingMap = new Map()
+    const subCommittedMap = new Map() // key: `${item_id}___${from_warehouse}`
     pendingOrders.forEach(po => {
-      pendingMap.set(po.item_id, (pendingMap.get(po.item_id) || 0) + Number(po.box_qty || 0))
+      const bQty = Number(po.box_qty || 0)
+      pendingMap.set(po.item_id, (pendingMap.get(po.item_id) || 0) + bQty)
+
+      const fromWh = String(po.from_warehouse || '').toUpperCase().trim()
+      if (fromWh) {
+        const whKey = `${po.item_id}___${fromWh}`
+        subCommittedMap.set(whKey, (subCommittedMap.get(whKey) || 0) + bQty)
+      }
     })
 
-    // 4. WMS 모달 매트릭스 규격으로 포맷팅
+    // 4. WMS 모달 매트릭스 규격으로 포맷팅 (서브창고 실시간 가용재고 ATP 산출)
     const matrixItems = allMainItems.map(row => {
       const sMap = subMap.get(row.item_id) || {}
-      const stocks = {}
+      const stocks = {} // 가용재고 (실재고 - 발주진행수량)
+      const grossStocks = {} // 장부상 실재고
+      const committedStocks = {} // 발주 진행 중(In-Transit / PENDING) 수량
       let totalSubStock = 0
 
       whList.forEach(wh => {
-        const q = sMap[wh] || 0
-        stocks[wh] = q
-        totalSubStock += q
+        const gross = sMap[wh] || 0
+        const committed = subCommittedMap.get(`${row.item_id}___${wh}`) || 0
+        const avail = Math.max(0, gross - committed)
+
+        stocks[wh] = avail
+        grossStocks[wh] = gross
+        committedStocks[wh] = committed
+        totalSubStock += avail
       })
 
       const mainStock = Number(row.main_box_qty || 0)
@@ -1226,6 +1241,8 @@ export const serverMethods = {
         effectiveStock: effectiveStock,
         boxContent: Number(row.box_packaging_qty || 1),
         stocks: stocks,
+        grossStocks: grossStocks,
+        committedStocks: committedStocks,
         totalSubStock: totalSubStock
       }
     })

@@ -10787,6 +10787,7 @@ function submitOrderDraftToPending() {
       closeOrderDraftModal();
       closeSubWarehouseMatrixModal();
       updatePendingCount();
+      loadSubWarehouseMatrix(true); // 🔄 발주 즉시 매트릭스 가용재고(ATP) 실시간 재집계
 
       alert(`🎉 [외부창고 발주 등록 완료]\n\n• 발주 창고: ${whNames.join(', ')}\n• 총 수량: ${totalBoxes}상자\n\nWMS [입고입력] > [🔍 보류]에 정상 등록되었으며 외부창고 시트에도 PENDIENTE로 전송되었습니다.\n\n트럭 도착 시 [🔍 보류]에서 불러와 송장 사진을 붙여넣으세요!`);
     },
@@ -11127,19 +11128,32 @@ function renderSubWhTable(items, cartKeyMap) {
       </td>
     `;
 
-    // 6. 8대 서브창고 열들 (화면 전체 폭에 맞춰 시원하게 균등 확장)
+    // 6. 8대 서브창고 열들 (실시간 가용재고 ATP 및 발주진행수량 차감 반영)
     warehouses.forEach(wh => {
-      const stock = item.stocks ? (item.stocks[wh] || 0) : 0;
+      const availStock = item.stocks ? (item.stocks[wh] || 0) : 0;
+      const grossStock = item.grossStocks ? (item.grossStocks[wh] || 0) : availStock;
+      const committed = item.committedStocks ? (item.committedStocks[wh] || 0) : 0;
       const cellDraftKey = `${wh}___${item.codigo}___${item.color}`.toUpperCase();
       const draftedQty = draftMap[cellDraftKey] || 0;
 
-      if (stock > 0) {
+      if (availStock > 0) {
+        const titleText = `${escapeHtml(wh)} 창고: 가용재고 ${availStock}상자${committed > 0 ? ` (실보유 ${grossStock}상자 - 발주진행 ${committed}상자)` : ''}`;
         html += `
           <td style="padding: 3px 4px; text-align: center; border-right: 1px solid #e2e8f0;">
-            <button type="button" onclick="onSubWhCellClick(${itemIdx}, '${escapeHtml(wh)}', ${stock})" style="width: 100%; min-height: 26px; padding: 3px 2px; background: ${draftedQty > 0 ? '#dbeafe' : '#ccfbf1'}; border: 1.5px solid ${draftedQty > 0 ? '#3b82f6' : '#2dd4bf'}; border-radius: 4px; font-weight: 800; color: ${draftedQty > 0 ? '#1d4ed8' : '#0f766e'}; cursor: pointer; font-size: 8.3pt; transition: all 0.15s ease;" title="${escapeHtml(wh)} 창고: 클릭하여 발주 수량 입력">
-              ${stock}
-              ${draftedQty > 0 ? `<div style="font-size: 7pt; color: #1e40af; font-weight: 900; margin-top: 1px;">담김:${draftedQty}</div>` : ''}
+            <button type="button" onclick="onSubWhCellClick(${itemIdx}, '${escapeHtml(wh)}', ${availStock})" style="width: 100%; min-height: 28px; padding: 3px 2px; background: ${draftedQty > 0 ? '#dbeafe' : '#ccfbf1'}; border: 1.5px solid ${draftedQty > 0 ? '#3b82f6' : '#2dd4bf'}; border-radius: 4px; font-weight: 800; color: ${draftedQty > 0 ? '#1d4ed8' : '#0f766e'}; cursor: pointer; font-size: 8.3pt; transition: all 0.15s ease;" title="${titleText}">
+              ${availStock}
+              ${committed > 0 ? `<div style="font-size: 6.8pt; color: #c2410c; font-weight: 700; margin-top: 1px; line-height: 1;">주문중:${committed}</div>` : ''}
+              ${draftedQty > 0 ? `<div style="font-size: 7pt; color: #1e40af; font-weight: 900; margin-top: 1px; line-height: 1;">담김:${draftedQty}</div>` : ''}
             </button>
+          </td>
+        `;
+      } else if (committed > 0) {
+        // 실재고는 있으나 전량 발주 진행 중인 경우 (가용 0)
+        html += `
+          <td style="padding: 3px 4px; text-align: center; border-right: 1px solid #f1f5f9;">
+            <div style="padding: 3px 2px; font-size: 7.3pt; color: #c2410c; font-weight: 800; background: #fff7ed; border-radius: 4px; border: 1px dashed #fdba74;" title="${escapeHtml(wh)} 창고: 실재고 ${grossStock}상자 전량 발주 진행 중 (가용 0상자)">
+              발주중:${committed}
+            </div>
           </td>
         `;
       } else {
@@ -11163,12 +11177,17 @@ function renderSubWhTable(items, cartKeyMap) {
 function onSubWhCellClick(itemIndex, warehouseName, availStock) {
   if (itemIndex < 0 || itemIndex >= subWhFilteredItems.length) return;
   const item = subWhFilteredItems[itemIndex];
-  currentSubWhTarget = { item: item, warehouse: warehouseName, availStock: availStock };
+  const grossStock = item.grossStocks ? (item.grossStocks[warehouseName] || 0) : availStock;
+  const committed = item.committedStocks ? (item.committedStocks[warehouseName] || 0) : 0;
+  currentSubWhTarget = { item: item, warehouse: warehouseName, availStock: availStock, grossStock: grossStock, committed: committed };
 
   // 모달 데이터 채우기
   document.getElementById('qtyModalWarehouse').textContent = warehouseName;
   document.getElementById('qtyModalItemName').textContent = `${item.codigo} (${item.color})`;
-  document.getElementById('qtyModalAvailStock').textContent = `${availStock} 상자`;
+  const availText = committed > 0 
+    ? `${availStock} 상자 (실보유 ${grossStock} - 발주진행 ${committed})` 
+    : `${availStock} 상자`;
+  document.getElementById('qtyModalAvailStock').textContent = availText;
   document.getElementById('qtyModalEffectiveStock').textContent = `실재고 ${item.mainStock} + 이동중 ${item.inTransit} = 유효 ${item.effectiveStock}상자`;
 
   // 기본 수량 세팅 (1상자)
