@@ -1,13 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { isSupabaseConfigured, supabase } from '../lib/supabase.js'
-
-const SESSION_KEY = 'wms_auth_user'
-
-/** MVP: password_hash 컬럼과 입력값 비교 */
-function verifyPassword(input, storedHash) {
-  return input === storedHash
-}
+import { isSupabaseConfigured, supabase, WMS_AUTH_STORAGE_KEY } from '../lib/supabase.js'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref(null)
@@ -15,29 +8,56 @@ export const useAuthStore = defineStore('auth', () => {
   const errorMessage = ref('')
   const isRestored = ref(false)
 
-  const isAuthenticated = computed(() => Boolean(user.value?.id))
-  const isAdmin = computed(() => user.value?.access_level === 'admin')
+  const isAuthenticated = computed(() => Boolean(user.value?.id && user.value?.session_token))
+  const isAdmin = computed(() => String(user.value?.access_level || '').toLowerCase() === 'admin')
   const accessLevel = computed(() => user.value?.access_level ?? null)
 
   function persistSession() {
-    if (user.value) {
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(user.value))
+    if (user.value?.session_token) {
+      localStorage.setItem(WMS_AUTH_STORAGE_KEY, JSON.stringify(user.value))
     } else {
-      sessionStorage.removeItem(SESSION_KEY)
+      localStorage.removeItem(WMS_AUTH_STORAGE_KEY)
     }
   }
 
   function restoreSession() {
     try {
-      const raw = sessionStorage.getItem(SESSION_KEY)
+      const raw = localStorage.getItem(WMS_AUTH_STORAGE_KEY)
       if (raw) {
-        user.value = JSON.parse(raw)
+        const parsed = JSON.parse(raw)
+        if (parsed?.id && parsed?.session_token) {
+          user.value = parsed
+        } else {
+          localStorage.removeItem(WMS_AUTH_STORAGE_KEY)
+          user.value = null
+        }
       }
     } catch {
-      sessionStorage.removeItem(SESSION_KEY)
+      localStorage.removeItem(WMS_AUTH_STORAGE_KEY)
       user.value = null
     } finally {
       isRestored.value = true
+    }
+    if (user.value?.session_token) {
+      supabase.rpc('rpc_session_info').then(({ data, error }) => {
+        if (error || !data?.success || !data.user) {
+          user.value = null
+          persistSession()
+          return
+        }
+        user.value = {
+          ...user.value,
+          id: data.user.id,
+          member_name: data.user.member_name,
+          branch_name: data.user.branch_name,
+          access_level: data.user.access_level,
+          preferred_language: data.user.preferred_language,
+        }
+        persistSession()
+      }).catch(() => {
+        user.value = null
+        persistSession()
+      })
     }
   }
 
@@ -57,31 +77,23 @@ export const useAuthStore = defineStore('auth', () => {
 
     isLoading.value = true
     try {
-      const { data, error } = await supabase
-        .from('app_members')
-        .select('id, member_name, branch_name, access_level, preferred_language, password_hash, is_active')
-        .eq('member_name', trimmedName)
-        .eq('is_active', true)
-        .maybeSingle()
-
+      const { data, error } = await supabase.rpc('rpc_login', {
+        p_member_name: trimmedName,
+        p_password: password
+      })
       if (error) throw error
-
-      if (!data) {
-        errorMessage.value = '아이디 또는 비밀번호가 올바르지 않습니다.'
-        return { success: false, message: errorMessage.value }
-      }
-
-      if (!verifyPassword(password, data.password_hash)) {
+      if (!data?.success || !data.user || !data.session_token) {
         errorMessage.value = '아이디 또는 비밀번호가 올바르지 않습니다.'
         return { success: false, message: errorMessage.value }
       }
 
       user.value = {
-        id: data.id,
-        member_name: data.member_name,
-        branch_name: data.branch_name,
-        access_level: data.access_level,
-        preferred_language: data.preferred_language,
+        id: data.user.id,
+        member_name: data.user.member_name,
+        branch_name: data.user.branch_name,
+        access_level: data.user.access_level,
+        preferred_language: data.user.preferred_language,
+        session_token: data.session_token,
       }
       persistSession()
       return { success: true }
@@ -93,7 +105,12 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await supabase.rpc('rpc_logout')
+    } catch {
+      // 서버 세션 삭제가 실패해도 로컬은 비운다
+    }
     user.value = null
     errorMessage.value = ''
     persistSession()

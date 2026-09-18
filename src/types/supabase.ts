@@ -90,6 +90,66 @@ export type Database = {
         }
         Relationships: []
       }
+      app_sessions: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+          member_id: string
+          token_hash: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          id?: string
+          member_id: string
+          token_hash: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          member_id?: string
+          token_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_sessions_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "app_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "app_sessions_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "app_members_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      app_settings: {
+        Row: {
+          id: string
+          updated_at: string
+          updated_by: string | null
+          value: Json
+        }
+        Insert: {
+          id: string
+          updated_at?: string
+          updated_by?: string | null
+          value?: Json
+        }
+        Update: {
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+          value?: Json
+        }
+        Relationships: []
+      }
       brands: {
         Row: {
           created_at: string | null
@@ -172,6 +232,27 @@ export type Database = {
             referencedColumns: ["code"]
           },
         ]
+      }
+      invoice_sequences: {
+        Row: {
+          biz_date: string
+          last_seq: number
+          tx_group: string
+          updated_at: string | null
+        }
+        Insert: {
+          biz_date: string
+          last_seq?: number
+          tx_group: string
+          updated_at?: string | null
+        }
+        Update: {
+          biz_date?: string
+          last_seq?: number
+          tx_group?: string
+          updated_at?: string | null
+        }
+        Relationships: []
       }
       items: {
         Row: {
@@ -353,6 +434,24 @@ export type Database = {
           },
         ]
       }
+      request_idempotency: {
+        Row: {
+          created_at: string
+          id: string
+          result: Json
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          result?: Json
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          result?: Json
+        }
+        Relationships: []
+      }
       stock_transactions: {
         Row: {
           box_qty: number
@@ -459,6 +558,36 @@ export type Database = {
       }
     }
     Views: {
+      app_members_public: {
+        Row: {
+          access_level: string | null
+          branch_name: string | null
+          created_at: string | null
+          id: string | null
+          is_active: boolean | null
+          member_name: string | null
+          preferred_language: string | null
+        }
+        Insert: {
+          access_level?: string | null
+          branch_name?: string | null
+          created_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          member_name?: string | null
+          preferred_language?: string | null
+        }
+        Update: {
+          access_level?: string | null
+          branch_name?: string | null
+          created_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          member_name?: string | null
+          preferred_language?: string | null
+        }
+        Relationships: []
+      }
       view_effective_stocks: {
         Row: {
           barcode: string | null
@@ -489,7 +618,107 @@ export type Database = {
       }
     }
     Functions: {
+      fn_apply_stock_units: {
+        Args: {
+          p_check_enough: boolean
+          p_ctx?: string
+          p_delta_units: number
+          p_item_id: string
+          p_warehouse: string
+        }
+        Returns: undefined
+      }
+      fn_ensure_stock_row: {
+        Args: { p_item_id: string; p_warehouse: string }
+        Returns: undefined
+      }
+      fn_fifo_complete_pending: {
+        Args: {
+          p_from_warehouse: string
+          p_item_id: string
+          p_qty_units: number
+        }
+        Returns: number
+      }
+      fn_hash_session_token: { Args: { p_token: string }; Returns: string }
+      fn_idempotency_lock: { Args: { p_key: string }; Returns: Json }
+      fn_idempotency_store: {
+        Args: { p_key: string; p_result: Json }
+        Returns: undefined
+      }
+      fn_invoice_tx_group: { Args: { p_tx_type: string }; Returns: string }
+      fn_item_pack_qty: { Args: { p_item_id: string }; Returns: number }
+      fn_normalize_invoice_no: { Args: { p_invoice: string }; Returns: string }
+      fn_parse_invoice_seq: { Args: { p_invoice: string }; Returns: number }
+      fn_request_session_token: { Args: never; Returns: string }
+      fn_require_admin: {
+        Args: never
+        Returns: {
+          access_level: string
+          branch_name: string | null
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          member_name: string
+          password_hash: string
+          preferred_language: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "app_members"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      fn_require_session: {
+        Args: never
+        Returns: {
+          access_level: string
+          branch_name: string | null
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          member_name: string
+          password_hash: string
+          preferred_language: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "app_members"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      fn_stock_units: {
+        Args: { p_box: number; p_pack: number; p_unit: number }
+        Returns: number
+      }
+      rpc_adjust_stock: {
+        Args: {
+          p_admin: string
+          p_idempotency_key?: string
+          p_invoice?: string
+          p_items: Json
+          p_memo?: string
+          p_warehouse?: string
+        }
+        Returns: Json
+      }
+      rpc_adjust_stock_apply: {
+        Args: {
+          p_admin: string
+          p_invoice?: string
+          p_items: Json
+          p_memo?: string
+          p_warehouse?: string
+        }
+        Returns: Json
+      }
       rpc_apply_recommended_safe_stock: {
+        Args: { p_recommendations: Json }
+        Returns: Json
+      }
+      rpc_apply_recommended_safe_stock_apply: {
         Args: { p_recommendations: Json }
         Returns: Json
       }
@@ -497,21 +726,118 @@ export type Database = {
         Args: { p_items: Json; p_source_warehouse: string }
         Returns: Json
       }
+      rpc_create_brand: { Args: { p_name: string }; Returns: Json }
+      rpc_create_member: {
+        Args: {
+          p_access_level?: string
+          p_branch_name?: string
+          p_member_name: string
+          p_password: string
+        }
+        Returns: Json
+      }
+      rpc_ensure_items: { Args: { p_items: Json }; Returns: Json }
+      rpc_execute_color_normalization: {
+        Args: { p_items: Json }
+        Returns: Json
+      }
+      rpc_execute_color_normalization_apply: {
+        Args: { p_items: Json }
+        Returns: Json
+      }
+      rpc_execute_stock_normalization: {
+        Args: { p_groups: Json }
+        Returns: Json
+      }
+      rpc_execute_stock_normalization_apply: {
+        Args: { p_groups: Json }
+        Returns: Json
+      }
+      rpc_get_system_settings: { Args: never; Returns: Json }
+      rpc_list_effective_stocks: { Args: never; Returns: Json }
+      rpc_login: {
+        Args: { p_member_name: string; p_password: string }
+        Returns: Json
+      }
+      rpc_logout: { Args: never; Returns: Json }
+      rpc_next_invoice_no: {
+        Args: { p_biz_date?: string; p_tx_type: string }
+        Returns: string
+      }
+      rpc_peek_next_invoice_seq: {
+        Args: { p_biz_date?: string; p_tx_type: string }
+        Returns: number
+      }
       rpc_process_transaction: {
         Args: {
           p_handler: string
+          p_idempotency_key?: string
           p_invoice: string
           p_items: Json
           p_memo: string
           p_partner: string
+          p_pending_from_warehouse?: string
           p_target_warehouse?: string
           p_tx_type: string
           p_warehouse: string
         }
         Returns: Json
       }
+      rpc_process_transaction_apply: {
+        Args: {
+          p_handler: string
+          p_invoice: string
+          p_items: Json
+          p_memo: string
+          p_partner: string
+          p_pending_from_warehouse?: string
+          p_target_warehouse?: string
+          p_tx_type: string
+          p_warehouse: string
+        }
+        Returns: Json
+      }
+      rpc_register_item: {
+        Args: {
+          p_barcode?: string
+          p_box_packaging_qty?: number
+          p_brand_id?: string
+          p_color?: string
+          p_initial_boxes?: number
+          p_initial_units?: number
+          p_item_name: string
+          p_safe_stock?: number
+        }
+        Returns: Json
+      }
+      rpc_reserve_outbound: {
+        Args: {
+          p_handler: string
+          p_idempotency_key?: string
+          p_items: Json
+          p_partner: string
+          p_to_warehouse?: string
+        }
+        Returns: Json
+      }
+      rpc_save_system_settings: { Args: { p_settings: Json }; Returns: Json }
+      rpc_session_info: { Args: never; Returns: Json }
       rpc_submit_warehouse_order_drafts: {
         Args: { p_admin: string; p_by_warehouse: Json }
+        Returns: Json
+      }
+      rpc_submit_warehouse_order_drafts_apply: {
+        Args: { p_admin: string; p_by_warehouse: Json }
+        Returns: Json
+      }
+      rpc_update_member: {
+        Args: {
+          p_access_level?: string
+          p_branch_name?: string
+          p_id: string
+          p_is_active?: boolean
+          p_password?: string
+        }
         Returns: Json
       }
       rpc_update_transaction_records: {
@@ -520,6 +846,26 @@ export type Database = {
           p_invoice_no: string
           p_new_records: Json
           p_tx_type: string
+        }
+        Returns: Json
+      }
+      rpc_update_transaction_records_apply: {
+        Args: {
+          p_admin: string
+          p_invoice_no: string
+          p_new_records: Json
+          p_tx_type: string
+        }
+        Returns: Json
+      }
+      rpc_upsert_aliases: { Args: { p_aliases: Json }; Returns: Json }
+      rpc_upsert_partner: {
+        Args: {
+          p_id?: string
+          p_is_active?: boolean
+          p_name: string
+          p_role?: string
+          p_warehouse_code?: string
         }
         Returns: Json
       }

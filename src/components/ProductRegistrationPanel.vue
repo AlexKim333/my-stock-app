@@ -264,11 +264,9 @@ const saveNewBrand = async () => {
 
   isBrandSaving.value = true
   try {
-    const { data, error } = await supabase
-      .from('brands')
-      .insert({ name: trimmedName, is_active: true })
-      .select('id, name')
-      .single()
+    const { data, error } = await supabase.rpc('rpc_create_brand', {
+      p_name: trimmedName
+    })
 
     if (error) {
       showSnackbar(`브랜드 저장 실패: ${error.message}`)
@@ -276,8 +274,8 @@ const saveNewBrand = async () => {
     }
 
     closeBrandDialog()
-    await loadBrands(data.id)
-    showSnackbar(`브랜드 "${data.name}" 등록 완료`, 'success')
+    await loadBrands(data?.id)
+    showSnackbar(`브랜드 "${data?.name || trimmedName}" 등록 완료`, 'success')
   } catch (err) {
     showSnackbar(`오류: ${err.message}`)
   } finally {
@@ -339,24 +337,23 @@ const saveProduct = async () => {
       return
     }
 
-    // is_grid_item은 DB 트리거가 동일 품명 2건 이상 시 자동 true 처리
-    const { error } = await supabase.from('items').insert({
-      item_name: itemName,
-      color,
-      brand_id: form.value.brand_id || null,
-      barcode: form.value.barcode.trim() || null,
-      box_packaging_qty: boxPackagingQty,
-      initial_stock_boxes: Number(form.value.initial_stock_boxes) || 0,
-      initial_stock_units: Number(form.value.initial_stock_units) || 0,
-      is_grid_item: false,
-      is_active: true,
+    const { data, error } = await supabase.rpc('rpc_register_item', {
+      p_item_name: itemName,
+      p_color: color,
+      p_box_packaging_qty: boxPackagingQty,
+      p_barcode: form.value.barcode.trim() || null,
+      p_brand_id: form.value.brand_id || null,
+      p_initial_boxes: Number(form.value.initial_stock_boxes) || 0,
+      p_initial_units: Number(form.value.initial_stock_units) || 0,
+      p_safe_stock: 0
     })
 
     if (error) {
-      if (error.code === '23505') {
+      const msg = error.message || ''
+      if (error.code === '23505' || msg.includes('이미 등록된')) {
         showSnackbar(DUPLICATE_MSG)
       } else {
-        showSnackbar(`저장 실패: ${error.message}`)
+        showSnackbar(`저장 실패: ${msg}`)
       }
       return
     }

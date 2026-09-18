@@ -5,13 +5,32 @@ import { supabase } from './supabase.js'
 // 품목 ID 캐시 (item_name_color_pkg -> item_id)
 let itemIdCache = new Map()
 
+/** PostgREST 기본 1000행 한도를 넘어 전건 조회 */
+async function fetchAllRows(buildQuery, pageSize = 1000) {
+  const all = []
+  let from = 0
+  for (;;) {
+    const { data, error } = await buildQuery().range(from, from + pageSize - 1)
+    if (error) throw error
+    const rows = data || []
+    all.push(...rows)
+    if (rows.length < pageSize) break
+    from += pageSize
+  }
+  return all
+}
+
+function assertNoError(error, context) {
+  if (error) {
+    throw new Error(`${context}: ${error.message || error}`)
+  }
+}
+
 export async function preloadItemIdCache() {
   try {
-    const [res1, res2] = await Promise.all([
-      supabase.from('items').select('id, item_name, color, box_packaging_qty').range(0, 999),
-      supabase.from('items').select('id, item_name, color, box_packaging_qty').range(1000, 1999)
-    ])
-    const all = [...(res1.data || []), ...(res2.data || [])]
+    const all = await fetchAllRows(() =>
+      supabase.from('items').select('id, item_name, color, box_packaging_qty').eq('is_active', true)
+    )
     itemIdCache.clear()
     all.forEach(item => {
       const key = `${String(item.item_name).trim()}_${String(item.color || 'SURTIDO').trim()}_${Number(item.box_packaging_qty || 1)}`
@@ -28,6 +47,72 @@ function formatDate(d) {
   const month = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${year}/${month}/${day}`
+}
+
+const IDEM_TTL_MS = 15 * 60 * 1000
+
+export function takeIdempotencyKey(scope, fingerprint) {
+  const storageKey = `wms_idem_${scope}`
+  try {
+    const raw = sessionStorage.getItem(storageKey)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed.fingerprint === fingerprint && parsed.key && (Date.now() - parsed.ts) < IDEM_TTL_MS) {
+        return parsed.key
+      }
+    }
+  } catch {}
+  const key = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  try {
+    sessionStorage.setItem(storageKey, JSON.stringify({ key, fingerprint, ts: Date.now() }))
+  } catch {}
+  return key
+}
+
+export function clearIdempotencyKey(scope) {
+  try {
+    sessionStorage.removeItem(`wms_idem_${scope}`)
+  } catch {}
+}
+
+export function shouldKeepIdempotencyKey(err) {
+  const msg = String(err?.message || err || '')
+  return /timeout|network|failed to fetch|abort|fetch/i.test(msg)
+}
+
+export const SUB_WAREHOUSES = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
+
+export const BRANCH_MAP = {
+  MAIN: 'MAIN', '메인허브 (알라르꼰)': 'MAIN', 메인허브: 'MAIN', 알라르꼰: 'MAIN',
+  PANTACO: 'PANTACO', 판타코: 'PANTACO',
+  IKEA: 'IKEA', 이케아: 'IKEA',
+  LERMA: 'LERMA', 레르마: 'LERMA',
+  PINO: 'PINO', 피노: 'PINO',
+  YARE: 'YARE', 야레: 'YARE',
+  ALMINTER: 'ALMINTER', 알민테르: 'ALMINTER',
+  TLANE: 'TLANE', 틀라네: 'TLANE',
+  STAR: 'STAR', 스타: 'STAR'
+}
+
+export function resolveBranchCode(partner) {
+  const raw = String(partner || '').trim()
+  if (!raw) return null
+  const clean = raw.replace(/^🏢\s*(\[지점\]\s*)?/, '').trim()
+  return BRANCH_MAP[clean.toUpperCase()]
+    || BRANCH_MAP[clean]
+    || BRANCH_MAP[raw.toUpperCase()]
+    || BRANCH_MAP[raw]
+    || SUB_WAREHOUSES.find(w => clean.toUpperCase().includes(w) || raw.toUpperCase().includes(w))
+    || null
+}
+
+export function normalizeInvoiceNo(raw) {
+  const s = String(raw || '').trim()
+  const m = s.match(/^(\d{4})[/-](\d{2})[/-](\d{2})-(.+)$/)
+  if (m) return `${m[1]}/${m[2]}/${m[3]}-${m[4]}`
+  return s
 }
 
 function getNormalizedItemCode(name) {
@@ -57,14 +142,9 @@ export const serverMethods = {
    * 1. 실시간 유효 재고 목록 로드
    */
   async getStockData() {
-    const [res1, res2] = await Promise.all([
-      supabase.from('view_effective_stocks').select('*').range(0, 999),
-      supabase.from('view_effective_stocks').select('*').range(1000, 1999)
-    ])
-    if (res1.error) throw res1.error
-    if (res2.error) throw res2.error
-
-    const all = [...(res1.data || []), ...(res2.data || [])]
+    const { data, error } = await supabase.rpc('rpc_list_effective_stocks')
+    if (error) throw error
+    const all = Array.isArray(data) ? data : []
     return all.map(row => {
       const name = String(row.item_name || '').trim()
       const color = String(row.color || 'SURTIDO').trim()
@@ -92,7 +172,7 @@ export const serverMethods = {
    */
   async getAdminList() {
     const { data, error } = await supabase
-      .from('app_members')
+      .from('app_members_public')
       .select('member_name')
       .eq('is_active', true)
       .order('member_name', { ascending: true })
@@ -106,22 +186,38 @@ export const serverMethods = {
     return list
   },
 
+  async login(memberName, password) {
+    const { data, error } = await supabase.rpc('rpc_login', {
+      p_member_name: memberName,
+      p_password: password
+    })
+    if (error) throw error
+    return data
+  },
+
+  async sessionInfo() {
+    const { data, error } = await supabase.rpc('rpc_session_info')
+    if (error) throw error
+    return data
+  },
+
+  async logout() {
+    const { data, error } = await supabase.rpc('rpc_logout')
+    if (error) throw error
+    return data
+  },
+
   /**
-  /**
-   * 3. 내부 창고 목록 (9대 거점 창고)
+   * 3. 내부 창고 목록 (DB warehouses 마스터)
    */
   async getWarehouses() {
-    return [
-      { code: 'MAIN', name: '메인허브 (알라르꼰)', is_hub: true },
-      { code: 'PANTACO', name: 'PANTACO (판타코)' },
-      { code: 'IKEA', name: 'IKEA (이케아)' },
-      { code: 'LERMA', name: 'LERMA (레르마)' },
-      { code: 'PINO', name: 'PINO (피노)' },
-      { code: 'YARE', name: 'YARE (야레)' },
-      { code: 'ALMINTER', name: 'ALMINTER (알민테르)' },
-      { code: 'TLANE', name: 'TLANE (틀라네)' },
-      { code: 'STAR', name: 'STAR (스타)' }
-    ]
+    const { data, error } = await supabase
+      .from('warehouses')
+      .select('code, name, is_hub, sort_order, truck_capacity_boxes')
+      .order('sort_order', { ascending: true })
+
+    if (error) throw error
+    return data || []
   },
 
   /**
@@ -215,54 +311,27 @@ export const serverMethods = {
   },
 
   async generateInvoiceNumber(type) {
-    const todayStr = formatDate(new Date())
     const txTypes = this._normalizeTxTypes(type)
-
-    const { data } = await supabase
-      .from('stock_transactions')
-      .select('invoice_no, transaction_type')
-      .like('invoice_no', `${todayStr}%`)
-      .in('transaction_type', txTypes)
-      .order('created_at', { ascending: false })
-      .limit(200)
-
-    let maxSeq = 0
-    if (data && data.length > 0) {
-      data.forEach(row => {
-        const inv = String(row.invoice_no || '')
-        if (inv.includes('-')) {
-          const parts = inv.split('-')
-          const seq = parseInt(parts[parts.length - 1], 10)
-          if (!isNaN(seq) && seq > maxSeq) maxSeq = seq
-        }
-      })
-    }
-    return String(maxSeq + 1).padStart(3, '0')
+    const { data, error } = await supabase.rpc('rpc_peek_next_invoice_seq', {
+      p_tx_type: txTypes[0]
+    })
+    if (error) throw error
+    return String(data || 1).padStart(3, '0')
   },
 
   async getMaxSequentialNumber(date, type) {
-    const targetDate = date ? date.replace(/-/g, '/') : formatDate(new Date())
     const txTypes = this._normalizeTxTypes(type)
-
-    const { data } = await supabase
-      .from('stock_transactions')
-      .select('invoice_no, transaction_type')
-      .like('invoice_no', `${targetDate}%`)
-      .in('transaction_type', txTypes)
-      .limit(300)
-
-    let maxSeq = 0
-    if (data) {
-      data.forEach(row => {
-        const inv = String(row.invoice_no || '')
-        if (inv.includes('-')) {
-          const parts = inv.split('-')
-          const seq = parseInt(parts[parts.length - 1], 10)
-          if (!isNaN(seq) && seq > maxSeq) maxSeq = seq
-        }
-      })
+    let bizDate = null
+    if (date) {
+      const canon = normalizeInvoiceNo(`${String(date).replace(/-/g, '/')}-0`).slice(0, 10)
+      bizDate = canon.replace(/\//g, '-')
     }
-    return maxSeq
+    const { data, error } = await supabase.rpc('rpc_peek_next_invoice_seq', {
+      p_tx_type: txTypes[0],
+      p_biz_date: bizDate
+    })
+    if (error) throw error
+    return Math.max(0, Number(data || 1) - 1)
   },
 
   /**
@@ -298,9 +367,9 @@ export const serverMethods = {
     const target = String(targetModel || '').trim()
     if (!alias || !target) return { success: false, error: '유효하지 않은 별명/모델명' }
 
-    const { error } = await supabase
-      .from('aliases')
-      .upsert({ alias, target_item_name: target }, { onConflict: 'alias' })
+    const { error } = await supabase.rpc('rpc_upsert_aliases', {
+      p_aliases: [{ alias, target_item_name: target }]
+    })
 
     if (error) throw error
     return { success: true, message: `🏷️ '${alias}' ➡️ '${target}' 별명이 저장되었습니다.` }
@@ -318,12 +387,13 @@ export const serverMethods = {
 
     if (rows.length === 0) return { success: true, count: 0 }
 
-    const { error } = await supabase
-      .from('aliases')
-      .upsert(rows, { onConflict: 'alias' })
+    const { data, error } = await supabase.rpc('rpc_upsert_aliases', {
+      p_aliases: rows
+    })
 
     if (error) throw error
-    return { success: true, count: rows.length, message: `총 ${rows.length}건의 별명이 별명사전에 영구 등록되었습니다.` }
+    const count = data?.count ?? rows.length
+    return { success: true, count, message: `총 ${count}건의 별명이 별명사전에 영구 등록되었습니다.` }
   },
 
   /**
@@ -340,37 +410,23 @@ export const serverMethods = {
       const initialStock = Number(item.initialStock || 0)
       const safeStock = Number(item.safeStock || 0)
 
-      // 1) items 등록
-      const { data: insertedItem, error: itemErr } = await supabase
-        .from('items')
-        .upsert({
-          item_name: name,
-          color: color,
-          box_packaging_qty: boxContent,
-          initial_stock_boxes: initialStock
-        }, { onConflict: 'item_name,color,box_packaging_qty' })
-        .select('id')
-        .single()
+      const { data: rpcRes, error: itemErr } = await supabase.rpc('rpc_register_item', {
+        p_item_name: name,
+        p_color: color,
+        p_box_packaging_qty: boxContent,
+        p_initial_boxes: initialStock,
+        p_initial_units: 0,
+        p_safe_stock: safeStock
+      })
 
       if (itemErr) {
         console.error('registerProduct error:', itemErr)
         throw itemErr
       }
 
-      // 2) inventory_stocks (MAIN) 초기화
-      const itemId = insertedItem.id
+      const itemId = rpcRes?.id
       const key = `${name}_${color}_${boxContent}`
-      itemIdCache.set(key, itemId)
-
-      await supabase
-        .from('inventory_stocks')
-        .upsert({
-          item_id: itemId,
-          warehouse_code: 'MAIN',
-          box_qty: initialStock,
-          unit_qty: 0,
-          safe_stock_boxes: safeStock
-        }, { onConflict: 'item_id,warehouse_code' })
+      if (itemId) itemIdCache.set(key, itemId)
 
       results.push({ success: true, record: item })
     }
@@ -398,136 +454,141 @@ export const serverMethods = {
     let targetWh = firstRow.targetWarehouse || null
     const partner = String(firstRow.location || '').trim()
     const handler = String(admin || 'ADMIN').trim()
-
-    // 🏢 9대 지점(내부창고) 매핑 테이블
-    const branchMap = {
-      'MAIN': 'MAIN', '메인허브 (알라르꼰)': 'MAIN', '메인허브': 'MAIN', '알라르꼰': 'MAIN',
-      'PANTACO': 'PANTACO', '판타코': 'PANTACO',
-      'IKEA': 'IKEA', '이케아': 'IKEA',
-      'LERMA': 'LERMA', '레르마': 'LERMA',
-      'PINO': 'PINO', '피노': 'PINO',
-      'YARE': 'YARE', '야레': 'YARE',
-      'ALMINTER': 'ALMINTER', '알민테르': 'ALMINTER',
-      'TLANE': 'TLANE', '틀라네': 'TLANE',
-      'STAR': 'STAR', '스타': 'STAR'
-    }
-
-    // 출고처가 지점(내부창고)인 경우 자동 감지
-    const cleanPartner = partner.replace(/^🏢\s*(\[지점\]\s*)?/, '').trim()
-    const partnerBranchCode = branchMap[cleanPartner.toUpperCase()] || branchMap[cleanPartner] || branchMap[partner.toUpperCase()] || branchMap[partner]
+    const partnerBranchCode = resolveBranchCode(partner)
 
     let txType = mode === 'in' ? 'INBOUND' : 'OUTBOUND'
     let effectiveTargetWarehouse = targetWh
+    let pendingFromWarehouse = null
 
-    if (mode === 'out' && partnerBranchCode) {
-      // 🔄 출고처가 내부 지점인 경우 -> 원자적 지점간 재고이동(MOVE) 자동 전환
+    if (mode === 'out' && partnerBranchCode && partnerBranchCode !== 'MAIN') {
       if (sourceWh === partnerBranchCode) {
         throw new Error(`출발창고(${sourceWh})와 도착지점(${partnerBranchCode})이 동일할 수 없습니다.`)
       }
       txType = 'MOVE'
       effectiveTargetWarehouse = partnerBranchCode
     } else if (mode === 'in') {
-      // 📥 입고 시에는 sourceWh가 대상 입고창고(도착창고)가 됨
       sourceWh = firstRow.warehouse || firstRow.targetWarehouse || firstRow.sourceWarehouse || 'MAIN'
+      if (partnerBranchCode && partnerBranchCode !== 'MAIN') {
+        pendingFromWarehouse = partnerBranchCode
+      }
     }
 
-    const todayStr = formatDate(new Date())
-    const seq = await this.generateInvoiceNumber(txType)
-    const invoiceNumber = `${todayStr}-${seq}`
-
-    // 품목 ID 확인 및 items payload 조립
     const itemsPayload = []
     const updatedItems = []
+    const unresolved = []
 
     for (const record of tableData) {
       const name = String(record.itemName || '').trim()
       const color = String(record.color || 'SURTIDO').trim()
       const boxContent = Number(record.boxContent || 1)
       const key = `${name}_${color}_${boxContent}`
+      const row = {
+        name,
+        color,
+        boxContent,
+        key,
+        boxQty: Math.abs(Number(record.boxQty || 0)),
+        unitQty: Math.abs(Number(record.individualQty || 0)),
+        itemId: itemIdCache.get(key) || null
+      }
+      if (row.itemId) {
+        itemsPayload.push({ item_id: row.itemId, box_qty: row.boxQty, unit_qty: row.unitQty })
+        updatedItems.push({ name, color, boxContent, key })
+      } else {
+        unresolved.push(row)
+      }
+    }
 
-      let itemId = itemIdCache.get(key)
-      if (!itemId) {
-        // 캐시에 없으면 Supabase에서 직접 조회
-        const { data: found } = await supabase
-          .from('items')
-          .select('id')
-          .eq('item_name', name)
-          .eq('color', color)
-          .eq('box_packaging_qty', boxContent)
-          .maybeSingle()
+    if (unresolved.length > 0) {
+      const names = [...new Set(unresolved.map(r => r.name))]
+      const { data: foundRows, error: findErr } = await supabase
+        .from('items')
+        .select('id, item_name, color, box_packaging_qty')
+        .in('item_name', names)
+      if (findErr) throw findErr
 
-        if (found) {
-          itemId = found.id
-          itemIdCache.set(key, itemId)
-        } else if (mode === 'in') {
-          // 입고 시 없는 품목이면 자동 등록
-          const { data: created } = await supabase
-            .from('items')
-            .insert({ item_name: name, color: color, box_packaging_qty: boxContent })
-            .select('id')
-            .single()
-          if (created) {
-            itemId = created.id
-            itemIdCache.set(key, itemId)
-          }
+      const foundMap = new Map()
+      ;(foundRows || []).forEach(it => {
+        foundMap.set(`${String(it.item_name).trim()}_${String(it.color || 'SURTIDO').trim()}_${Number(it.box_packaging_qty || 1)}`, it.id)
+      })
+
+      const stillMissing = []
+      for (const row of unresolved) {
+        const itemId = foundMap.get(row.key)
+        if (itemId) {
+          itemIdCache.set(row.key, itemId)
+          itemsPayload.push({ item_id: itemId, box_qty: row.boxQty, unit_qty: row.unitQty })
+          updatedItems.push({ name: row.name, color: row.color, boxContent: row.boxContent, key: row.key })
         } else {
-          throw new Error(`등록되지 않은 상품입니다: ${name} (${color})`)
+          stillMissing.push(row)
         }
       }
 
-      const boxQty = Math.abs(Number(record.boxQty || 0))
-      const unitQty = Math.abs(Number(record.individualQty || 0))
-
-      itemsPayload.push({
-        item_id: itemId,
-        box_qty: boxQty,
-        unit_qty: unitQty
-      })
-
-      updatedItems.push({
-        name: name,
-        color: color,
-        boxContent: boxContent,
-        key: key
-      })
+      if (stillMissing.length > 0) {
+        if (mode !== 'in') {
+          const first = stillMissing[0]
+          throw new Error(`등록되지 않은 상품입니다: ${first.name} (${first.color})`)
+        }
+        const { data: ensured, error: ensureErr } = await supabase.rpc('rpc_ensure_items', {
+          p_items: stillMissing.map(r => ({
+            item_name: r.name,
+            color: r.color,
+            box_packaging_qty: r.boxContent
+          }))
+        })
+        if (ensureErr) throw ensureErr
+        const ensuredMap = new Map()
+        ;(ensured || []).forEach(it => {
+          const k = `${String(it.item_name).trim()}_${String(it.color || 'SURTIDO').trim()}_${Number(it.box_packaging_qty || 1)}`
+          ensuredMap.set(k, it.item_id)
+        })
+        for (const row of stillMissing) {
+          const itemId = ensuredMap.get(row.key)
+          if (!itemId) {
+            throw new Error(`등록되지 않은 상품입니다: ${row.name} (${row.color})`)
+          }
+          itemIdCache.set(row.key, itemId)
+          itemsPayload.push({ item_id: itemId, box_qty: row.boxQty, unit_qty: row.unitQty })
+          updatedItems.push({ name: row.name, color: row.color, boxContent: row.boxContent, key: row.key })
+        }
+      }
     }
 
-    // Supabase 원자적 RPC 호출 (이동/입고/출고)
-    const { data: rpcResult, error: rpcErr } = await supabase.rpc('rpc_process_transaction', {
-      p_tx_type: txType,
-      p_warehouse: sourceWh,
-      p_partner: partner,
-      p_handler: handler,
-      p_invoice: invoiceNumber,
-      p_memo: txType === 'MOVE' 
-        ? `[지점간이동] ${sourceWh} ➔ ${effectiveTargetWarehouse}` 
-        : `${mode === 'in' ? '입고' : '출고'} 웹앱 처리 (${sourceWh})`,
-      p_items: itemsPayload,
-      p_target_warehouse: effectiveTargetWarehouse
+    const fingerprint = JSON.stringify({
+      txType, sourceWh, partner, itemsPayload, effectiveTargetWarehouse, pendingFromWarehouse
     })
+    const idemKey = takeIdempotencyKey('process_transaction', fingerprint)
 
-    if (rpcErr) {
-      console.error('rpc_process_transaction 실패:', rpcErr)
-      throw new Error(rpcErr.message || '재고 트랜잭션 처리 실패')
-    }
+    let rpcResult
+    try {
+      const { data, error: rpcErr } = await supabase.rpc('rpc_process_transaction', {
+        p_tx_type: txType,
+        p_warehouse: sourceWh,
+        p_partner: partner,
+        p_handler: handler,
+        p_invoice: '',
+        p_memo: txType === 'MOVE'
+          ? `[지점간이동] ${sourceWh} ➔ ${effectiveTargetWarehouse}`
+          : `${mode === 'in' ? '입고' : '출고'} 웹앱 처리 (${sourceWh})`,
+        p_items: itemsPayload,
+        p_target_warehouse: effectiveTargetWarehouse,
+        p_pending_from_warehouse: pendingFromWarehouse,
+        p_idempotency_key: idemKey
+      })
 
-    // 🚚 서브창고 입고 확정 시 pending_orders 상태 완료 및 서브창고 재고 차감 연동
-    if (mode === 'in' && partner) {
-      const whList = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
-      const cleanOrigin = partner.toUpperCase().trim()
-      const matchedWh = whList.find(w => cleanOrigin.includes(w))
-      if (matchedWh) {
-        try {
-          await supabase.rpc('rpc_complete_inbound_pending_orders', {
-            p_source_warehouse: matchedWh,
-            p_items: itemsPayload
-          })
-          console.log(`[processForm] 서브창고(${matchedWh}) 발주 완료 및 재고 차감 동기화 완료`)
-        } catch (subErr) {
-          console.warn(`[processForm] 서브창고 동기화 경고:`, subErr)
-        }
+      if (rpcErr) {
+        console.error('rpc_process_transaction 실패:', rpcErr)
+        throw new Error(rpcErr.message || '재고 트랜잭션 처리 실패')
       }
+      rpcResult = data
+      clearIdempotencyKey('process_transaction')
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('process_transaction')
+      throw err
     }
+
+    const invoiceNumber = rpcResult?.invoice_no || ''
+    const seq = invoiceNumber.includes('-') ? invoiceNumber.split('-').pop() : ''
 
     // 🛡️ [정합성 100% 무결성 보장] 메인창고 재고 캐시 즉각 동기화를 위해 방금 커밋된 최종 재고 조회
     const itemIds = itemsPayload.map(i => i.item_id)
@@ -535,7 +596,7 @@ export const serverMethods = {
       .from('inventory_stocks')
       .select('item_id, box_qty, unit_qty')
       .in('item_id', itemIds)
-      .eq('warehouse_code', 'MAIN')
+      .eq('warehouse_code', sourceWh || 'MAIN')
 
     const stockMap = new Map((freshStocks || []).map(s => [s.item_id, s]))
     const authoritativeItems = updatedItems.map((up, idx) => {
@@ -551,7 +612,7 @@ export const serverMethods = {
       success: true,
       seq: seq,
       invoiceNumber: invoiceNumber,
-      txType: txType,
+      txType: rpcResult?.tx_type || txType,
       sourceWarehouse: sourceWh,
       targetWarehouse: effectiveTargetWarehouse,
       partner: partner,
@@ -570,6 +631,7 @@ export const serverMethods = {
   async processQuickStockAdjustment(adjustments, admin) {
     if (!adjustments || adjustments.length === 0) return { success: true }
     const handler = String(admin || 'ADMIN').trim()
+    const payload = []
 
     for (const adj of adjustments) {
       const name = String(adj.itemName || '').trim()
@@ -577,34 +639,37 @@ export const serverMethods = {
       const boxContent = Number(adj.boxContent || 1)
       const key = `${name}_${color}_${boxContent}`
       const itemId = itemIdCache.get(key)
-      if (!itemId) continue
-
-      const targetBox = Number(adj.targetBoxQty ?? 0)
-      const targetUnit = Number(adj.targetIndividualQty ?? 0)
-
-      await supabase
-        .from('inventory_stocks')
-        .upsert({
-          item_id: itemId,
-          warehouse_code: 'MAIN',
-          box_qty: targetBox,
-          unit_qty: targetUnit,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'item_id,warehouse_code' })
-
-      await supabase
-        .from('stock_transactions')
-        .insert({
-          transaction_type: 'ADJUST',
-          item_id: itemId,
-          warehouse_code: 'MAIN',
-          handler_name: handler,
-          box_qty: targetBox,
-          unit_qty: targetUnit,
-          memo: `퀵재고조정 (${adj.reason || '실사'})`
-        })
+      if (!itemId) {
+        throw new Error(`등록되지 않은 상품입니다: ${name} (${color})`)
+      }
+      payload.push({
+        item_id: itemId,
+        adj_mode: 'replace',
+        box_qty: Number(adj.targetBoxQty ?? 0),
+        unit_qty: Number(adj.targetIndividualQty ?? 0),
+        reason: adj.reason || '실사'
+      })
     }
-    return { success: true, message: '재고 조정이 완료되었습니다.' }
+
+    const fingerprint = JSON.stringify({ handler, payload, kind: 'quick' })
+    const idemKey = takeIdempotencyKey('adjust_stock', fingerprint)
+    let data
+    try {
+      const res = await supabase.rpc('rpc_adjust_stock', {
+        p_admin: handler,
+        p_items: payload,
+        p_warehouse: 'MAIN',
+        p_memo: '퀵재고조정',
+        p_idempotency_key: idemKey
+      })
+      if (res.error) throw new Error(res.error.message || '재고 조정에 실패했습니다.')
+      data = res.data
+      clearIdempotencyKey('adjust_stock')
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('adjust_stock')
+      throw err
+    }
+    return { success: true, invoiceNumber: data?.invoice_no, message: '재고 조정이 완료되었습니다.' }
   },
 
   /**
@@ -612,11 +677,10 @@ export const serverMethods = {
    */
   async searchRecords(type, invoiceNumber) {
     const rawInv = String(invoiceNumber || '').trim()
-    const slashInv = rawInv.replace(/-/g, '/')
-    const dashInv = rawInv.replace(/\//g, '-')
+    const canonical = normalizeInvoiceNo(rawInv)
+    const dashInv = canonical.replace(/\//g, '-')
     const txTypes = this._normalizeTxTypes(type)
 
-    // 전표번호 검색 (슬래시 및 대시 형식 모두 지원 + 해당 거래유형 매칭)
     const { data, error } = await supabase
       .from('stock_transactions')
       .select(`
@@ -637,7 +701,7 @@ export const serverMethods = {
           box_packaging_qty
         )
       `)
-      .or(`invoice_no.eq.${slashInv},invoice_no.eq.${dashInv}`)
+      .or(`invoice_no.eq.${canonical},invoice_no.eq.${rawInv},invoice_no.eq.${dashInv}`)
       .in('transaction_type', txTypes)
 
     if (error) {
@@ -663,7 +727,7 @@ export const serverMethods = {
   async updatePendingRecords(invoiceNumber, type, newRecords, admin) {
     const txTypes = this._normalizeTxTypes(type)
     const txType = txTypes[0] || 'OUTBOUND'
-    const targetInv = String(invoiceNumber || '').trim()
+    const targetInv = normalizeInvoiceNo(invoiceNumber)
 
     // 1. 새 레코드의 item_id 보정
     const payloadRecords = []
@@ -724,11 +788,8 @@ export const serverMethods = {
       throw new Error('처리할 재고조사 데이터가 없습니다.')
     }
 
-    const todayStr = formatDate(new Date())
-    const seq = await this.generateInvoiceNumber('ADJUST')
-    const invoiceNumber = `${todayStr}-${seq}`
     const handler = String(admin || 'ADMIN').trim()
-
+    const payload = []
     const updatedKeys = []
 
     for (const record of tableData) {
@@ -739,12 +800,14 @@ export const serverMethods = {
 
       let itemId = itemIdCache.get(key)
       if (!itemId) {
-        const { data: found } = await supabase
+        const { data: found, error: findErr } = await supabase
           .from('items')
           .select('id')
           .eq('item_name', name)
           .eq('color', color)
+          .eq('box_packaging_qty', boxContent)
           .maybeSingle()
+        if (findErr) throw findErr
         if (found) {
           itemId = found.id
           itemIdCache.set(key, itemId)
@@ -758,87 +821,58 @@ export const serverMethods = {
       const inputBox = Number(record.boxQty || 0)
       const inputIndiv = Number(record.individualQty || 0)
       const adjType = record.adjType === 'increment' ? 'increment' : 'replace'
-
       if (inputBox < 0 || inputIndiv < 0) {
         throw new Error(`[${name}(${color})] 실사 수량에는 음수를 입력할 수 없습니다. (입력: ${inputBox}상자, ${inputIndiv}개)`)
       }
 
-      // 기존 실재고 조회
-      const { data: currentStock } = await supabase
-        .from('inventory_stocks')
-        .select('box_qty, unit_qty')
-        .eq('item_id', itemId)
-        .eq('warehouse_code', 'MAIN')
-        .maybeSingle()
-
-      const prevBox = Number(currentStock?.box_qty || 0)
-      const prevIndiv = Number(currentStock?.unit_qty || 0)
-
-      let afterBox = prevBox
-      let afterIndiv = prevIndiv
-      let deltaDesc = ''
-
-      if (adjType === 'replace') {
-        afterBox = inputBox
-        afterIndiv = inputIndiv
-        const diffBox = afterBox - prevBox
-        const diffIndiv = afterIndiv - prevIndiv
-        const diffBoxStr = diffBox >= 0 ? `+${diffBox}` : `${diffBox}`
-        const diffIndivStr = diffIndiv >= 0 ? `+${diffIndiv}` : `${diffIndiv}`
-        deltaDesc = `[치환] ${prevBox}상자 ➔ ${afterBox}상자 (변동: ${diffBoxStr}상자, ${diffIndivStr}개)`
-      } else {
-        afterBox = prevBox + inputBox
-        afterIndiv = prevIndiv + inputIndiv
-        deltaDesc = `[추가] 기존 ${prevBox}상자 + 추가 ${inputBox}상자 ➔ 최종 ${afterBox}상자`
-      }
-
-      if (afterBox < 0 || afterIndiv < 0) {
-        throw new Error(`[정합성 오류] ${name}(${color}) 음수 재고 발생 차단! (상자: ${afterBox}, 낱개: ${afterIndiv}) 원상 복구되었습니다.`)
-      }
-
-      // DB 갱신
-      await supabase
-        .from('inventory_stocks')
-        .upsert({
-          item_id: itemId,
-          warehouse_code: 'MAIN',
-          box_qty: afterBox,
-          unit_qty: afterIndiv,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'item_id,warehouse_code' })
-
-      // 트랜잭션 기록
-      await supabase
-        .from('stock_transactions')
-        .insert({
-          transaction_type: 'ADJUST',
-          item_id: itemId,
-          warehouse_code: 'MAIN',
-          box_qty: inputBox,
-          unit_qty: inputIndiv,
-          handler_name: handler,
-          invoice_no: invoiceNumber,
-          memo: `재고조사 ${deltaDesc}`
-        })
-
-      updatedKeys.push({
-        key: key,
-        name: name,
-        color: color,
-        box: afterBox,
-        individual: afterIndiv,
-        boxContent: boxContent,
-        adjType: adjType,
-        prevBox: prevBox,
-        prevIndiv: prevIndiv
+      payload.push({
+        item_id: itemId,
+        adj_mode: adjType,
+        box_qty: inputBox,
+        unit_qty: inputIndiv,
+        reason: '재고조사'
       })
+      updatedKeys.push({ key, name, color, boxContent, adjType, itemId })
     }
+
+    const fingerprint = JSON.stringify({ handler, payload, kind: 'audit' })
+    const idemKey = takeIdempotencyKey('adjust_stock', fingerprint)
+    let data
+    try {
+      const res = await supabase.rpc('rpc_adjust_stock', {
+        p_admin: handler,
+        p_items: payload,
+        p_warehouse: 'MAIN',
+        p_idempotency_key: idemKey
+      })
+      if (res.error) throw new Error(res.error.message || '재고조사 처리에 실패했습니다.')
+      data = res.data
+      clearIdempotencyKey('adjust_stock')
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('adjust_stock')
+      throw err
+    }
+
+    const itemIds = payload.map(p => p.item_id)
+    const { data: freshStocks } = await supabase
+      .from('inventory_stocks')
+      .select('item_id, box_qty, unit_qty')
+      .in('item_id', itemIds)
+      .eq('warehouse_code', 'MAIN')
+    const stockMap = new Map((freshStocks || []).map(s => [s.item_id, s]))
 
     return {
       success: true,
-      invoiceNumber: invoiceNumber,
+      invoiceNumber: data?.invoice_no || '',
       adjustedCount: tableData.length,
-      updatedItems: updatedKeys,
+      updatedItems: updatedKeys.map(up => {
+        const fresh = stockMap.get(up.itemId)
+        return {
+          ...up,
+          box: fresh ? Number(fresh.box_qty || 0) : 0,
+          individual: fresh ? Number(fresh.unit_qty || 0) : 0
+        }
+      }),
       integrity: {
         checkedCount: updatedKeys.length,
         discrepancyCount: 0,
@@ -851,20 +885,17 @@ export const serverMethods = {
    * 14. 재고 정합성 자동 검사기 (전수 대사 & 오차 탐지)
    */
   async verifyStockIntegrity() {
-    const [res1, res2, txRes, itemsRes] = await Promise.all([
-      supabase.from('view_effective_stocks').select('*').range(0, 999),
-      supabase.from('view_effective_stocks').select('*').range(1000, 1999),
-      supabase.from('stock_transactions').select('*'),
-      supabase.from('items').select('id, initial_stock_boxes, initial_stock_units, box_packaging_qty')
+    const [allStocks, allTxs, itemsList] = await Promise.all([
+      fetchAllRows(() => supabase.from('view_effective_stocks').select('*')),
+      fetchAllRows(() =>
+        supabase.from('stock_transactions').select('item_id, transaction_type, box_qty, unit_qty, warehouse_code')
+      ),
+      fetchAllRows(() =>
+        supabase.from('items').select('id, initial_stock_boxes, initial_stock_units, box_packaging_qty')
+      )
     ])
 
-    if (res1.error) throw res1.error
-    if (res2.error) throw res2.error
-    if (txRes.error) throw txRes.error
-
-    const allStocks = [...(res1.data || []), ...(res2.data || [])]
-    const allTxs = txRes.data || []
-    const itemsMap = new Map((itemsRes.data || []).map(it => [it.id, it]))
+    const itemsMap = new Map(itemsList.map(it => [it.id, it]))
 
     const discrepancies = []
     let checkedCount = 0
@@ -878,6 +909,8 @@ export const serverMethods = {
           inIndivTotal: 0,
           outBoxTotal: 0,
           outIndivTotal: 0,
+          adjBoxTotal: 0,
+          adjIndivTotal: 0,
           adjustCount: 0
         })
       }
@@ -892,6 +925,8 @@ export const serverMethods = {
         t.outIndivTotal += u
       } else if (tx.transaction_type === 'ADJUST') {
         t.adjustCount++
+        t.adjBoxTotal += b
+        t.adjIndivTotal += u
       }
     })
 
@@ -907,10 +942,11 @@ export const serverMethods = {
       const initIndiv = Number(itemMeta.initial_stock_units || 0)
       const initTotal = (initBox * boxContent) + initIndiv
 
-      const tInfo = txByItem.get(st.item_id) || { inBoxTotal: 0, inIndivTotal: 0, outBoxTotal: 0, outIndivTotal: 0, adjustCount: 0 }
+      const tInfo = txByItem.get(st.item_id) || { inBoxTotal: 0, inIndivTotal: 0, outBoxTotal: 0, outIndivTotal: 0, adjBoxTotal: 0, adjIndivTotal: 0, adjustCount: 0 }
       const inTotal = (tInfo.inBoxTotal * boxContent) + tInfo.inIndivTotal
       const outTotal = (tInfo.outBoxTotal * boxContent) + tInfo.outIndivTotal
-      const expectedTotal = initTotal + inTotal - outTotal
+      const adjTotal = (tInfo.adjBoxTotal * boxContent) + tInfo.adjIndivTotal
+      const expectedTotal = initTotal + inTotal - outTotal + adjTotal
 
       // 1) 음수 재고 검증
       if (currentBox < 0 || currentIndividual < 0) {
@@ -929,7 +965,7 @@ export const serverMethods = {
           inSummary: '음수 재고 감지',
           outSummary: ''
         })
-      } else if (tInfo.adjustCount === 0 && currentTotal !== expectedTotal && (inTotal > 0 || outTotal > 0)) {
+      } else if (currentTotal !== expectedTotal) {
         // 2) 재고실사 이력이 없는 품목의 트랜잭션 전수 대사 불일치 감지
         const diff = currentTotal - expectedTotal
         discrepancies.push({
@@ -962,15 +998,9 @@ export const serverMethods = {
    * 15. 재고시트 데이터 정규화 사전 분석 (중복 코드 및 포장단위 분산 전수 분석)
    */
   async analyzeStockNormalization() {
-    const [res1, res2] = await Promise.all([
-      supabase.from('view_effective_stocks').select('*').range(0, 999),
-      supabase.from('view_effective_stocks').select('*').range(1000, 1999)
-    ])
-
-    if (res1.error) throw res1.error
-    if (res2.error) throw res2.error
-
-    const allStocks = [...(res1.data || []), ...(res2.data || [])]
+    const allStocks = await fetchAllRows(() =>
+      supabase.from('view_effective_stocks').select('*')
+    )
     const groups = new Map()
 
     allStocks.forEach((st, idx) => {
@@ -1109,72 +1139,27 @@ export const serverMethods = {
     const tz = formatDate(new Date()).replace(/\//g, '') + '_' + String(new Date().getHours()).padStart(2, '0') + String(new Date().getMinutes()).padStart(2, '0')
     const backupSheetName = `items_backup_${tz}`
 
-    for (const group of analysis.duplicateGroups) {
-      const canonicalName = group.canonicalName
-      const repColor = group.color
-      const repBoxContent = group.repBoxContent
-      const originalItems = group.originalItems
-      const itemIds = originalItems.map(it => it.itemId).filter(Boolean)
-      if (itemIds.length <= 1) continue
-
-      const primaryItem = originalItems[0]
-      const canonicalItemId = primaryItem.itemId
-      const secondaryItemIds = itemIds.filter(id => id !== canonicalItemId)
-
-      // 1) 대표 품목 메타데이터 갱신
-      await supabase
-        .from('items')
-        .update({
-          item_name: canonicalName,
-          color: repColor,
-          box_packaging_qty: repBoxContent
-        })
-        .eq('id', canonicalItemId)
-
-      // 2) 모든 창고에 걸쳐 재고 합산
-      const { data: allStocks } = await supabase
-        .from('inventory_stocks')
-        .select('*')
-        .in('item_id', itemIds)
-
-      const stocksByWarehouse = new Map()
-      ;(allStocks || []).forEach(st => {
-        const wh = st.warehouse_code
-        if (!stocksByWarehouse.has(wh)) stocksByWarehouse.set(wh, 0)
-        const origItem = originalItems.find(it => it.itemId === st.item_id)
-        const oldBc = origItem ? origItem.boxContent : 1
-        const totalUnits = (Number(st.box_qty || 0) * oldBc) + Number(st.unit_qty || 0)
-        stocksByWarehouse.set(wh, stocksByWarehouse.get(wh) + totalUnits)
+    const groups = (analysis.duplicateGroups || [])
+      .map(group => {
+        const originalItems = group.originalItems || []
+        const canonicalItemId = originalItems[0]?.itemId
+        return {
+          canonical_item_id: canonicalItemId,
+          canonical_name: group.canonicalName,
+          color: group.color,
+          box_packaging_qty: group.repBoxContent,
+          members: originalItems.map(it => ({
+            item_id: it.itemId,
+            box_content: it.boxContent
+          }))
+        }
       })
+      .filter(g => g.canonical_item_id && (g.members || []).length > 1)
 
-      // 각 창고별 대표 품목 재고로 통합 갱신
-      for (const [wh, totalUnits] of stocksByWarehouse.entries()) {
-        const mergedBoxes = repBoxContent > 0 ? Math.floor(totalUnits / repBoxContent) : 0
-        const mergedUnits = repBoxContent > 0 ? (totalUnits % repBoxContent) : totalUnits
-
-        await supabase
-          .from('inventory_stocks')
-          .upsert({
-            item_id: canonicalItemId,
-            warehouse_code: wh,
-            box_qty: mergedBoxes,
-            unit_qty: mergedUnits,
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'item_id,warehouse_code' })
-      }
-
-      // 3) 중복 품목의 트랜잭션 및 이동 주문을 대표 품목 ID로 승계
-      if (secondaryItemIds.length > 0) {
-        await Promise.all([
-          supabase.from('stock_transactions').update({ item_id: canonicalItemId }).in('item_id', secondaryItemIds),
-          supabase.from('pending_orders').update({ item_id: canonicalItemId }).in('item_id', secondaryItemIds)
-        ])
-
-        // 4) 중복 품목의 기존 재고 행 정리 및 품목 비활성화
-        await supabase.from('inventory_stocks').delete().in('item_id', secondaryItemIds)
-        await supabase.from('items').update({ is_active: false }).in('id', secondaryItemIds)
-      }
-    }
+    const { data, error } = await supabase.rpc('rpc_execute_stock_normalization', {
+      p_groups: groups
+    })
+    if (error) throw error
 
     await preloadItemIdCache()
 
@@ -1184,6 +1169,8 @@ export const serverMethods = {
       originalRowCount: analysis.totalOriginalRows,
       finalRowCount: analysis.estimatedFinalRows,
       reducedRowsCount: analysis.reducedRowsCount,
+      mergedGroups: data?.merged_groups ?? groups.length,
+      mergedItems: data?.merged_items ?? analysis.reducedRowsCount,
       analysis: analysis
     }
   },
@@ -1196,16 +1183,15 @@ export const serverMethods = {
     const whList = ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR']
 
     // 1. 전체 유효 재고, 8대 서브창고 재고 및 이동 중(PENDING) 주문 병렬 조회 (sub-50ms)
-    const [res1, res2, subRes, pendingRes] = await Promise.all([
-      supabase.from('view_effective_stocks').select('*').range(0, 999),
-      supabase.from('view_effective_stocks').select('*').range(1000, 1999),
-      supabase.from('inventory_stocks').select('warehouse_code, box_qty, item_id').in('warehouse_code', whList),
-      supabase.from('pending_orders').select('item_id, from_warehouse, box_qty').eq('to_warehouse', 'MAIN').in('status', ['PENDING', 'IN_TRANSIT'])
+    const [allMainItems, subStocks, pendingOrders] = await Promise.all([
+      fetchAllRows(() => supabase.from('view_effective_stocks').select('*')),
+      fetchAllRows(() =>
+        supabase.from('inventory_stocks').select('warehouse_code, box_qty, item_id').in('warehouse_code', whList)
+      ),
+      fetchAllRows(() =>
+        supabase.from('pending_orders').select('item_id, from_warehouse, box_qty').eq('to_warehouse', 'MAIN').in('status', ['PENDING', 'IN_TRANSIT'])
+      )
     ])
-
-    const allMainItems = [...(res1.data || []), ...(res2.data || [])]
-    const subStocks = subRes.data || []
-    const pendingOrders = pendingRes.data || []
 
     // 2. 품목 ID별 서브창고 재고 맵 구성
     const subMap = new Map()
@@ -1314,17 +1300,15 @@ export const serverMethods = {
    */
   async analyzeWinterPeakDemandAndSafeStock() {
     // 1. 전체 품목 마스터 및 트랜잭션 병렬 조회
-    const [stocksRes, txRes] = await Promise.all([
-      supabase.from('view_effective_stocks').select('*'),
-      supabase.from('stock_transactions')
-        .select('item_id, transaction_type, box_qty, unit_qty, created_at, invoice_no')
-        .in('transaction_type', ['OUTBOUND', 'MOVE'])
-        .order('created_at', { ascending: false })
-        .limit(10000)
+    const [allStocks, allTxs] = await Promise.all([
+      fetchAllRows(() => supabase.from('view_effective_stocks').select('*')),
+      fetchAllRows(() =>
+        supabase.from('stock_transactions')
+          .select('item_id, transaction_type, box_qty, unit_qty, created_at, invoice_no')
+          .in('transaction_type', ['OUTBOUND', 'MOVE'])
+          .order('created_at', { ascending: false })
+      )
     ])
-
-    const allStocks = stocksRes.data || []
-    const allTxs = txRes.data || []
 
     // 2. 일자별 / 품목별 출고 수량 집계
     const itemDailyMap = new Map()
@@ -1458,12 +1442,9 @@ export const serverMethods = {
       'AZULCELE', 'PETROLEO / JADE'
     ])
 
-    const { data: allItems, error } = await supabase
-      .from('items')
-      .select('id, item_name, color, box_packaging_qty')
-      .eq('is_active', true)
-
-    if (error) throw error
+    const allItems = await fetchAllRows(() =>
+      supabase.from('items').select('id, item_name, color, box_packaging_qty').eq('is_active', true)
+    )
 
     const modifiedItems = []
     let modifiedCount = 0
@@ -1528,25 +1509,24 @@ export const serverMethods = {
    */
   async executeColorNormalization() {
     const analysis = await this.analyzeColorNormalization()
-    let executedCount = 0
+    const payload = (analysis.modifiedItems || []).map(mod => ({
+      item_id: mod.itemId,
+      normalized_name: mod.normalizedName,
+      normalized_color: mod.normalizedColor,
+      box_content: mod.boxContent
+    }))
 
-    for (const mod of analysis.modifiedItems) {
-      const { error } = await supabase
-        .from('items')
-        .update({
-          item_name: mod.normalizedName,
-          color: mod.normalizedColor
-        })
-        .eq('id', mod.itemId)
-
-      if (!error) executedCount++
-    }
+    const { data, error } = await supabase.rpc('rpc_execute_color_normalization', {
+      p_items: payload
+    })
+    if (error) throw error
 
     await preloadItemIdCache()
 
     return {
       success: true,
-      totalExecuted: executedCount,
+      totalExecuted: data?.updated ?? payload.length,
+      skippedCount: data?.skipped ?? 0,
       analysis: analysis
     }
   },
@@ -1603,17 +1583,23 @@ export const serverMethods = {
    * 18. 통합 관제 대시보드 지표 실시간 집계 (getDashboardMetrics)
    */
   async getDashboardMetrics() {
-    const todaySlash = formatDate(new Date()).replace(/-/g, '/')
-    const todayDash = formatDate(new Date())
+    const todaySlash = formatDate(new Date())
+    const todayDash = todaySlash.replace(/\//g, '-')
 
-    const [stocksRes, txTodayRes, pendingRes, recentTxRes] = await Promise.all([
-      supabase.from('view_effective_stocks').select('*'),
-      supabase.from('stock_transactions')
-        .select('transaction_type, box_qty, unit_qty, invoice_no')
-        .or(`invoice_no.like.${todaySlash}%,invoice_no.like.${todayDash}%`),
-      supabase.from('pending_orders')
-        .select('item_id, from_warehouse, to_warehouse, box_qty, status')
-        .in('status', ['PENDING', 'IN_TRANSIT']),
+    const [allStocks, todayTxRows, pendingOrders, recentTxs] = await Promise.all([
+      fetchAllRows(() =>
+        supabase.from('view_effective_stocks').select('item_id, item_name, color, main_box_qty, box_packaging_qty, safe_stock_boxes, pending_in_boxes')
+      ),
+      fetchAllRows(() =>
+        supabase.from('stock_transactions')
+          .select('transaction_type, box_qty, unit_qty, invoice_no')
+          .or(`invoice_no.like.${todaySlash}%,invoice_no.like.${todayDash}%`)
+      ),
+      fetchAllRows(() =>
+        supabase.from('pending_orders')
+          .select('item_id, from_warehouse, to_warehouse, box_qty, status')
+          .in('status', ['PENDING', 'IN_TRANSIT'])
+      ),
       supabase.from('stock_transactions')
         .select('item_id, transaction_type, box_qty, unit_qty, created_at, items(item_name, color)')
         .in('transaction_type', ['INBOUND', 'OUTBOUND', 'MOVE'])
@@ -1621,10 +1607,9 @@ export const serverMethods = {
         .limit(1000)
     ])
 
-    const allStocks = stocksRes.data || []
-    const todayTxs = txTodayRes.data || []
-    const pendingOrders = pendingRes.data || []
-    const recentTxs = recentTxRes.data || []
+    if (recentTxs.error) throw recentTxs.error
+
+    const recentTxRows = recentTxs.data || []
 
     // 1. 총 재고 자산 계산
     let totalMainBoxes = 0
@@ -1662,7 +1647,7 @@ export const serverMethods = {
     let todayOutBoxes = 0
     let todayMoveBoxes = 0
 
-    todayTxs.forEach(tx => {
+    todayTxRows.forEach(tx => {
       const b = Math.abs(Number(tx.box_qty || 0))
       if (tx.transaction_type === 'INBOUND') todayInBoxes += b
       else if (tx.transaction_type === 'OUTBOUND') todayOutBoxes += b
@@ -1690,7 +1675,7 @@ export const serverMethods = {
       dailyMap[dStr] = { date: dStr, label: label, inBoxes: 0, outBoxes: 0 }
     }
 
-    recentTxs.forEach(tx => {
+    recentTxRows.forEach(tx => {
       if (!tx.created_at) return
       const dStr = tx.created_at.split('T')[0]
       if (dailyMap[dStr]) {
@@ -1702,7 +1687,7 @@ export const serverMethods = {
 
     // 5. 최근 최다 출고 베스트셀러 Top 5
     const itemOutMap = new Map()
-    recentTxs.forEach(tx => {
+    recentTxRows.forEach(tx => {
       if (tx.transaction_type === 'OUTBOUND' || tx.transaction_type === 'MOVE') {
         const b = Math.abs(Number(tx.box_qty || 0))
         const name = tx.items?.item_name || 'UNKNOWN'
@@ -1753,23 +1738,69 @@ export const serverMethods = {
     }
 
     try {
-      const localSaved = localStorage.getItem('wms_system_settings')
-      if (localSaved) {
-        return { ...defaultSettings, ...JSON.parse(localSaved) }
-      }
-    } catch (e) {}
-
-    return defaultSettings
+      const { data, error } = await supabase.rpc('rpc_get_system_settings')
+      if (error) throw error
+      return { ...defaultSettings, ...(data?.settings || {}) }
+    } catch (e) {
+      try {
+        const localSaved = localStorage.getItem('wms_system_settings')
+        if (localSaved) return { ...defaultSettings, ...JSON.parse(localSaved) }
+      } catch {}
+      return defaultSettings
+    }
   },
 
   async saveSystemSettings(settings) {
     if (!settings || typeof settings !== 'object') throw new Error('유효하지 않은 설정값입니다.')
+    const { data, error } = await supabase.rpc('rpc_save_system_settings', {
+      p_settings: settings
+    })
+    if (error) throw error
     try {
-      localStorage.setItem('wms_system_settings', JSON.stringify(settings))
-    } catch (e) {
-      console.warn('localStorage save warning:', e)
+      localStorage.setItem('wms_system_settings', JSON.stringify(data?.settings || settings))
+    } catch {}
+    return data || { success: true, message: '설정이 저장되었습니다.' }
+  },
+
+  async listInvoices(type, date) {
+    const txTypes = this._normalizeTxTypes(type)
+    const rawDate = String(date || '').trim()
+    const slash = rawDate.replace(/-/g, '/')
+    const dash = rawDate.replace(/\//g, '-')
+    let query = supabase
+      .from('stock_transactions')
+      .select('invoice_no, transaction_type, partner_name, handler_name, created_at, box_qty, unit_qty')
+      .in('transaction_type', txTypes)
+      .order('created_at', { ascending: false })
+      .limit(800)
+
+    if (slash) {
+      query = query.or(`invoice_no.like.${slash}%,invoice_no.like.${dash}%`)
     }
-    return { success: true, message: '설정이 저장되었습니다.' }
+
+    const { data, error } = await query
+    if (error) throw error
+
+    const grouped = new Map()
+    ;(data || []).forEach(row => {
+      const key = row.invoice_no || ''
+      if (!key) return
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          invoice_no: key,
+          transaction_type: row.transaction_type,
+          partner_name: row.partner_name || '',
+          handler_name: row.handler_name || '',
+          created_at: row.created_at,
+          lines: 0,
+          boxes: 0
+        })
+      }
+      const g = grouped.get(key)
+      g.lines += 1
+      g.boxes += Math.abs(Number(row.box_qty || 0))
+    })
+    return Array.from(grouped.values())
   },
 
   /**
@@ -1778,12 +1809,9 @@ export const serverMethods = {
   async matchAliasesWithAI(rawItems) {
     if (!Array.isArray(rawItems) || rawItems.length === 0) return []
 
-    const { data: allItems } = await supabase
-      .from('items')
-      .select('id, item_name, color, box_packaging_qty')
-      .limit(3000)
-
-    const catalog = allItems || []
+    const catalog = await fetchAllRows(() =>
+      supabase.from('items').select('id, item_name, color, box_packaging_qty').eq('is_active', true)
+    )
     const results = []
 
     for (const raw of rawItems) {
@@ -2121,9 +2149,8 @@ export function createGoogleScriptRunBridge() {
           console.error(`[SupabaseAdapter] ${fnName} 오류:`, err)
           if (typeof failureCb === 'function') {
             failureCb(err)
-          } else {
-            console.error(err)
           }
+          throw err
         }
       }
     }

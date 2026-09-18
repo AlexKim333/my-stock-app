@@ -8,18 +8,18 @@
         <span class="nav-user-meta">{{ authStore.user.branch_name ?? '—' }} · {{ authStore.user.access_level }}</span>
       </div>
       <nav class="nav-menu">
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'home' }" @click.prevent="activeNav = 'home'">🏠 시작</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'home' }" @click.prevent="setTransactionMode('home')">🏠 시작</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'outbound' }" @click.prevent="setTransactionMode('outbound')">📤 출고입력</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'inbound' }" @click.prevent="setTransactionMode('inbound')">📥 입고입력</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'move' }" @click.prevent="activeNav = 'move'">🔄 재고 이동</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'move' }" @click.prevent="setTransactionMode('move')">🔄 재고 이동</a>
         <a href="#" class="nav-item" :class="{ active: activeNav === 'product' }" @click.prevent="setActiveNav('product')">📦 상품등록</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'supplier' }" @click.prevent="activeNav = 'supplier'">🏢 입고처</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'destination' }" @click.prevent="activeNav = 'destination'">🚚 출고처</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'report' }" @click.prevent="activeNav = 'report'">📊 리포트</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'manager' }" @click.prevent="activeNav = 'manager'">👤 담당자 (입출고)</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'search-edit' }" @click.prevent="activeNav = 'search-edit'">🔍 입출고검색수정</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'reservation' }" @click.prevent="activeNav = 'reservation'">📅 예약상황</a>
-        <a href="#" class="nav-item" :class="{ active: activeNav === 'settings' }" @click.prevent="activeNav = 'settings'">⚙️ 설정</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'supplier' }" @click.prevent="setActiveNav('supplier')">🏢 입고처</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'destination' }" @click.prevent="setActiveNav('destination')">🚚 출고처</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'report' }" @click.prevent="setActiveNav('report')">📊 리포트</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'manager' }" @click.prevent="setActiveNav('manager')">👤 담당자 (입출고)</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'search-edit' }" @click.prevent="setActiveNav('search-edit')">🔍 입출고검색수정</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'reservation' }" @click.prevent="setActiveNav('reservation')">📅 예약상황</a>
+        <a href="#" class="nav-item" :class="{ active: activeNav === 'settings' }" @click.prevent="setActiveNav('settings')">⚙️ 설정</a>
         <button type="button" class="nav-item nav-logout-btn" @click="handleLogout">🚪 로그아웃</button>
       </nav>
     </aside>
@@ -35,6 +35,227 @@
 
       <!-- 📦 상품등록 전용 화면 -->
       <ProductRegistrationPanel v-if="activeNav === 'product'" />
+
+      <section v-else-if="!isPosWorkspace" class="master-panel">
+        <header class="master-panel-header">
+          <h2>{{ masterPanelTitle }}</h2>
+          <p>{{ masterPanelHint }}</p>
+        </header>
+
+        <div v-if="activeNav === 'supplier'" class="master-table-wrap">
+          <form v-if="authStore.isAdmin" class="master-add-form" @submit.prevent="addPartner('INBOUND')">
+            <input v-model="newPartnerName" type="text" placeholder="입고처 이름" />
+            <button type="submit" :disabled="wmsStore.isSubmitting">추가</button>
+          </form>
+          <table class="master-table">
+            <thead><tr><th>입고처</th><th>유형</th><th>상태</th><th v-if="authStore.isAdmin">관리</th></tr></thead>
+            <tbody>
+              <tr v-for="s in wmsStore.suppliers" :key="s.id">
+                <template v-if="editingPartnerId === s.id">
+                  <td><input v-model="editPartnerName" type="text" /></td>
+                  <td>INBOUND</td>
+                  <td>
+                    <button type="button" class="row-mini" @click="savePartnerEdit('INBOUND')">저장</button>
+                    <button type="button" class="row-mini ghost" @click="cancelPartnerEdit">취소</button>
+                  </td>
+                  <td></td>
+                </template>
+                <template v-else>
+                  <td>{{ s.name }}</td>
+                  <td>{{ s.partner_type || (s.is_supplier ? 'INBOUND' : '—') }}</td>
+                  <td>{{ s.is_active === false ? '비활성' : '활성' }}</td>
+                  <td v-if="authStore.isAdmin">
+                    <button type="button" class="row-mini" @click="startPartnerEdit(s, 'INBOUND')">수정</button>
+                    <button type="button" class="row-mini ghost" @click="togglePartnerActive(s, 'INBOUND')">
+                      {{ s.is_active === false ? '활성화' : '비활성' }}
+                    </button>
+                  </td>
+                </template>
+              </tr>
+              <tr v-if="!wmsStore.suppliers.length"><td :colspan="authStore.isAdmin ? 4 : 3">등록된 입고처가 없습니다.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-else-if="activeNav === 'destination'" class="master-table-wrap">
+          <form v-if="authStore.isAdmin" class="master-add-form" @submit.prevent="addPartner('OUTBOUND')">
+            <input v-model="newPartnerName" type="text" placeholder="출고처 / 지점 이름" />
+            <select v-model="newPartnerWarehouse">
+              <option value="">창고코드 없음</option>
+              <option v-for="w in wmsStore.warehouses" :key="w.code" :value="w.code">{{ w.code }}</option>
+            </select>
+            <label class="master-check"><input type="checkbox" v-model="newPartnerIsBranch" /> 지점</label>
+            <button type="submit" :disabled="wmsStore.isSubmitting">추가</button>
+          </form>
+          <table class="master-table">
+            <thead><tr><th>출고처 / 지점</th><th>창고코드</th><th>유형</th><th v-if="authStore.isAdmin">관리</th></tr></thead>
+            <tbody>
+              <tr v-for="d in wmsStore.destinations" :key="d.id">
+                <template v-if="editingPartnerId === d.id">
+                  <td><input v-model="editPartnerName" type="text" /></td>
+                  <td>
+                    <select v-model="editPartnerWarehouse">
+                      <option value="">창고코드 없음</option>
+                      <option v-for="w in wmsStore.warehouses" :key="w.code" :value="w.code">{{ w.code }}</option>
+                    </select>
+                  </td>
+                  <td>
+                    <label class="master-check"><input type="checkbox" v-model="editPartnerIsBranch" /> 지점</label>
+                    <button type="button" class="row-mini" @click="savePartnerEdit('OUTBOUND')">저장</button>
+                    <button type="button" class="row-mini ghost" @click="cancelPartnerEdit">취소</button>
+                  </td>
+                  <td></td>
+                </template>
+                <template v-else>
+                  <td>{{ d.name }}</td>
+                  <td>{{ d.warehouse_code || '—' }}</td>
+                  <td>{{ d.is_branch ? '지점' : (d.partner_type || 'OUTBOUND') }}{{ d.is_active === false ? ' · 비활성' : '' }}</td>
+                  <td v-if="authStore.isAdmin">
+                    <button type="button" class="row-mini" @click="startPartnerEdit(d, 'OUTBOUND')">수정</button>
+                    <button type="button" class="row-mini ghost" @click="togglePartnerActive(d, 'OUTBOUND')">
+                      {{ d.is_active === false ? '활성화' : '비활성' }}
+                    </button>
+                  </td>
+                </template>
+              </tr>
+              <tr v-if="!wmsStore.destinations.length"><td :colspan="authStore.isAdmin ? 4 : 3">등록된 출고처가 없습니다.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-else-if="activeNav === 'manager'" class="master-table-wrap">
+          <form v-if="authStore.isAdmin" class="master-add-form" @submit.prevent="addMember">
+            <input v-model="newMemberName" type="text" placeholder="아이디" />
+            <input v-model="newMemberPassword" type="password" placeholder="비밀번호" />
+            <input v-model="newMemberBranch" type="text" placeholder="지점" />
+            <select v-model="newMemberLevel">
+              <option value="staff">staff</option>
+              <option value="admin">admin</option>
+            </select>
+            <button type="submit" :disabled="wmsStore.isSubmitting">추가</button>
+          </form>
+          <table class="master-table">
+            <thead><tr><th>담당자</th><th>지점</th><th>권한</th><th v-if="authStore.isAdmin">관리</th></tr></thead>
+            <tbody>
+              <tr v-for="m in wmsStore.managers" :key="m.id">
+                <template v-if="editingMemberId === m.id">
+                  <td>{{ m.member_name }}</td>
+                  <td><input v-model="editMemberBranch" type="text" /></td>
+                  <td>
+                    <select v-model="editMemberLevel">
+                      <option value="staff">staff</option>
+                      <option value="admin">admin</option>
+                    </select>
+                    <input v-model="editMemberPassword" type="password" placeholder="새 비밀번호(선택)" />
+                    <button type="button" class="row-mini" @click="saveMemberEdit">저장</button>
+                    <button type="button" class="row-mini ghost" @click="cancelMemberEdit">취소</button>
+                  </td>
+                  <td></td>
+                </template>
+                <template v-else>
+                  <td>{{ m.member_name }}</td>
+                  <td>{{ m.branch_name || '—' }}</td>
+                  <td>{{ m.access_level }}{{ m.is_active === false ? ' · 비활성' : '' }}</td>
+                  <td v-if="authStore.isAdmin">
+                    <button type="button" class="row-mini" @click="startMemberEdit(m)">수정</button>
+                    <button type="button" class="row-mini ghost" @click="toggleMemberActive(m)">
+                      {{ m.is_active === false ? '활성화' : '비활성' }}
+                    </button>
+                  </td>
+                </template>
+              </tr>
+              <tr v-if="!wmsStore.managers.length"><td :colspan="authStore.isAdmin ? 4 : 3">등록된 담당자가 없습니다.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-else-if="activeNav === 'reservation'" class="master-table-wrap">
+          <p v-if="wmsStore.isLoading">예약 목록을 불러오는 중…</p>
+          <table v-else class="master-table">
+            <thead><tr><th>상태</th><th>출발</th><th>도착</th><th>상자</th><th>낱개</th><th>요청자</th><th>메모</th></tr></thead>
+            <tbody>
+              <tr v-for="p in wmsStore.pendingOrders" :key="p.id">
+                <td>{{ p.status }}</td>
+                <td>{{ p.from_warehouse }}</td>
+                <td>{{ p.to_warehouse || '—' }}</td>
+                <td>{{ p.box_qty }}</td>
+                <td>{{ p.unit_qty }}</td>
+                <td>{{ p.requested_by || '—' }}</td>
+                <td>{{ p.memo || '' }}</td>
+              </tr>
+              <tr v-if="!wmsStore.pendingOrders.length"><td colspan="7">진행 중인 예약이 없습니다.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-else-if="activeNav === 'report'" class="report-panel">
+          <p v-if="!wmsStore.dashboard">리포트를 불러오는 중…</p>
+          <template v-else>
+            <div class="master-stats">
+              <div class="stat-card"><span>메인 재고</span><strong>{{ wmsStore.dashboard.kpi.totalMainBoxes }} 상자</strong></div>
+              <div class="stat-card"><span>오늘 입고</span><strong>{{ wmsStore.dashboard.kpi.todayInBoxes }}</strong></div>
+              <div class="stat-card"><span>오늘 출고</span><strong>{{ wmsStore.dashboard.kpi.todayOutBoxes }}</strong></div>
+              <div class="stat-card"><span>오늘 이동</span><strong>{{ wmsStore.dashboard.kpi.todayMoveBoxes }}</strong></div>
+              <div class="stat-card"><span>이동중</span><strong>{{ wmsStore.dashboard.kpi.totalInTransitBoxes }}</strong></div>
+              <div class="stat-card"><span>안전재고 미달</span><strong>{{ wmsStore.dashboard.kpi.lowStockCount }}</strong></div>
+            </div>
+            <h3 class="report-sub">안전재고 미달</h3>
+            <table class="master-table">
+              <thead><tr><th>품목</th><th>유효</th><th>안전</th><th>부족</th></tr></thead>
+              <tbody>
+                <tr v-for="item in wmsStore.dashboard.lowStockItems" :key="item.item_id">
+                  <td>{{ item.itemName }} ({{ item.color }})</td>
+                  <td>{{ item.effectiveStock }}</td>
+                  <td>{{ item.safeStock }}</td>
+                  <td>{{ item.shortage }}</td>
+                </tr>
+                <tr v-if="!wmsStore.dashboard.lowStockItems?.length"><td colspan="4">미달 품목이 없습니다.</td></tr>
+              </tbody>
+            </table>
+            <h3 class="report-sub">최근 출고 Top 5</h3>
+            <table class="master-table">
+              <thead><tr><th>품목</th><th>상자</th></tr></thead>
+              <tbody>
+                <tr v-for="s in wmsStore.dashboard.topSellers" :key="s.name">
+                  <td>{{ s.name }}</td>
+                  <td>{{ s.boxes }}</td>
+                </tr>
+                <tr v-if="!wmsStore.dashboard.topSellers?.length"><td colspan="2">데이터가 없습니다.</td></tr>
+              </tbody>
+            </table>
+          </template>
+        </div>
+
+        <div v-else-if="activeNav === 'search-edit'" class="search-edit-native">
+          <SearchEditPanel />
+        </div>
+
+        <div v-else-if="activeNav === 'settings'" class="settings-panel">
+          <p>세션 사용자: {{ authStore.user?.member_name || '—' }} ({{ authStore.user?.access_level || '—' }})</p>
+          <form v-if="authStore.isAdmin" class="settings-form" @submit.prevent="saveSettingsForm">
+            <label>트럭 목표 상자<input v-model.number="settingsForm.truckTargetBoxes" type="number" min="1" /></label>
+            <label>성수기 배수<input v-model.number="settingsForm.winterPeakMultiplier" type="number" min="0.1" step="0.1" /></label>
+            <label>영수증 상호<input v-model="settingsForm.receiptCompany" type="text" /></label>
+            <label>영수증 주소<input v-model="settingsForm.receiptAddress" type="text" /></label>
+            <label>영수증 안내<input v-model="settingsForm.receiptNotice" type="text" /></label>
+            <label>영수증 행수<input v-model.number="settingsForm.receiptRowsPerPage" type="number" min="1" /></label>
+            <label class="master-check">
+              <input v-model="settingsForm.alertOnIndividualOut" type="checkbox" />
+              낱개 출고 시 경고
+            </label>
+            <fieldset class="settings-wh">
+              <legend>활성 서브창고</legend>
+              <label v-for="code in SUB_WAREHOUSES" :key="code" class="master-check">
+                <input type="checkbox" :value="code" v-model="settingsForm.activeSubWarehouses" />
+                {{ code }}
+              </label>
+            </fieldset>
+            <button type="submit" :disabled="settingsSaving">설정 저장</button>
+          </form>
+          <p v-else>설정 변경은 관리자만 할 수 있습니다. 서버 세션은 12시간 후 만료됩니다.</p>
+          <p v-if="settingsStatus">{{ settingsStatus }}</p>
+        </div>
+      </section>
 
       <!-- 입출고 POS 작업 화면 -->
       <div v-else class="workspace-body">
@@ -95,16 +316,16 @@
         </div>
 
         <!-- [우측 분할] 장바구니 및 동적 탭 제어 존 -->
-        <div class="workspace-right" :class="{ 'inbound-mode': transactionMode === 'inbound' }">
+        <div class="workspace-right" :class="{ 'inbound-mode': transactionMode === 'inbound', 'move-mode': transactionMode === 'move' }">
           
           <!-- 📍 우측 상단 다중 탭 (이름 옆에 X 삭제 버튼 추가 규칙 반영) -->
-          <div class="tabs-control-header" :class="{ 'inbound-mode': transactionMode === 'inbound' }">
+          <div class="tabs-control-header" :class="{ 'inbound-mode': transactionMode === 'inbound', 'move-mode': transactionMode === 'move' }">
             <div class="tabs-list">
               <div 
                 v-for="tab in tabList" 
                 :key="tab.id" 
                 class="tab-wrapper-item"
-                :class="{ 'active': activeTabId === tab.id, 'inbound-mode': transactionMode === 'inbound' }"
+                :class="{ 'active': activeTabId === tab.id, 'inbound-mode': transactionMode === 'inbound', 'move-mode': transactionMode === 'move' }"
               >
                 <span class="tab-title-text" @click="activeTabId = tab.id">{{ tab.title }}</span>
                 <!-- 탭 삭제 X 버튼 (첫 번째 탭은 안전상 삭제 불가 방어막 적용) -->
@@ -112,7 +333,7 @@
               </div>
             </div>
             <div class="tabs-header-actions">
-              <span class="transaction-mode-label">{{ transactionMode === 'outbound' ? '출고 입력' : '입고 입력' }}</span>
+              <span class="transaction-mode-label">{{ transactionModeLabel }}</span>
               <button class="add-tab-action-btn" @click="addNewTab">+ 탭추가</button>
             </div>
           </div>
@@ -125,22 +346,22 @@
               <div class="master-lock-group" v-if="transactionMode === 'inbound'">
                 <label>🏢 입고처:</label>
                 <select v-model="currentTab.selectedSupplier" :disabled="!canEditMasterFields">
-                  <option value="">-- 입고처 선택 (총 {{ wmsStore.suppliers.length }}개) --</option>
-                  <option v-for="s in wmsStore.suppliers" :key="s.id" :value="s.name">{{ s.name }}</option>
+                  <option value="">-- 입고처 선택 (총 {{ activeSuppliers.length }}개) --</option>
+                  <option v-for="s in activeSuppliers" :key="s.id" :value="s.name">{{ s.name }}</option>
                 </select>
               </div>
               <div class="master-lock-group" v-else>
-                <label>🚚 출고처 지점:</label>
+                <label>{{ transactionMode === 'move' ? '🔄 도착 지점:' : '🚚 출고처 지점:' }}</label>
                 <select v-model="currentTab.selectedDestination" :disabled="!canEditMasterFields">
-                  <option value="">-- 출고처 선택 (총 {{ wmsStore.destinations.length }}개) --</option>
-                  <option v-for="d in wmsStore.destinations" :key="d.id" :value="d.name">{{ d.name }}</option>
+                  <option value="">-- {{ transactionMode === 'move' ? '도착지점' : '출고처' }} 선택 (총 {{ activeDestinations.length }}개) --</option>
+                  <option v-for="d in activeDestinations" :key="d.id" :value="d.name">{{ d.name }}</option>
                 </select>
               </div>
               <div class="master-lock-group">
                 <label>👤 입력 담당자:</label>
                 <select v-model="currentTab.selectedManager" :disabled="!canEditMasterFields">
                   <option value="">-- 담당자 선택 --</option>
-                  <option v-for="m in wmsStore.managers" :key="m.id" :value="m.member_name">
+                  <option v-for="m in activeManagers" :key="m.id" :value="m.member_name">
                     {{ m.member_name }} ({{ m.branch_name || '지점' }})
                   </option>
                 </select>
@@ -150,14 +371,14 @@
             <!-- 현행 주문 전표 테이블 -->
             <table class="pos-cart-table">
               <thead>
-                <tr><th>품명(컬러)</th><th colspan="2">출고량 입력</th><th>총 수량</th></tr>
+                <tr><th>품명(컬러)</th><th colspan="2">{{ qtyInputLabel }} 입력</th><th>총 수량</th></tr>
                 <tr class="sub-th"><th></th><th>Caja</th><th>Pza</th><th></th></tr>
               </thead>
               <tbody>
                 <tr v-for="item in currentTab.cartItems" :key="item.id">
                   <td class="product-cell">
                     <div class="p-name">{{ item.name }} ({{ item.color }})</div>
-                    <div class="p-stock-info">{{ item.pack_qty }}入 · 재고: {{ item.stock_box }}B</div>
+                    <div class="p-stock-info">{{ item.pack_qty }}入 · 재고: {{ item.stock_box }}B + {{ item.stock_each || 0 }}ea ({{ (Number(item.stock_box)||0) * (Number(item.pack_qty)||1) + (Number(item.stock_each)||0) }}개)</div>
                   </td>
                   <td class="input-green">
                     <input type="text" inputmode="numeric" pattern="[0-9]*" v-model.number="item.input_box" placeholder="0" />
@@ -184,11 +405,22 @@
               <div class="summary-label-box">
                 🔢 낱개주문 총 개수: <strong>{{ currentTabSummary.eaches }} 개</strong>
               </div>
+              <div class="summary-label-box">
+                Σ 환산 총수량: <strong>{{ currentTabSummary.pieces }} 개</strong>
+              </div>
             </div>
             
             <div class="action-btn-double-group">
-              <button class="btn-outbound-reserve" @click="triggerAction('reserve')">출고 예약 버튼</button>
-              <button class="btn-final-submit" @click="triggerAction('submit')">제출 버튼</button>
+              <button
+                class="btn-outbound-reserve"
+                :disabled="wmsStore.isSubmitting || transactionMode !== 'outbound'"
+                @click="triggerAction('reserve')"
+              >출고 예약 버튼</button>
+              <button
+                class="btn-final-submit"
+                :disabled="wmsStore.isSubmitting"
+                @click="triggerAction('submit')"
+              >{{ wmsStore.isSubmitting ? '처리 중…' : '제출 버튼' }}</button>
             </div>
           </div>
 
@@ -223,12 +455,14 @@
   </div>
 </template>
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
 import { useWmsStore } from '../stores/wms.js'
+import { resolveBranchCode, SUB_WAREHOUSES } from '../lib/supabaseAdapter.js'
 import TruckGaugeBar from './TruckGaugeBar.vue'
 import ProductRegistrationPanel from './ProductRegistrationPanel.vue'
+import SearchEditPanel from './SearchEditPanel.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -250,12 +484,42 @@ onUnmounted(() => {
 /** admin만 3대 마스터 헤더(입고처·출고처·담당자) 수정 가능 */
 const canEditMasterFields = computed(() => authStore.isAdmin)
 
-const handleLogout = () => {
-  authStore.logout()
+const handleLogout = async () => {
+  await authStore.logout()
   router.push('/login')
 }
 
 const searchQuery = ref('')
+const newPartnerName = ref('')
+const newPartnerWarehouse = ref('')
+const newPartnerIsBranch = ref(false)
+const newMemberName = ref('')
+const newMemberPassword = ref('')
+const newMemberBranch = ref('')
+const newMemberLevel = ref('staff')
+const editingPartnerId = ref('')
+const editPartnerName = ref('')
+const editPartnerWarehouse = ref('')
+const editPartnerIsBranch = ref(false)
+const editingMemberId = ref('')
+const editMemberBranch = ref('')
+const editMemberLevel = ref('staff')
+const editMemberPassword = ref('')
+const settingsSaving = ref(false)
+const settingsStatus = ref('')
+const settingsForm = ref({
+  truckTargetBoxes: 100,
+  winterPeakMultiplier: 1.3,
+  alertOnIndividualOut: true,
+  receiptCompany: '',
+  receiptAddress: '',
+  receiptNotice: '',
+  receiptRowsPerPage: 15,
+  activeSubWarehouses: [...SUB_WAREHOUSES]
+})
+const activeSuppliers = computed(() => wmsStore.suppliers.filter(s => s.is_active !== false))
+const activeDestinations = computed(() => wmsStore.destinations.filter(d => d.is_active !== false))
+const activeManagers = computed(() => wmsStore.managers.filter(m => m.is_active !== false))
 let searchDebounceTimer = null
 
 const handleSearchInput = () => {
@@ -294,14 +558,226 @@ const isGridModalOpen = ref(false)
 const activeGroup = ref(null)
 const activeNav = ref('outbound')
 const transactionMode = ref('outbound')
+const isPosWorkspace = computed(() => ['home', 'outbound', 'inbound', 'move'].includes(activeNav.value))
+
+const transactionModeLabel = computed(() => {
+  if (transactionMode.value === 'inbound') return '입고 입력'
+  if (transactionMode.value === 'move') return '재고 이동'
+  return '출고 입력'
+})
+
+const qtyInputLabel = computed(() => {
+  if (transactionMode.value === 'inbound') return '입고량'
+  if (transactionMode.value === 'move') return '이동량'
+  return '출고량'
+})
+
+const masterPanelTitle = computed(() => ({
+  supplier: '입고처',
+  destination: '출고처',
+  manager: '담당자',
+  report: '리포트',
+  reservation: '예약상황',
+  'search-edit': '입출고 검색수정',
+  settings: '설정',
+}[activeNav.value] || '마스터'))
+
+const masterPanelHint = computed(() => ({
+  supplier: '입고 전표에서 선택하는 공급처 목록입니다.',
+  destination: '출고·이동 전표에서 선택하는 도착지 목록입니다.',
+  manager: '전표 담당자로 선택되는 작업자 목록입니다.',
+  report: '현재 세션에서 로드된 마스터·재고 요약입니다.',
+  reservation: 'MAIN 출고 예약 및 이동 중 주문입니다.',
+  'search-edit': '기존 전표를 찾아 수량·품목을 수정합니다. 저장 시 재고가 원자적으로 다시 반영됩니다.',
+  settings: '트럭 목표 상자와 영수증 문구를 서버에 저장합니다.',
+}[activeNav.value] || ''))
 
 const setTransactionMode = (mode) => {
+  if (mode === 'home') {
+    transactionMode.value = 'outbound'
+    activeNav.value = 'home'
+    return
+  }
   transactionMode.value = mode
   activeNav.value = mode
 }
 
 const setActiveNav = (nav) => {
   activeNav.value = nav
+}
+
+watch(activeNav, (nav) => {
+  if (nav === 'reservation') {
+    wmsStore.loadPendingOrders().catch(() => {})
+  }
+  if (nav === 'report') {
+    wmsStore.loadDashboard().catch(() => {})
+  }
+  if (nav === 'settings') {
+    loadSettingsForm().catch(() => {})
+  }
+})
+
+const addPartner = async (role) => {
+  const name = newPartnerName.value.trim()
+  if (!name) {
+    alert('이름을 입력하세요.')
+    return
+  }
+  try {
+    await wmsStore.upsertPartner({
+      name,
+      role: newPartnerIsBranch.value && role === 'OUTBOUND' ? 'BRANCH' : role,
+      warehouseCode: newPartnerWarehouse.value || null
+    })
+    newPartnerName.value = ''
+    newPartnerWarehouse.value = ''
+    newPartnerIsBranch.value = false
+  } catch (err) {
+    alert(`저장 실패: ${err.message}`)
+  }
+}
+
+const addMember = async () => {
+  if (!newMemberName.value.trim() || !newMemberPassword.value) {
+    alert('아이디와 비밀번호를 입력하세요.')
+    return
+  }
+  try {
+    await wmsStore.createMember({
+      memberName: newMemberName.value,
+      password: newMemberPassword.value,
+      accessLevel: newMemberLevel.value,
+      branchName: newMemberBranch.value
+    })
+    newMemberName.value = ''
+    newMemberPassword.value = ''
+    newMemberBranch.value = ''
+    newMemberLevel.value = 'staff'
+  } catch (err) {
+    alert(`저장 실패: ${err.message}`)
+  }
+}
+
+const partnerRoleOf = (partner, fallback) => {
+  if (partner.is_branch) return 'BRANCH'
+  if (partner.partner_type === 'BOTH') return 'BOTH'
+  return fallback
+}
+
+const startPartnerEdit = (partner, fallbackRole) => {
+  editingPartnerId.value = partner.id
+  editPartnerName.value = partner.name
+  editPartnerWarehouse.value = partner.warehouse_code || ''
+  editPartnerIsBranch.value = Boolean(partner.is_branch)
+}
+
+const cancelPartnerEdit = () => {
+  editingPartnerId.value = ''
+  editPartnerName.value = ''
+  editPartnerWarehouse.value = ''
+  editPartnerIsBranch.value = false
+}
+
+const savePartnerEdit = async (fallbackRole) => {
+  const partner = [...wmsStore.suppliers, ...wmsStore.destinations].find(p => p.id === editingPartnerId.value)
+  if (!partner) return
+  try {
+    await wmsStore.upsertPartner({
+      id: partner.id,
+      name: editPartnerName.value.trim() || partner.name,
+      role: fallbackRole === 'OUTBOUND'
+        ? (editPartnerIsBranch.value ? 'BRANCH' : 'OUTBOUND')
+        : 'INBOUND',
+      warehouseCode: editPartnerWarehouse.value || null,
+      isActive: partner.is_active !== false
+    })
+    cancelPartnerEdit()
+  } catch (err) {
+    alert(`저장 실패: ${err.message}`)
+  }
+}
+
+const togglePartnerActive = async (partner, fallbackRole) => {
+  try {
+    await wmsStore.upsertPartner({
+      id: partner.id,
+      name: partner.name,
+      role: partnerRoleOf(partner, fallbackRole),
+      warehouseCode: partner.warehouse_code || null,
+      isActive: partner.is_active === false
+    })
+  } catch (err) {
+    alert(`상태 변경 실패: ${err.message}`)
+  }
+}
+
+const startMemberEdit = (member) => {
+  editingMemberId.value = member.id
+  editMemberBranch.value = member.branch_name || ''
+  editMemberLevel.value = member.access_level || 'staff'
+  editMemberPassword.value = ''
+}
+
+const cancelMemberEdit = () => {
+  editingMemberId.value = ''
+  editMemberBranch.value = ''
+  editMemberLevel.value = 'staff'
+  editMemberPassword.value = ''
+}
+
+const saveMemberEdit = async () => {
+  try {
+    await wmsStore.updateMember({
+      id: editingMemberId.value,
+      branchName: editMemberBranch.value,
+      accessLevel: editMemberLevel.value,
+      password: editMemberPassword.value
+    })
+    cancelMemberEdit()
+  } catch (err) {
+    alert(`저장 실패: ${err.message}`)
+  }
+}
+
+const toggleMemberActive = async (member) => {
+  try {
+    await wmsStore.updateMember({
+      id: member.id,
+      branchName: member.branch_name,
+      accessLevel: member.access_level,
+      isActive: member.is_active === false
+    })
+  } catch (err) {
+    alert(`상태 변경 실패: ${err.message}`)
+  }
+}
+
+const loadSettingsForm = async () => {
+  const loaded = await wmsStore.loadSettings()
+  settingsForm.value = {
+    truckTargetBoxes: Number(loaded.truckTargetBoxes || 100),
+    winterPeakMultiplier: Number(loaded.winterPeakMultiplier || 1.3),
+    alertOnIndividualOut: loaded.alertOnIndividualOut !== false,
+    receiptCompany: loaded.receiptCompany || '',
+    receiptAddress: loaded.receiptAddress || '',
+    receiptNotice: loaded.receiptNotice || '',
+    receiptRowsPerPage: Number(loaded.receiptRowsPerPage || 15),
+    activeSubWarehouses: Array.isArray(loaded.activeSubWarehouses) ? [...loaded.activeSubWarehouses] : [...SUB_WAREHOUSES]
+  }
+}
+
+const saveSettingsForm = async () => {
+  settingsSaving.value = true
+  settingsStatus.value = ''
+  try {
+    await wmsStore.saveSettings(settingsForm.value)
+    settingsStatus.value = '설정을 저장했습니다. 트럭 목표 상자는 서브창고 게이지에 반영됩니다.'
+  } catch (err) {
+    settingsStatus.value = `저장 실패: ${err.message}`
+  } finally {
+    settingsSaving.value = false
+  }
 }
 
 // 📍 각 탭이 '마스터 설정'과 '장바구니 배열'을 독립적으로 주머니에 차고 있도록 구성
@@ -324,39 +800,24 @@ const currentTab = computed(() => {
 
 // 순수 상자 총합과 낱개 총합 분리 연산
 const currentTabSummary = computed(() => {
-  if (!currentTab.value) return { boxes: 0, eaches: 0 }
+  if (!currentTab.value) return { boxes: 0, eaches: 0, pieces: 0 }
   let boxes = 0
   let eaches = 0
+  let pieces = 0
   currentTab.value.cartItems.forEach(item => {
-    boxes += (Number(item.input_box) || 0)
-    eaches += (Number(item.input_each) || 0)
+    const box = Number(item.input_box) || 0
+    const each = Number(item.input_each) || 0
+    const pack = Number(item.pack_qty) || 1
+    boxes += box
+    eaches += each
+    pieces += (box * pack) + each
   })
-  return { boxes, eaches }
+  return { boxes, eaches, pieces }
 })
 
 // 실재고 기반 Top 10 핫키 표시
-const displayedSingleHotkeys = computed(() => {
-  if (wmsStore.hotkeyItems && wmsStore.hotkeyItems.length > 0) {
-    return wmsStore.hotkeyItems
-  }
-  return [
-    { id: 'sh_1', name: 'ST43', color: 'SURTIDO', pack_qty: 500, stock_box: 1, stock_each: 0 },
-    { id: 'sh_2', name: 'TWLT19', color: 'SURTIDO', pack_qty: 200, stock_box: 18, stock_each: 0 }
-  ]
-})
-
-const gridHotkeys = ref([
-  {
-    id: 'gh_1',
-    group_name: '021G 시리즈 전체',
-    pack_qty: 400,
-    variants: [
-      { color: 'NEGRO', stock_box: 4, stock_each: 0, input_box: '', input_each: '' },
-      { color: 'AZUL', stock_box: 4, stock_each: 0, input_box: '', input_each: '' },
-      { color: 'MARINO', stock_box: 3, stock_each: 0, input_box: '', input_each: '' }
-    ]
-  }
-])
+const displayedSingleHotkeys = computed(() => wmsStore.hotkeyItems || [])
+const gridHotkeys = computed(() => wmsStore.gridHotkeys || [])
 
 // 동적 탭 추가
 const addNewTab = () => {
@@ -401,23 +862,26 @@ const addSingleHotkeyToCart = (prod) => {
 }
 
 const openGridModal = (group) => {
-  activeGroup.value = group
+  activeGroup.value = {
+    ...group,
+    variants: (group.variants || []).map(v => ({ ...v, input_box: '', input_each: '' }))
+  }
   isGridModalOpen.value = true
 }
 
 const submitGridSelection = () => {
-  if (!currentTab.value) return
+  if (!currentTab.value || !activeGroup.value) return
   activeGroup.value.variants.forEach(v => {
-    if (v.input_box > 0 || v.input_each > 0) {
+    if ((Number(v.input_box) || 0) > 0 || (Number(v.input_each) || 0) > 0) {
       currentTab.value.cartItems.push({
-        id: `${activeGroup.value.id}_${v.color}`,
+        id: v.id,
         name: activeGroup.value.group_name,
         color: v.color,
-        pack_qty: activeGroup.value.pack_qty,
+        pack_qty: v.pack_qty || activeGroup.value.pack_qty,
         stock_box: v.stock_box,
         stock_each: v.stock_each,
-        input_box: v.input_box || 0,
-        input_each: v.input_each || 0
+        input_box: Number(v.input_box) || 0,
+        input_each: Number(v.input_each) || 0
       })
     }
   })
@@ -437,31 +901,63 @@ const triggerAction = async (actionType) => {
     return;
   }
 
-  if (actionType === 'reserve') {
-    alert(`[예약 접수] ${currentTab.value.title} 전표의 출고 예약이 등록되었습니다.`);
-    return;
+  if (wmsStore.isSubmitting) {
+    alert('이미 전표 처리가 진행 중입니다. 완료될 때까지 기다려주세요.')
+    return
   }
 
-  const isOutbound = transactionMode.value === 'outbound'
-  const partnerName = isOutbound 
-    ? (currentTab.value.selectedDestination || '일반 출고처')
-    : (currentTab.value.selectedSupplier || '일반 입고처');
+  if (actionType === 'reserve') {
+    if (transactionMode.value !== 'outbound') {
+      alert('출고 예약은 출고 입력 모드에서만 사용할 수 있습니다.')
+      return
+    }
+    const partnerName = currentTab.value.selectedDestination || '일반 출고처'
+    const handlerName = currentTab.value.selectedManager || authStore.user?.member_name || '관리자'
+    try {
+      const res = await wmsStore.reserveOutbound({
+        partnerName,
+        handlerName,
+        cartItems: currentTab.value.cartItems
+      })
+      alert(`[예약 완료] ${currentTab.value.title}\n${res.count}건이 pending_orders에 등록되었습니다.`)
+      currentTab.value.cartItems = []
+    } catch (err) {
+      alert(`예약 실패: ${err.message}`)
+    }
+    return
+  }
 
-  const handlerName = currentTab.value.selectedManager || authStore.user?.member_name || '관리자';
+  const mode = transactionMode.value
+  const isInbound = mode === 'inbound'
+  const isMove = mode === 'move'
+  const partnerName = isInbound
+    ? (currentTab.value.selectedSupplier || '일반 입고처')
+    : (currentTab.value.selectedDestination || (isMove ? '이동 도착지점' : '일반 출고처'))
+
+  const handlerName = currentTab.value.selectedManager || authStore.user?.member_name || '관리자'
+  const destCode = (!isInbound && partnerName) ? resolveBranchCode(partnerName) : null
+
+  if (isMove && !destCode) {
+    alert('재고 이동은 도착 지점을 선택해야 합니다.')
+    return
+  }
 
   try {
     const res = await wmsStore.submitTransaction({
-      transactionType: isOutbound ? 'OUTBOUND' : 'INBOUND',
+      transactionType: isMove ? 'MOVE' : (isInbound ? 'INBOUND' : 'OUTBOUND'),
       warehouseCode: 'MAIN',
-      partnerName: partnerName,
-      handlerName: handlerName,
-      cartItems: currentTab.value.cartItems
+      partnerName,
+      handlerName,
+      cartItems: currentTab.value.cartItems,
+      targetWarehouse: isMove ? destCode : undefined
     })
 
-    alert(`🎉 [${isOutbound ? '출고' : '입고'} 완료] ${currentTab.value.title} 전표 처리가 완료되었습니다!\n실재고가 Supabase에 즉각 반영되었습니다.`);
-    currentTab.value.cartItems = [];
+    const doneType = res?.txType || (isMove ? 'MOVE' : (isInbound ? 'INBOUND' : 'OUTBOUND'))
+    const label = doneType === 'MOVE' ? '이동' : (isInbound ? '입고' : '출고')
+    alert(`[${label} 완료] ${currentTab.value.title}\n전표: ${res?.invoiceNo || '-'}`)
+    currentTab.value.cartItems = []
   } catch (err) {
-    alert(`❌ 처리 실패: ${err.message}`);
+    alert(`❌ 처리 실패: ${err.message}`)
   }
 }
 </script>
@@ -585,20 +1081,63 @@ const triggerAction = async (actionType) => {
 /* 📍 탭 바 및 X 닫기 버튼 전용 인테리어 서식 */
 .tabs-control-header { display: flex; justify-content: space-between; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; padding: 6px 10px 0 10px; }
 .tabs-control-header.inbound-mode { background: #fce7f3; border-bottom-color: #f9a8d4; }
+.tabs-control-header.move-mode { background: #e0f2fe; border-bottom-color: #7dd3fc; }
 .tabs-list { display: flex; gap: 4px; }
 .tab-wrapper-item { display: flex; align-items: center; gap: 6px; background: #e2e8f0; border: 1px solid #cbd5e1; border-bottom: none; padding: 8px 12px; border-radius: 6px 6px 0 0; font-size: 12.5px; font-weight: bold; cursor: pointer; color: #64748b; position: relative; }
 .tab-wrapper-item.inbound-mode { background: #fbcfe8; border-color: #f9a8d4; }
+.tab-wrapper-item.move-mode { background: #bae6fd; border-color: #7dd3fc; }
 .tab-wrapper-item.active { background: white; color: #00a896; border-color: #cbd5e1; border-bottom-color: white; margin-bottom: -1px; }
 .tab-wrapper-item.inbound-mode.active { background: #fff1f2; color: #db2777; border-color: #f9a8d4; border-bottom-color: #fff1f2; }
+.tab-wrapper-item.move-mode.active { background: #f0f9ff; color: #0369a1; border-color: #7dd3fc; border-bottom-color: #f0f9ff; }
 .tab-title-text { cursor: pointer; }
 .tab-close-x-btn { background: none; border: none; font-size: 14px; font-weight: bold; color: #94a3b8; cursor: pointer; padding: 0 2px; line-height: 1; border-radius: 50%; }
 .tab-close-x-btn:hover { background: #ef4444; color: white; }
 .tabs-header-actions { display: flex; align-items: center; gap: 10px; padding-bottom: 6px; }
 .transaction-mode-label { font-size: 13px; font-weight: bold; color: #00a896; white-space: nowrap; }
 .inbound-mode .transaction-mode-label { color: #db2777; }
+.move-mode .transaction-mode-label { color: #0369a1; }
 .add-tab-action-btn { background: none; border: none; color: #00a896; font-weight: bold; cursor: pointer; font-size: 13px; }
 .inbound-mode .add-tab-action-btn { color: #db2777; }
+.move-mode .add-tab-action-btn { color: #0369a1; }
 .workspace-right.inbound-mode { background: #fff1f2; border-color: #f9a8d4; }
+.workspace-right.move-mode { background: #f0f9ff; border-color: #7dd3fc; }
+
+.master-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 24px 32px;
+  background: #f4f6f9;
+}
+.master-panel-header h2 { margin: 0 0 4px; font-size: 20px; color: #1e293b; }
+.master-panel-header p { margin: 0 0 16px; font-size: 13px; color: #64748b; }
+.master-table-wrap { background: white; border-radius: 8px; border: 1px solid #e2e8f0; overflow: auto; }
+.master-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.master-table th, .master-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; }
+.master-table th { background: #f8fafc; color: #475569; font-size: 12px; }
+.master-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.stat-card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+.stat-card span { display: block; font-size: 12px; color: #64748b; }
+.stat-card strong { display: block; margin-top: 6px; font-size: 22px; color: #0f172a; }
+.master-cta { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; }
+.master-link-btn { display: inline-block; margin-top: 8px; padding: 8px 14px; background: #0ea5e9; color: white; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: bold; }
+.master-add-form { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; align-items: center; }
+.master-add-form input, .master-add-form select { padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; }
+.master-add-form button { padding: 8px 12px; background: #0ea5e9; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+.master-check { font-size: 12px; color: #475569; display: flex; gap: 4px; align-items: center; }
+.row-mini { margin-right: 4px; padding: 4px 8px; border: none; border-radius: 4px; background: #0ea5e9; color: white; font-size: 12px; cursor: pointer; }
+.row-mini.ghost { background: #e2e8f0; color: #334155; }
+.settings-panel { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.settings-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.settings-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #475569; }
+.settings-form input[type="text"], .settings-form input[type="number"] { padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; }
+.settings-form button { grid-column: 1 / -1; justify-self: start; padding: 8px 14px; background: #0ea5e9; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+.settings-wh { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; border: 1px solid #e2e8f0; padding: 8px; }
+.search-edit-native { background: transparent; }
+.report-panel { display: flex; flex-direction: column; gap: 16px; }
+.report-sub { margin: 8px 0 0; font-size: 14px; color: #334155; }
+.search-edit-frame-wrap { flex: 1; min-height: 0; background: white; border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; }
+.search-edit-frame { width: 100%; height: calc(100vh - 160px); border: 0; }
 
 .tab-body-content { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
 
@@ -625,7 +1164,7 @@ const triggerAction = async (actionType) => {
 
 /* 📍 우측 하단: 상자 및 낱개 2분할 서머리 레이블 전용 디자인 */
 .right-footer-action-zone { border-top: 2px solid #e2e8f0; padding: 15px; background: #f8fafc; display: flex; flex-direction: column; gap: 12px; }
-.truck-counter-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.truck-counter-info-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 .summary-label-box { background: white; border: 1px solid #cbd5e1; padding: 10px; border-radius: 6px; font-size: 13px; font-weight: bold; color: #334155; box-shadow: 0 1px 2px rgba(0,0,0,0.02); }
 .summary-label-box strong { font-size: 15px; color: #00a896; margin-left: 4px; }
 

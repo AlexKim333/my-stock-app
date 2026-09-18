@@ -3178,6 +3178,9 @@ function callServer(fnName, args, opt) {
   if (mode === 'block' && _serverCallTokens[key] != null) {
     console.warn(`[callServer] '${key}' 진행 중 — 중복 요청 무시`);
     if (typeof o.onBusy === 'function') o.onBusy();
+    else if (typeof o.onError === 'function') {
+      o.onError(new Error('이전 요청이 아직 처리 중입니다. 중복 제출을 막기 위해 잠시 기다려 주세요.'));
+    }
     return false;
   }
 
@@ -3186,15 +3189,34 @@ function callServer(fnName, args, opt) {
 
   let timer = null;
   let settled = false;
+  let timedOut = false;
 
-  const finish = (ok, payload) => {
-    // 타임아웃과 실제 응답이 경쟁하는 경우 먼저 도착한 쪽만 처리한다.
-    if (settled) return;
+  const finish = (ok, payload, isTimeout) => {
     // 취소되거나 더 새로운 호출에 추월된 응답은 폐기한다.
-    if (_serverCallTokens[key] !== token) return;
+    if (_serverCallTokens[key] !== token && !timedOut) return;
+
+    // 타임아웃 이후 실제 응답: 토큰만 해제하고 재시도 이중 커밋을 막는다.
+    if (timedOut && !isTimeout) {
+      delete _serverCallTokens[key];
+      if (ok) {
+        console.warn(`[callServer] ${fnName} 타임아웃 이후 성공 — 이미 커밋됐을 수 있으니 재시도하지 마세요.`);
+        if (typeof o.onLateSuccess === 'function') o.onLateSuccess(payload);
+      } else {
+        console.warn(`[callServer] ${fnName} 타임아웃 이후 실패:`, payload);
+      }
+      return;
+    }
+
+    if (settled) return;
     settled = true;
-    delete _serverCallTokens[key];
     if (timer) { clearTimeout(timer); timer = null; }
+
+    if (isTimeout) {
+      timedOut = true;
+    } else {
+      delete _serverCallTokens[key];
+    }
+
     try {
       if (ok) {
         if (typeof o.onSuccess === 'function') o.onSuccess(payload);
@@ -3211,7 +3233,7 @@ function callServer(fnName, args, opt) {
 
   if (timeout > 0) {
     timer = setTimeout(
-      () => finish(false, new Error(`서버 응답 시간 초과 (${Math.round(timeout / 1000)}초): ${fnName}`)),
+      () => finish(false, new Error(`서버 응답 시간 초과 (${Math.round(timeout / 1000)}초): ${fnName}`), true),
       timeout
     );
   }
@@ -12736,7 +12758,7 @@ if (document.readyState === 'loading') {
       </div>
       <div style="margin-bottom:18px; text-align:left;">
         <label style="display:block; font-size:8.5pt; font-weight:700; color:#334155; margin-bottom:4px;">비밀번호 (PIN)</label>
-        <input type="password" id="wmsAuthPin" placeholder="기본 비밀번호 입력" style="width:100%; padding:9px 12px; font-size:10pt; border:1px solid #cbd5e1; border-radius:8px; outline:none; box-sizing:border-box;">
+        <input type="password" id="wmsAuthPin" placeholder="비밀번호 입력" style="width:100%; padding:9px 12px; font-size:10pt; border:1px solid #cbd5e1; border-radius:8px; outline:none; box-sizing:border-box;">
         <div style="font-size:7.5pt; color:#94a3b8; margin-top:4px;">(기본 관리자: admin / admin 또는 1234)</div>
       </div>
       <button type="button" id="btnWmsLoginSubmit" onclick="submitWmsLogin()" style="width:100%; padding:11px; font-size:11pt; font-weight:700; color:#ffffff; background:#2563eb; border:none; border-radius:8px; cursor:pointer; transition:background 0.2s;">입장하기</button>
@@ -12781,28 +12803,61 @@ if (document.readyState === 'loading') {
     /* ==========================================================================
        2. WMS 작업자 인증 및 로그인 세션 (Worker Authentication)
        ========================================================================== */
+    function readWmsAuthSession() {
+      try {
+        const raw = localStorage.getItem('wms_auth_user');
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && parsed.session_token && (parsed.member_name || parsed.id)) {
+          return parsed;
+        }
+      } catch (_) {}
+      return null;
+    }
+
+    function persistWmsAuthSession(payload) {
+      localStorage.setItem('wms_auth_user', JSON.stringify(payload));
+    }
+
+    function clearWmsAuthSession() {
+      localStorage.removeItem('wms_auth_user');
+    }
+
     async function initWmsAuth() {
       try {
         const adminSelect = document.getElementById('adminSelect');
         const authUserSelect = document.getElementById('wmsAuthUser');
-        const savedUser = localStorage.getItem('wms_auth_user');
+        const saved = readWmsAuthSession();
+        const savedName = saved?.member_name || '';
 
         if (typeof google !== 'undefined' && google.script && google.script.run) {
           google.script.run.withSuccessHandler(admins => {
             if (admins && authUserSelect) {
               authUserSelect.innerHTML = admins.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');
-              if (savedUser && admins.includes(savedUser)) {
-                authUserSelect.value = savedUser;
+              if (savedName && admins.includes(savedName)) {
+                authUserSelect.value = savedName;
               }
             }
           }).getAdminList();
         }
 
         const modal = document.getElementById('wmsAuthModal');
-        if (!savedUser) {
+        if (!saved) {
           if (modal) modal.style.display = 'flex';
-        } else {
-          if (adminSelect) adminSelect.value = savedUser;
+          return;
+        }
+
+        if (adminSelect) adminSelect.value = savedName;
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run.withSuccessHandler(info => {
+            if (!info?.success || !info.user) {
+              clearWmsAuthSession();
+              if (modal) modal.style.display = 'flex';
+            }
+          }).withFailureHandler(() => {
+            clearWmsAuthSession();
+            if (modal) modal.style.display = 'flex';
+          }).sessionInfo();
         }
       } catch (err) {
         console.warn('initWmsAuth warning:', err);
@@ -12818,24 +12873,47 @@ if (document.readyState === 'loading') {
         if (errEl) { errEl.textContent = '작업자를 선택하세요.'; errEl.style.display = 'block'; }
         return;
       }
+      if (!pin) {
+        if (errEl) { errEl.textContent = '비밀번호를 입력하세요.'; errEl.style.display = 'block'; }
+        return;
+      }
+      if (!(typeof google !== 'undefined' && google.script && google.script.run)) {
+        if (errEl) { errEl.textContent = '로그인 서비스를 아직 준비 중입니다.'; errEl.style.display = 'block'; }
+        return;
+      }
 
-      if (pin === 'admin' || pin === '1234' || pin === 'admin123' || !pin || pin.length >= 3) {
-        localStorage.setItem('wms_auth_user', user);
+      if (errEl) errEl.style.display = 'none';
+      google.script.run.withSuccessHandler(result => {
+        if (!result?.success || !result.user || !result.session_token) {
+          if (errEl) { errEl.textContent = '아이디 또는 비밀번호가 올바르지 않습니다.'; errEl.style.display = 'block'; }
+          return;
+        }
+        persistWmsAuthSession({
+          id: result.user.id,
+          member_name: result.user.member_name,
+          branch_name: result.user.branch_name,
+          access_level: result.user.access_level,
+          preferred_language: result.user.preferred_language,
+          session_token: result.session_token
+        });
         const adminSelect = document.getElementById('adminSelect');
-        if (adminSelect) adminSelect.value = user;
+        if (adminSelect) adminSelect.value = result.user.member_name || user;
         const modal = document.getElementById('wmsAuthModal');
         if (modal) modal.style.display = 'none';
         if (typeof showAppToast === 'function') {
-          showAppToast(`👋 ${user}님 환영합니다!`, 2500);
+          showAppToast(`👋 ${result.user.member_name || user}님 환영합니다!`, 2500);
         }
-      } else {
-        if (errEl) { errEl.textContent = '비밀번호가 올바르지 않습니다.'; errEl.style.display = 'block'; }
-      }
+      }).withFailureHandler(err => {
+        if (errEl) { errEl.textContent = err?.message || '로그인 실패'; errEl.style.display = 'block'; }
+      }).login(user, pin);
     }
 
     function handleWmsLogout() {
       if (confirm('현재 작업자 계정에서 로그아웃하시겠습니까?')) {
-        localStorage.removeItem('wms_auth_user');
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run.withFailureHandler(() => {}).logout();
+        }
+        clearWmsAuthSession();
         const modal = document.getElementById('wmsAuthModal');
         if (modal) modal.style.display = 'flex';
       }

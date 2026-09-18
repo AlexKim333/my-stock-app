@@ -683,6 +683,9 @@ function callServer(fnName, args, opt) {
   if (mode === 'block' && _serverCallTokens[key] != null) {
     console.warn(`[callServer] '${key}' 진행 중 — 중복 요청 무시`);
     if (typeof o.onBusy === 'function') o.onBusy();
+    else if (typeof o.onError === 'function') {
+      o.onError(new Error('이전 요청이 아직 처리 중입니다. 중복 제출을 막기 위해 잠시 기다려 주세요.'));
+    }
     return false;
   }
 
@@ -691,15 +694,34 @@ function callServer(fnName, args, opt) {
 
   let timer = null;
   let settled = false;
+  let timedOut = false;
 
-  const finish = (ok, payload) => {
-    // 타임아웃과 실제 응답이 경쟁하는 경우 먼저 도착한 쪽만 처리한다.
-    if (settled) return;
+  const finish = (ok, payload, isTimeout) => {
     // 취소되거나 더 새로운 호출에 추월된 응답은 폐기한다.
-    if (_serverCallTokens[key] !== token) return;
+    if (_serverCallTokens[key] !== token && !timedOut) return;
+
+    // 타임아웃 이후 실제 응답: 토큰만 해제하고 재시도 이중 커밋을 막는다.
+    if (timedOut && !isTimeout) {
+      delete _serverCallTokens[key];
+      if (ok) {
+        console.warn(`[callServer] ${fnName} 타임아웃 이후 성공 — 이미 커밋됐을 수 있으니 재시도하지 마세요.`);
+        if (typeof o.onLateSuccess === 'function') o.onLateSuccess(payload);
+      } else {
+        console.warn(`[callServer] ${fnName} 타임아웃 이후 실패:`, payload);
+      }
+      return;
+    }
+
+    if (settled) return;
     settled = true;
-    delete _serverCallTokens[key];
     if (timer) { clearTimeout(timer); timer = null; }
+
+    if (isTimeout) {
+      timedOut = true;
+    } else {
+      delete _serverCallTokens[key];
+    }
+
     try {
       if (ok) {
         if (typeof o.onSuccess === 'function') o.onSuccess(payload);
@@ -716,7 +738,7 @@ function callServer(fnName, args, opt) {
 
   if (timeout > 0) {
     timer = setTimeout(
-      () => finish(false, new Error(`서버 응답 시간 초과 (${Math.round(timeout / 1000)}초): ${fnName}`)),
+      () => finish(false, new Error(`서버 응답 시간 초과 (${Math.round(timeout / 1000)}초): ${fnName}`), true),
       timeout
     );
   }
