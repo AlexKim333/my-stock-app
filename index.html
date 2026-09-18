@@ -4904,29 +4904,50 @@ function getReservedQty(itemName, color, boxContent) {
 function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
   const normColor = (color || 'SURTIDO').trim().toLowerCase();
   const normBoxContent = Number(boxContent) || 0;
-  const targetClean = (itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
+  const trimmedName = (itemName || '').trim();
+  const targetClean = trimmedName.replace(/[\s_\-]/g, '').toLowerCase();
 
+  // 1순위: 품명 완전 일치(Exact Match) + 색상 일치 + 규격 일치
   let item = stockDataCache.find(it => {
-    const itClean = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
+    const itName = (it.name || '').trim();
     const itColor = (it.color || 'SURTIDO').trim().toLowerCase();
     const itBoxContent = Number(it.boxContent) || 0;
-    return (itClean === targetClean && itColor === normColor && (normBoxContent <= 0 || itBoxContent === normBoxContent)) ||
-           (itClean === targetClean && itColor === normColor);
+    return (itName === trimmedName && itColor === normColor && (normBoxContent <= 0 || itBoxContent === normBoxContent)) ||
+           (itName === trimmedName && itColor === normColor);
   });
 
-  // 🚨 [개선] 1순위: 품명+색상 일치 -> 2순위 Fallback: 마스터의 SURTIDO 재고 매칭
+  // 2순위: 품명 완전 일치 + SURTIDO fallback
   if (!item) {
     item = stockDataCache.find(it => {
-      const itClean = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
+      const itName = (it.name || '').trim();
       const itColor = (it.color || 'SURTIDO').trim().toLowerCase();
-      return itClean === targetClean && itColor === 'surtido';
+      return itName === trimmedName && itColor === 'surtido';
     });
   }
+
+  // 3순위: 정규화(공백/하이픈 제거) 일치 항목 중, 본사 재고(stockBox)가 많은 항목 우선 매칭
   if (!item) {
-    item = stockDataCache.find(it => {
+    const candidates = stockDataCache.filter(it => {
+      const itClean = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
+      const itColor = (it.color || 'SURTIDO').trim().toLowerCase();
+      return itClean === targetClean && (itColor === normColor || itColor === 'surtido');
+    });
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => (b.stockBox || 0) - (a.stockBox || 0));
+      item = candidates[0];
+    }
+  }
+
+  // 4순위: 이름만이라도 정규화 일치하는 항목 (재고 많은 순)
+  if (!item) {
+    const candidates = stockDataCache.filter(it => {
       const itClean = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
       return itClean === targetClean;
     });
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => (b.stockBox || 0) - (a.stockBox || 0));
+      item = candidates[0];
+    }
   }
 
   if (!item) {
@@ -5288,20 +5309,43 @@ function updateTable() {
 
   // ★ [성능 최적화] updateTable 호출마다 발생하던 O(records × stock × 3) 반복 연산을 O(stock) 1회 Map 생성 + O(1) 조회로 단축
   let stockExactMap = null;
+  let stockCleanMap = null;
   let stockSurtidoMap = null;
   let stockNameMap = null;
   if (stockDataCache && stockDataCache.length > 0) {
     stockExactMap = new Map();
+    stockCleanMap = new Map();
     stockSurtidoMap = new Map();
     stockNameMap = new Map();
     for (let i = 0; i < stockDataCache.length; i++) {
       const s = stockDataCache[i];
-      const sCleanName = (s.name || '').replace(/[\s_\-]/g, '').toLowerCase();
+      const sName = (s.name || '').trim();
+      const sCleanName = sName.replace(/[\s_\-]/g, '').toLowerCase();
       const sCleanColor = (s.color || 'SURTIDO').trim().toLowerCase();
-      const exactKey = sCleanName + '__' + sCleanColor;
-      if (!stockExactMap.has(exactKey)) stockExactMap.set(exactKey, s);
-      if (sCleanColor === 'surtido' && !stockSurtidoMap.has(sCleanName)) stockSurtidoMap.set(sCleanName, s);
-      if (!stockNameMap.has(sCleanName)) stockNameMap.set(sCleanName, s);
+
+      // 1) 정확한 품명 + 색상 일치 맵
+      const exactKey = sName + '__' + sCleanColor;
+      if (!stockExactMap.has(exactKey) || (s.stockBox || 0) > (stockExactMap.get(exactKey)?.stockBox || 0)) {
+        stockExactMap.set(exactKey, s);
+      }
+
+      // 2) 정규화 품명 + 색상 맵 (재고가 큰 품목 우선 유지)
+      const cleanKey = sCleanName + '__' + sCleanColor;
+      if (!stockCleanMap.has(cleanKey) || (s.stockBox || 0) > (stockCleanMap.get(cleanKey)?.stockBox || 0)) {
+        stockCleanMap.set(cleanKey, s);
+      }
+
+      // 3) SURTIDO fallback 맵 (재고 큰 품목 우선)
+      if (sCleanColor === 'surtido') {
+        if (!stockSurtidoMap.has(sCleanName) || (s.stockBox || 0) > (stockSurtidoMap.get(sCleanName)?.stockBox || 0)) {
+          stockSurtidoMap.set(sCleanName, s);
+        }
+      }
+
+      // 4) 품명 맵 (재고 큰 품목 우선)
+      if (!stockNameMap.has(sCleanName) || (s.stockBox || 0) > (stockNameMap.get(sCleanName)?.stockBox || 0)) {
+        stockNameMap.set(sCleanName, s);
+      }
     }
   }
 
@@ -5385,10 +5429,12 @@ function updateTable() {
       let stockDisplay = '';
 
       if (stockExactMap) {
-        const recCleanName = (rec.itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
+        const recRawName = (rec.itemName || '').trim();
+        const recCleanName = recRawName.replace(/[\s_\-]/g, '').toLowerCase();
         const recCleanColor = (rec.color || 'SURTIDO').trim().toLowerCase();
-        // 1순위: 품명+색상 일치 -> 2순위 Fallback: 마스터의 SURTIDO 재고 -> 3순위: 품명 일치
-        const sInfo = stockExactMap.get(recCleanName + '__' + recCleanColor)
+        // 1순위: 품명 정확 일치 -> 2순위: 정규화 일치(재고 우선) -> 3순위: SURTIDO fallback -> 4순위: 품명 일치
+        const sInfo = stockExactMap.get(recRawName + '__' + recCleanColor)
+                   || (stockCleanMap && stockCleanMap.get(recCleanName + '__' + recCleanColor))
                    || stockSurtidoMap.get(recCleanName)
                    || stockNameMap.get(recCleanName)
                    || null;
@@ -6849,20 +6895,43 @@ function printWorkOrder() {
 
   // 1. 빠른 재고 조회를 위한 인덱스 Map 준비 (updateTable과 100% 동일 정밀 매칭)
   let stockExactMap = null;
+  let stockCleanMap = null;
   let stockSurtidoMap = null;
   let stockNameMap = null;
   if (stockDataCache && stockDataCache.length > 0) {
     stockExactMap = new Map();
+    stockCleanMap = new Map();
     stockSurtidoMap = new Map();
     stockNameMap = new Map();
     for (let i = 0; i < stockDataCache.length; i++) {
       const s = stockDataCache[i];
-      const sCleanName = (s.name || '').replace(/[\s_\-]/g, '').toLowerCase();
+      const sName = (s.name || '').trim();
+      const sCleanName = sName.replace(/[\s_\-]/g, '').toLowerCase();
       const sCleanColor = (s.color || 'SURTIDO').trim().toLowerCase();
-      const exactKey = sCleanName + '__' + sCleanColor;
-      if (!stockExactMap.has(exactKey)) stockExactMap.set(exactKey, s);
-      if (sCleanColor === 'surtido' && !stockSurtidoMap.has(sCleanName)) stockSurtidoMap.set(sCleanName, s);
-      if (!stockNameMap.has(sCleanName)) stockNameMap.set(sCleanName, s);
+
+      // 1) 정확한 품명 + 색상 일치 맵
+      const exactKey = sName + '__' + sCleanColor;
+      if (!stockExactMap.has(exactKey) || (s.stockBox || 0) > (stockExactMap.get(exactKey)?.stockBox || 0)) {
+        stockExactMap.set(exactKey, s);
+      }
+
+      // 2) 정규화 품명 + 색상 맵 (재고가 큰 품목 우선 유지)
+      const cleanKey = sCleanName + '__' + sCleanColor;
+      if (!stockCleanMap.has(cleanKey) || (s.stockBox || 0) > (stockCleanMap.get(cleanKey)?.stockBox || 0)) {
+        stockCleanMap.set(cleanKey, s);
+      }
+
+      // 3) SURTIDO fallback 맵 (재고 큰 품목 우선)
+      if (sCleanColor === 'surtido') {
+        if (!stockSurtidoMap.has(sCleanName) || (s.stockBox || 0) > (stockSurtidoMap.get(sCleanName)?.stockBox || 0)) {
+          stockSurtidoMap.set(sCleanName, s);
+        }
+      }
+
+      // 4) 품명 맵 (재고 큰 품목 우선)
+      if (!stockNameMap.has(sCleanName) || (s.stockBox || 0) > (stockNameMap.get(sCleanName)?.stockBox || 0)) {
+        stockNameMap.set(sCleanName, s);
+      }
     }
   }
 
@@ -6881,9 +6950,11 @@ function printWorkOrder() {
     let curBox = 0;
     let curIndiv = 0;
     if (stockExactMap) {
-      const recCleanName = (rec.itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
+      const recRawName = (rec.itemName || '').trim();
+      const recCleanName = recRawName.replace(/[\s_\-]/g, '').toLowerCase();
       const recCleanColor = (rec.color || 'SURTIDO').trim().toLowerCase();
-      const sInfo = stockExactMap.get(recCleanName + '__' + recCleanColor)
+      const sInfo = stockExactMap.get(recRawName + '__' + recCleanColor)
+                 || (stockCleanMap && stockCleanMap.get(recCleanName + '__' + recCleanColor))
                  || stockSurtidoMap.get(recCleanName)
                  || stockNameMap.get(recCleanName)
                  || null;
