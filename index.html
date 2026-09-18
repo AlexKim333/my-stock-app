@@ -590,12 +590,14 @@
       flex-direction: row;
       gap: 14px;
       height: 100%;
-      overflow: visible;
+      overflow: hidden;
       position: relative;
     }
     .input-section {
-      width: 300px;
-      flex: none;
+      width: 300px !important;
+      min-width: 300px !important;
+      max-width: 300px !important;
+      flex: 0 0 300px !important;
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -604,11 +606,11 @@
       z-index: 60;
     }
     .table-section {
-      flex: 1;
+      flex: 1 1 0% !important;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
-      min-width: 0;
+      overflow: hidden !important;
+      min-width: 0 !important;
       position: relative;
       z-index: 10;
     }
@@ -713,6 +715,7 @@
       white-space: nowrap;
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
+      max-width: 100%;
     }
     .action-buttons {
       display: flex;
@@ -868,8 +871,8 @@
     }
     #recordTable {
       width: 100%;
-      min-width: 440px;
-      table-layout: fixed;
+      min-width: 580px;
+      table-layout: fixed !important;
       border-collapse: collapse;
     }
     th {
@@ -888,21 +891,22 @@
     }
     td {
       font-size: 8.5pt;
-      padding: 4px 2px;
+      padding: 4px 3px;
       border: 1px solid #e2e8f0;
       text-align: center;
       white-space: nowrap;
+      vertical-align: middle;
     }
     tr:hover td {
       background-color: #f8fafc;
     }
-    #recordTable th:nth-child(1), #recordTable td:nth-child(1) { width: 28px; text-align: center; padding: 4px 1px; }
-    #recordTable th:nth-child(2), #recordTable td:nth-child(2) { width: 140px; text-align: left; padding: 4px 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #recordTable th:nth-child(3), #recordTable td:nth-child(3) { width: 58px; text-align: center; padding: 4px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #recordTable th:nth-child(4), #recordTable td:nth-child(4) { width: 52px; text-align: center; padding: 4px 2px; }
-    #recordTable th:nth-child(5), #recordTable td:nth-child(5) { width: 52px; text-align: center; padding: 4px 2px; }
-    #recordTable th:nth-child(6), #recordTable td:nth-child(6) { width: 58px; text-align: center; padding: 4px 2px; }
-    #recordTable th:nth-child(7), #recordTable td:nth-child(7) { width: 64px; text-align: center; padding: 4px 2px; }
+    #recordTable th:nth-child(1), #recordTable td:nth-child(1) { width: 34px !important; min-width: 34px !important; max-width: 34px !important; text-align: center; padding: 4px 1px; }
+    #recordTable th:nth-child(2), #recordTable td:nth-child(2) { width: auto !important; min-width: 180px !important; text-align: left; padding: 4px 6px; white-space: normal; word-break: break-all; }
+    #recordTable th:nth-child(3), #recordTable td:nth-child(3) { width: 75px !important; min-width: 65px !important; max-width: 90px !important; text-align: center; padding: 4px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #recordTable th:nth-child(4), #recordTable td:nth-child(4) { width: 62px !important; min-width: 55px !important; max-width: 75px !important; text-align: center; padding: 4px 2px; }
+    #recordTable th:nth-child(5), #recordTable td:nth-child(5) { width: 62px !important; min-width: 55px !important; max-width: 75px !important; text-align: center; padding: 4px 2px; }
+    #recordTable th:nth-child(6), #recordTable td:nth-child(6) { width: 68px !important; min-width: 60px !important; max-width: 80px !important; text-align: center; padding: 4px 2px; }
+    #recordTable th:nth-child(7), #recordTable td:nth-child(7) { width: 68px !important; min-width: 60px !important; max-width: 80px !important; text-align: center; padding: 4px 2px; }
     .modal {
       display: none;
       position: fixed;
@@ -2209,13 +2213,13 @@
           <div class="scrollable-table" id="scrollableTable">
             <table id="recordTable">
               <colgroup>
-                <col style="width: 28px;">
-                <col style="width: 140px;">
-                <col style="width: 58px;">
-                <col style="width: 52px;">
-                <col style="width: 52px;">
-                <col style="width: 58px;">
-                <col style="width: 64px;">
+                <col style="width: 34px;">
+                <col style="width: auto; min-width: 180px;">
+                <col style="width: 75px;">
+                <col style="width: 62px;">
+                <col style="width: 62px;">
+                <col style="width: 68px;">
+                <col style="width: 68px;">
               </colgroup>
               <thead id="tableHeader">
                 <tr>
@@ -5363,7 +5367,7 @@ function updateTable() {
               ? `재고부족(${curBox}상자)`
               : `재고부족(${shortPieces}개 부족)`;
             shortageBadge = `
-              <div style="margin-top: 2px; display: flex; align-items: center; gap: 4px;">
+              <div style="margin-top: 2px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; max-width: 100%;">
                 <span style="font-size: 7.2pt; background: #fee2e2; color: #b91c1c; padding: 1px 5px; border-radius: 3px; font-weight: 700;">${shortText}</span>
                 <button type="button" class="btn-quick-adj no-print" onclick="openQuickAdjustModal(${jsArg(rec.itemName || '')}, ${jsArg(rec.color || 'SURTIDO')}, ${rec.boxContent || 0}, ${curBox}, ${curIndiv}, ${reqBox || 1})" title="실재고 반영을 위한 퀵 재고조정">⚡ 퀵재고</button>
               </div>
@@ -5436,7 +5440,7 @@ function updateTable() {
             : `클릭 시 [${topSib.name}](으)로 즉시 교체합니다.`;
 
           siblingChipsHtml = `
-            <div class="sibling-chip-wrap no-print" style="margin-top: 3px; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; position: relative;">
+            <div class="sibling-chip-wrap no-print" style="margin-top: 3px; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; max-width: 100%; position: relative;">
               <button type="button" class="${chipCls}" onclick="swapRecordItemName(${idx}, '${escapeHtml(topSib.name)}')" title="${chipTitle}">
                 💡 [${topSib.name}] (${topSib.stockBox}상자) 교체
               </button>
