@@ -2849,9 +2849,29 @@
             <span>📉 안전재고 이하</span>
           </label>
         </div>
-        <div style="font-size: 8.5pt; color: #64748b; white-space: nowrap; flex-shrink: 0; display: flex; align-items: center; gap: 8px;">
+        <div style="font-size: 8.3pt; color: #64748b; white-space: nowrap; flex-shrink: 0; display: flex; align-items: center; gap: 6px;">
           <span id="subWhSortBadge" style="display: none; font-size: 7.5pt; background: #e0f2fe; color: #0284c7; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd; font-weight: 600; cursor: pointer;" onclick="resetSubWhSort()" title="클릭 시 정렬 초기화"></span>
-          <span>표시: <strong id="subWhFilteredCount" style="color: #0f766e; font-size: 9.5pt;">0</strong> / 전체 <span id="subWhTotalCount" style="font-weight: 600; color: #334155;">0</span>개</span>
+
+          <!-- 페이지당 개수 선택 -->
+          <select id="subWhPageSizeSelect" onchange="changeSubWhPageSize(this.value)" style="height: 26px; font-size: 8pt; padding: 0 4px; border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; color: #334155; cursor: pointer; font-weight: 600;" title="페이지당 표시 품목 수">
+            <option value="50">50개씩</option>
+            <option value="100" selected>100개씩</option>
+            <option value="200">200개씩</option>
+            <option value="all">전체보기</option>
+          </select>
+
+          <!-- 상단 페이지 이동 컨트롤 (◀ 1 / 3 ▶) -->
+          <div style="display: inline-flex; align-items: center; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 1px 3px; gap: 2px;">
+            <button type="button" id="btnSubWhPrevPage" onclick="changeSubWhPage(-1)" style="height: 22px; width: 24px; padding: 0; border: 1px solid #cbd5e1; background: #ffffff; border-radius: 3px; cursor: pointer; font-size: 7.5pt; font-weight: bold; color: #334155; display: flex; align-items: center; justify-content: center;" title="이전 페이지">◀</button>
+            <select id="subWhPageJump" onchange="goToSubWhPage(Number(this.value))" style="height: 22px; font-size: 8pt; border: none; background: transparent; font-weight: 700; color: #0f766e; cursor: pointer; padding: 0 2px;" title="페이지 바로 선택">
+              <option value="1">1 / 1</option>
+            </select>
+            <button type="button" id="btnSubWhNextPage" onclick="changeSubWhPage(1)" style="height: 22px; width: 24px; padding: 0; border: 1px solid #cbd5e1; background: #ffffff; border-radius: 3px; cursor: pointer; font-size: 7.5pt; font-weight: bold; color: #334155; display: flex; align-items: center; justify-content: center;" title="다음 페이지">▶</button>
+          </div>
+
+          <span style="font-size: 8.2pt; color: #475569;">
+            표시: <strong id="subWhFilteredCount" style="color: #0f766e; font-size: 9pt;">0</strong> / 전체 <span id="subWhTotalCount" style="font-weight: 600; color: #334155;">0</span>개
+          </span>
         </div>
       </div>
 
@@ -2879,6 +2899,17 @@
             <span id="subWhDraftBadge" style="background: #ffffff; color: #0f766e; border-radius: 10px; padding: 0 6px; font-size: 7.5pt; font-weight: 800;">0</span>
           </button>
         </div>
+        <!-- 하단 페이징 컨트롤 -->
+        <div id="subWhBottomPagination" style="display: flex; align-items: center; gap: 8px;">
+          <button type="button" id="btnSubWhPrevPageBottom" onclick="changeSubWhPage(-1)" style="height: 28px; padding: 0 10px; border: 1px solid #cbd5e1; background: #ffffff; border-radius: 4px; cursor: pointer; font-size: 8.2pt; font-weight: bold; color: #334155; display: flex; align-items: center; gap: 4px;" title="이전 페이지">
+            <span>◀</span> 이전 페이지
+          </button>
+          <span id="subWhBottomPageInfo" style="font-size: 8.5pt; font-weight: 700; color: #0f766e; min-width: 90px; text-align: center;">1 / 1 페이지</span>
+          <button type="button" id="btnSubWhNextPageBottom" onclick="changeSubWhPage(1)" style="height: 28px; padding: 0 10px; border: 1px solid #cbd5e1; background: #ffffff; border-radius: 4px; cursor: pointer; font-size: 8.2pt; font-weight: bold; color: #334155; display: flex; align-items: center; gap: 4px;" title="다음 페이지">
+            다음 페이지 <span>▶</span>
+          </button>
+        </div>
+
         <div>
           <button type="button" onclick="closeSubWarehouseMatrixModal()" style="padding: 6px 18px; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 5px; font-weight: 600; cursor: pointer; font-size: 8.5pt;">창 닫기</button>
         </div>
@@ -11152,6 +11183,8 @@ let subWhFilteredItems = [];
 let currentSubWhTarget = null; // { item, warehouse, availStock }
 let subWhSortColumn = null; // 'codigo' | 'mainStock' | 'inTransit' | 'effectiveStock' | warehouse name (e.g. 'PANTACO')
 let subWhSortAsc = false;   // boolean
+let subWhPageSize = 100;    // 50 | 100 | 200 | 'all'
+let subWhCurrentPage = 1;   // 1-indexed
 
 function openSubWarehouseMatrixModal() {
   const modal = document.getElementById('subWarehouseMatrixModal');
@@ -11250,7 +11283,7 @@ function onSubWhMatrixLoaded(data) {
   if (badge) badge.textContent = `동기화: ${data.updatedAt || '방금 전'}`;
 
   updateTruckGauges();
-  filterSubWarehouseTable();
+  filterSubWarehouseTable({ keepPage: true });
   refreshOpenSubWhQtyModal();
   warnOrderDraftsOverAvailability();
 }
@@ -11543,16 +11576,10 @@ function updateSubWhSortBadge() {
   badge.style.display = 'inline-block';
 }
 
-function filterSubWarehouseTable() {
-  if (!subWhMatrixData || !subWhMatrixData.items) return;
-
-  const query = (document.getElementById('subWhSearchInput') ? document.getElementById('subWhSearchInput').value : '').toLowerCase().trim();
-  const onlyNeeded = document.getElementById('chkOnlyNeeded') ? document.getElementById('chkOnlyNeeded').checked : false;
-  const onlyZeroEffective = document.getElementById('chkZeroEffectiveStock') ? document.getElementById('chkZeroEffectiveStock').checked : false;
-  const onlyBelowSafe = document.getElementById('chkBelowSafeStock') ? document.getElementById('chkBelowSafeStock').checked : false;
-  const onlyInStock = document.getElementById('chkOnlyInStock') ? document.getElementById('chkOnlyInStock').checked : false;
-
-  // 장바구니에서 담겨온 품목(records) 키 세트 구성
+/**
+ * 장바구니 품목 키 매핑 추출 헬퍼
+ */
+function getSubWhCartKeyMap() {
   const cartKeyMap = {};
   if (records && records.length > 0) {
     records.forEach(r => {
@@ -11561,7 +11588,137 @@ function filterSubWarehouseTable() {
       cartKeyMap[k] = needQty;
     });
   }
+  return cartKeyMap;
+}
 
+/**
+ * 페이지당 건수 변경 (50 / 100 / 200 / 'all')
+ */
+function changeSubWhPageSize(size) {
+  subWhPageSize = (size === 'all') ? 'all' : (parseInt(size, 10) || 100);
+  subWhCurrentPage = 1;
+  const sel = document.getElementById('subWhPageSizeSelect');
+  if (sel && sel.value !== String(size)) sel.value = String(size);
+  renderSubWhTable(subWhFilteredItems, getSubWhCartKeyMap());
+  const container = document.getElementById('subWhTableContainer');
+  if (container) container.scrollTop = 0;
+}
+window.changeSubWhPageSize = changeSubWhPageSize;
+
+/**
+ * 페이지 이전/다음 이동 (-1 또는 +1)
+ */
+function changeSubWhPage(delta) {
+  const totalItems = subWhFilteredItems ? subWhFilteredItems.length : 0;
+  if (totalItems <= 0 || subWhPageSize === 'all') return;
+  const size = parseInt(subWhPageSize, 10) || 100;
+  const totalPages = Math.max(1, Math.ceil(totalItems / size));
+  const newPage = Math.max(1, Math.min(totalPages, subWhCurrentPage + delta));
+  if (newPage === subWhCurrentPage) return;
+  subWhCurrentPage = newPage;
+  renderSubWhTable(subWhFilteredItems, getSubWhCartKeyMap());
+  const container = document.getElementById('subWhTableContainer');
+  if (container) container.scrollTop = 0;
+}
+window.changeSubWhPage = changeSubWhPage;
+
+/**
+ * 특정 페이지로 바로 이동
+ */
+function goToSubWhPage(page) {
+  const totalItems = subWhFilteredItems ? subWhFilteredItems.length : 0;
+  if (totalItems <= 0 || subWhPageSize === 'all') return;
+  const size = parseInt(subWhPageSize, 10) || 100;
+  const totalPages = Math.max(1, Math.ceil(totalItems / size));
+  const newPage = Math.max(1, Math.min(totalPages, parseInt(page, 10) || 1));
+  if (newPage === subWhCurrentPage) return;
+  subWhCurrentPage = newPage;
+  renderSubWhTable(subWhFilteredItems, getSubWhCartKeyMap());
+  const container = document.getElementById('subWhTableContainer');
+  if (container) container.scrollTop = 0;
+}
+window.goToSubWhPage = goToSubWhPage;
+
+/**
+ * 페이지네이션 UI 컨트롤 갱신 (상단 툴바 & 하단 액션바)
+ */
+function updateSubWhPaginationControls(totalFiltered, totalPages, currentPage, startIdx, endIdx) {
+  // 1) 상단 표시 건수
+  const countEl = document.getElementById('subWhFilteredCount');
+  if (countEl) {
+    if (totalFiltered === 0) {
+      countEl.textContent = '0';
+    } else if (subWhPageSize === 'all' || totalFiltered <= (parseInt(subWhPageSize, 10) || 100)) {
+      countEl.textContent = `${totalFiltered}`;
+    } else {
+      countEl.textContent = `${startIdx + 1}~${endIdx} / ${totalFiltered}`;
+    }
+  }
+
+  const totalEl = document.getElementById('subWhTotalCount');
+  if (totalEl) totalEl.textContent = subWhMatrixData && subWhMatrixData.items ? subWhMatrixData.items.length : 0;
+
+  // 2) 상단 페이지 셀렉트
+  const pageJump = document.getElementById('subWhPageJump');
+  if (pageJump) {
+    let optsHtml = '';
+    for (let p = 1; p <= totalPages; p++) {
+      optsHtml += `<option value="${p}" ${p === currentPage ? 'selected' : ''}>${p} / ${totalPages} 페이지</option>`;
+    }
+    pageJump.innerHTML = optsHtml || '<option value="1">1 / 1</option>';
+    pageJump.disabled = (totalPages <= 1);
+  }
+
+  const prevBtn = document.getElementById('btnSubWhPrevPage');
+  const nextBtn = document.getElementById('btnSubWhNextPage');
+  if (prevBtn) {
+    const isFirst = (currentPage <= 1 || totalFiltered === 0);
+    prevBtn.disabled = isFirst;
+    prevBtn.style.opacity = isFirst ? '0.35' : '1';
+    prevBtn.style.cursor = isFirst ? 'not-allowed' : 'pointer';
+  }
+  if (nextBtn) {
+    const isLast = (currentPage >= totalPages || totalFiltered === 0);
+    nextBtn.disabled = isLast;
+    nextBtn.style.opacity = isLast ? '0.35' : '1';
+    nextBtn.style.cursor = isLast ? 'not-allowed' : 'pointer';
+  }
+
+  // 3) 하단 페이지 네비게이션
+  const bottomInfo = document.getElementById('subWhBottomPageInfo');
+  if (bottomInfo) {
+    bottomInfo.textContent = `${currentPage} / ${totalPages} 페이지 (${totalFiltered}개)`;
+  }
+  const prevBottomBtn = document.getElementById('btnSubWhPrevPageBottom');
+  const nextBottomBtn = document.getElementById('btnSubWhNextPageBottom');
+  if (prevBottomBtn) {
+    const isFirst = (currentPage <= 1 || totalFiltered === 0);
+    prevBottomBtn.disabled = isFirst;
+    prevBottomBtn.style.opacity = isFirst ? '0.35' : '1';
+    prevBottomBtn.style.cursor = isFirst ? 'not-allowed' : 'pointer';
+  }
+  if (nextBottomBtn) {
+    const isLast = (currentPage >= totalPages || totalFiltered === 0);
+    nextBottomBtn.disabled = isLast;
+    nextBottomBtn.style.opacity = isLast ? '0.35' : '1';
+    nextBottomBtn.style.cursor = isLast ? 'not-allowed' : 'pointer';
+  }
+}
+
+function filterSubWarehouseTable(options) {
+  if (!subWhMatrixData || !subWhMatrixData.items) return;
+
+  if (!options || !options.keepPage) {
+    subWhCurrentPage = 1;
+  }
+
+  const query = (document.getElementById('subWhSearchInput') ? document.getElementById('subWhSearchInput').value : '').toLowerCase().trim();
+  const onlyNeeded = document.getElementById('chkOnlyNeeded') ? document.getElementById('chkOnlyNeeded').checked : false;
+  const onlyZeroEffective = document.getElementById('chkZeroEffectiveStock') ? document.getElementById('chkZeroEffectiveStock').checked : false;
+  const onlyBelowSafe = document.getElementById('chkBelowSafeStock') ? document.getElementById('chkBelowSafeStock').checked : false;
+  const onlyInStock = document.getElementById('chkOnlyInStock') ? document.getElementById('chkOnlyInStock').checked : false;
+
+  const cartKeyMap = getSubWhCartKeyMap();
   const neededCountEl = document.getElementById('neededItemsCount');
   if (neededCountEl) neededCountEl.textContent = Object.keys(cartKeyMap).length;
 
@@ -11627,12 +11784,6 @@ function filterSubWarehouseTable() {
     // 사용자가 별도 컬럼 정렬을 누르지 않았을 때는 검색어 스마트 랭킹 적용
     subWhFilteredItems = WmsSearchEngine.rankMatches(subWhFilteredItems, query);
   }
-
-  const countEl = document.getElementById('subWhFilteredCount');
-  if (countEl) countEl.textContent = subWhFilteredItems.length;
-
-  const totalEl = document.getElementById('subWhTotalCount');
-  if (totalEl) totalEl.textContent = subWhMatrixData.items ? subWhMatrixData.items.length : 0;
 
   updateSubWhSortBadge();
   renderSubWhTable(subWhFilteredItems, cartKeyMap);
@@ -11718,6 +11869,31 @@ function renderSubWhTable(items, cartKeyMap) {
     </tr>
   `;
 
+  // 페이지네이션 계산
+  const totalFiltered = items.length;
+  let totalPages = 1;
+  let startIdx = 0;
+  let endIdx = totalFiltered;
+  let pageItems = items;
+
+  if (subWhPageSize !== 'all' && totalFiltered > 0) {
+    const size = parseInt(subWhPageSize, 10) || 100;
+    totalPages = Math.max(1, Math.ceil(totalFiltered / size));
+    if (subWhCurrentPage > totalPages) subWhCurrentPage = totalPages;
+    if (subWhCurrentPage < 1) subWhCurrentPage = 1;
+    startIdx = (subWhCurrentPage - 1) * size;
+    endIdx = Math.min(startIdx + size, totalFiltered);
+    pageItems = items.slice(startIdx, endIdx);
+  } else {
+    subWhCurrentPage = 1;
+    totalPages = 1;
+    startIdx = 0;
+    endIdx = totalFiltered;
+    pageItems = items;
+  }
+
+  updateSubWhPaginationControls(totalFiltered, totalPages, subWhCurrentPage, startIdx, endIdx);
+
   if (!items.length) {
     const onlyInStock = document.getElementById('chkOnlyInStock') ? document.getElementById('chkOnlyInStock').checked : false;
     const totalCount = subWhMatrixData && subWhMatrixData.items ? subWhMatrixData.items.length : 0;
@@ -11744,14 +11920,15 @@ function renderSubWhTable(items, cartKeyMap) {
   });
 
   let html = '';
-  items.forEach((item, itemIdx) => {
+  pageItems.forEach((item, pageIdx) => {
+    const globalIdx = startIdx + pageIdx; // subWhFilteredItems 내 절대 인덱스 (셀 클릭 대응)
     const itemKey = `${item.codigo}___${item.color}`.toUpperCase();
     const neededQty = cartKeyMap ? cartKeyMap[itemKey] : null;
     const isNeeded = neededQty !== undefined && neededQty !== null;
 
     // 행 배경색: 장바구니 품목은 골드 하이라이트
-    const rowBg = isNeeded ? '#fef3c7' : (itemIdx % 2 === 0 ? '#ffffff' : '#f8fafc');
-    const stickyBg = isNeeded ? '#fef3c7' : (itemIdx % 2 === 0 ? '#ffffff' : '#f8fafc');
+    const rowBg = isNeeded ? '#fef3c7' : (pageIdx % 2 === 0 ? '#ffffff' : '#f8fafc');
+    const stickyBg = isNeeded ? '#fef3c7' : (pageIdx % 2 === 0 ? '#ffffff' : '#f8fafc');
 
     html += `<tr style="background: ${rowBg}; border-bottom: 1px solid #e2e8f0;">`;
 
@@ -11805,7 +11982,7 @@ function renderSubWhTable(items, cartKeyMap) {
         const titleText = `${escapeHtml(wh)} 창고: 가용재고 ${availStock}상자${committed > 0 ? ` (실보유 ${grossStock}상자 - 발주진행 ${committed}상자)` : ''}`;
         html += `
           <td style="padding: 3px 4px; text-align: center; border-right: 1px solid #e2e8f0;">
-            <button type="button" onclick="onSubWhCellClick(${itemIdx}, '${escapeHtml(wh)}', ${availStock})" style="width: 100%; min-height: 28px; padding: 3px 2px; background: ${draftedQty > 0 ? '#dbeafe' : '#ccfbf1'}; border: 1.5px solid ${draftedQty > 0 ? '#3b82f6' : '#2dd4bf'}; border-radius: 4px; font-weight: 800; color: ${draftedQty > 0 ? '#1d4ed8' : '#0f766e'}; cursor: pointer; font-size: 8.3pt; transition: all 0.15s ease;" title="${titleText}">
+            <button type="button" onclick="onSubWhCellClick(${globalIdx}, '${escapeHtml(wh)}', ${availStock})" style="width: 100%; min-height: 28px; padding: 3px 2px; background: ${draftedQty > 0 ? '#dbeafe' : '#ccfbf1'}; border: 1.5px solid ${draftedQty > 0 ? '#3b82f6' : '#2dd4bf'}; border-radius: 4px; font-weight: 800; color: ${draftedQty > 0 ? '#1d4ed8' : '#0f766e'}; cursor: pointer; font-size: 8.3pt; transition: all 0.15s ease;" title="${titleText}">
               ${availStock}
               ${committed > 0 ? `<div style="font-size: 6.8pt; color: #c2410c; font-weight: 700; margin-top: 1px; line-height: 1;">주문중:${committed}</div>` : ''}
               ${draftedQty > 0 ? `<div style="font-size: 7pt; color: #1e40af; font-weight: 900; margin-top: 1px; line-height: 1;">담김:${draftedQty}</div>` : ''}
