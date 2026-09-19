@@ -2849,8 +2849,9 @@
             <span>📉 안전재고 이하</span>
           </label>
         </div>
-        <div style="font-size: 8.5pt; color: #64748b; white-space: nowrap; flex-shrink: 0;">
-          표시: <strong id="subWhFilteredCount" style="color: #0f766e; font-size: 9.5pt;">0</strong> / 전체 <span id="subWhTotalCount" style="font-weight: 600; color: #334155;">0</span>개
+        <div style="font-size: 8.5pt; color: #64748b; white-space: nowrap; flex-shrink: 0; display: flex; align-items: center; gap: 8px;">
+          <span id="subWhSortBadge" style="display: none; font-size: 7.5pt; background: #e0f2fe; color: #0284c7; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd; font-weight: 600; cursor: pointer;" onclick="resetSubWhSort()" title="클릭 시 정렬 초기화"></span>
+          <span>표시: <strong id="subWhFilteredCount" style="color: #0f766e; font-size: 9.5pt;">0</strong> / 전체 <span id="subWhTotalCount" style="font-weight: 600; color: #334155;">0</span>개</span>
         </div>
       </div>
 
@@ -11149,6 +11150,8 @@ function submitOrderDraftToPending() {
 let subWhMatrixData = null;
 let subWhFilteredItems = [];
 let currentSubWhTarget = null; // { item, warehouse, availStock }
+let subWhSortColumn = null; // 'codigo' | 'mainStock' | 'inTransit' | 'effectiveStock' | warehouse name (e.g. 'PANTACO')
+let subWhSortAsc = false;   // boolean
 
 function openSubWarehouseMatrixModal() {
   const modal = document.getElementById('subWarehouseMatrixModal');
@@ -11477,6 +11480,69 @@ function onSubWhSearchInput() {
   subWhDebounceTimeout = setTimeout(filterSubWarehouseTable, 50); // ⚡ 50ms 초고속 반응
 }
 
+/**
+ * 서브창고 매트릭스 컬럼 정렬 토글
+ * - 동일 컬럼 클릭 시: 오름차순 <-> 내림차순 <-> 정렬 해제 순환 토글
+ * - 다른 컬럼 클릭 시: 품명은 오름차순(A-Z), 수량 컬럼은 내림차순(많은순) 기본 적용
+ */
+function toggleSubWhSort(colKey) {
+  if (subWhSortColumn === colKey) {
+    if (colKey === 'codigo') {
+      if (subWhSortAsc) {
+        subWhSortAsc = false; // 2차: 내림차순 (Z-A)
+      } else {
+        subWhSortColumn = null; // 3차: 정렬 해제
+        subWhSortAsc = false;
+      }
+    } else {
+      if (!subWhSortAsc) {
+        subWhSortAsc = true; // 2차: 적은순 (오름차순)
+      } else {
+        subWhSortColumn = null; // 3차: 정렬 해제
+        subWhSortAsc = false;
+      }
+    }
+  } else {
+    subWhSortColumn = colKey;
+    subWhSortAsc = (colKey === 'codigo'); // 품명은 ASC, 수량은 DESC부터
+  }
+  filterSubWarehouseTable();
+}
+window.toggleSubWhSort = toggleSubWhSort;
+
+/**
+ * 정렬 상태 초기화
+ */
+function resetSubWhSort() {
+  subWhSortColumn = null;
+  subWhSortAsc = false;
+  filterSubWarehouseTable();
+}
+window.resetSubWhSort = resetSubWhSort;
+
+/**
+ * 상단 툴바 정렬 배지 텍스트 갱신
+ */
+function updateSubWhSortBadge() {
+  const badge = document.getElementById('subWhSortBadge');
+  if (!badge) return;
+  if (!subWhSortColumn) {
+    badge.style.display = 'none';
+    return;
+  }
+  let colName = subWhSortColumn;
+  if (colName === 'codigo') colName = '품명';
+  else if (colName === 'mainStock') colName = '메인실재고';
+  else if (colName === 'inTransit') colName = '이동중';
+  else if (colName === 'effectiveStock') colName = '유효재고';
+
+  const dirText = (subWhSortColumn === 'codigo')
+    ? (subWhSortAsc ? '오름차순 (A-Z)' : '내림차순 (Z-A)')
+    : (subWhSortAsc ? '적은순▲' : '많은순▼');
+  badge.innerHTML = `정렬: <strong>${escapeHtml(colName)}</strong> (${dirText}) <span style="font-size: 8pt; margin-left: 3px; opacity: 0.8;">✕</span>`;
+  badge.style.display = 'inline-block';
+}
+
 function filterSubWarehouseTable() {
   if (!subWhMatrixData || !subWhMatrixData.items) return;
 
@@ -11516,8 +11582,49 @@ function filterSubWarehouseTable() {
     return true;
   });
 
-  // 🚀 스마트 랭킹 적용: 검색어가 있으면 '60' 입력 시 P-D60이 P-160보다 최우선 정렬
-  if (query && typeof WmsSearchEngine !== 'undefined') {
+  // 🚀 정렬 로직 적용
+  if (subWhSortColumn) {
+    subWhFilteredItems.sort((a, b) => {
+      let valA, valB;
+      if (subWhSortColumn === 'codigo') {
+        valA = String(a.codigo || '').trim().toUpperCase();
+        valB = String(b.codigo || '').trim().toUpperCase();
+        const cmp = valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return subWhSortAsc ? cmp : -cmp;
+        const colA = String(a.color || '').trim().toUpperCase();
+        const colB = String(b.color || '').trim().toUpperCase();
+        return colA.localeCompare(colB, undefined, { numeric: true, sensitivity: 'base' });
+      } else if (subWhSortColumn === 'mainStock') {
+        valA = Number(a.mainStock) || 0;
+        valB = Number(b.mainStock) || 0;
+      } else if (subWhSortColumn === 'inTransit') {
+        valA = Number(a.inTransit) || 0;
+        valB = Number(b.inTransit) || 0;
+      } else if (subWhSortColumn === 'effectiveStock') {
+        valA = Number(a.effectiveStock) || 0;
+        valB = Number(b.effectiveStock) || 0;
+      } else {
+        // 외부창고: 해당 창고 가용재고(stocks[wh]) 기준 정렬
+        valA = (a.stocks && Number(a.stocks[subWhSortColumn])) || 0;
+        valB = (b.stocks && Number(b.stocks[subWhSortColumn])) || 0;
+      }
+
+      if (valA !== valB) {
+        return subWhSortAsc ? (valA - valB) : (valB - valA);
+      }
+
+      // 수량 동률 시 품명(codigo) 오름차순 2차 정렬, 색상(color) 오름차순 3차 정렬
+      const codA = String(a.codigo || '').trim().toUpperCase();
+      const codB = String(b.codigo || '').trim().toUpperCase();
+      const cmpCode = codA.localeCompare(codB, undefined, { numeric: true, sensitivity: 'base' });
+      if (cmpCode !== 0) return cmpCode;
+
+      const colA = String(a.color || '').trim().toUpperCase();
+      const colB = String(b.color || '').trim().toUpperCase();
+      return colA.localeCompare(colB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  } else if (query && typeof WmsSearchEngine !== 'undefined') {
+    // 사용자가 별도 컬럼 정렬을 누르지 않았을 때는 검색어 스마트 랭킹 적용
     subWhFilteredItems = WmsSearchEngine.rankMatches(subWhFilteredItems, query);
   }
 
@@ -11527,6 +11634,7 @@ function filterSubWarehouseTable() {
   const totalEl = document.getElementById('subWhTotalCount');
   if (totalEl) totalEl.textContent = subWhMatrixData.items ? subWhMatrixData.items.length : 0;
 
+  updateSubWhSortBadge();
   renderSubWhTable(subWhFilteredItems, cartKeyMap);
 }
 
@@ -11559,14 +11667,54 @@ function renderSubWhTable(items, cartKeyMap) {
   if (oldColgroup) oldColgroup.remove();
   table.insertAdjacentHTML('afterbegin', colgroupHtml);
 
+  // 정렬 아이콘 헬퍼 (활성 컬럼은 골드 컬러 ▲/▼, 비활성 컬럼은 옅은 ⇅)
+  const getSortIcon = (colKey, defaultColor = '#94a3b8') => {
+    if (subWhSortColumn === colKey) {
+      return `<span style="color: #fde047; font-weight: 900; font-size: 8pt; margin-left: 2px; display: inline-block;">${subWhSortAsc ? '▲' : '▼'}</span>`;
+    }
+    return `<span style="color: ${defaultColor}; opacity: 0.55; font-size: 7pt; margin-left: 2px; display: inline-block;">⇅</span>`;
+  };
+
   thead.innerHTML = `
     <tr style="position: sticky; top: 0; z-index: 20; background: #0f172a; font-size: 8.3pt; text-align: center;">
-      <th style="padding: 7px 4px; position: sticky; left: 0; z-index: 25; background: #0f172a !important; color: #ffffff !important; width: 125px; min-width: 125px; max-width: 125px; text-align: left; border-right: 1px solid #334155; font-weight: 700;">품명</th>
-      <th style="padding: 7px 4px; position: sticky; left: 125px; z-index: 25; background: #0f172a !important; color: #ffffff !important; width: 75px; min-width: 75px; max-width: 75px; border-right: 1.5px solid #475569; font-weight: 700;">색상</th>
-      <th style="padding: 7px 2px; position: sticky; left: 200px; z-index: 25; background: #1e3a8a !important; color: #93c5fd !important; width: 70px; min-width: 70px; max-width: 70px; border-right: 1px solid #3b82f6; font-weight: 700; font-size: 7.8pt;">🏢메인실재고</th>
-      <th style="padding: 7px 2px; position: sticky; left: 270px; z-index: 25; background: #1e3a8a !important; color: #fdba74 !important; width: 65px; min-width: 65px; max-width: 65px; border-right: 1px solid #3b82f6; font-weight: 700; font-size: 7.8pt;">🚚이동중</th>
-      <th style="padding: 7px 2px; position: sticky; left: 335px; z-index: 25; background: #1e3a8a !important; color: #86efac !important; width: 75px; min-width: 75px; max-width: 75px; border-right: 2px solid #0d9488; font-weight: 700; font-size: 7.8pt;">⭐유효재고</th>
-      ${warehouses.map(wh => `<th style="padding: 7px 2px; background: #134e4a !important; color: #ccfbf1 !important; border-right: 1px solid #0f766e; font-weight: 700; text-align: center; white-space: nowrap; font-size: 8.2pt;">${escapeHtml(wh)}</th>`).join('')}
+      <th onclick="toggleSubWhSort('codigo')" title="품명순 정렬 (클릭 시 가나다순 / 역순 / 초기화)" style="padding: 7px 4px; position: sticky; left: 0; z-index: 25; background: ${subWhSortColumn === 'codigo' ? '#1e293b' : '#0f172a'} !important; color: #ffffff !important; width: 125px; min-width: 125px; max-width: 125px; text-align: left; border-right: 1px solid #334155; font-weight: 700; cursor: pointer; user-select: none;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span>품명</span>
+          ${getSortIcon('codigo', '#94a3b8')}
+        </div>
+      </th>
+      <th style="padding: 7px 4px; position: sticky; left: 125px; z-index: 25; background: #0f172a !important; color: #ffffff !important; width: 75px; min-width: 75px; max-width: 75px; border-right: 1.5px solid #475569; font-weight: 700; user-select: none;">
+        색상
+      </th>
+      <th onclick="toggleSubWhSort('mainStock')" title="메인실재고 수량순 정렬 (클릭 시 많은순 / 적은순 / 초기화)" style="padding: 7px 2px; position: sticky; left: 200px; z-index: 25; background: ${subWhSortColumn === 'mainStock' ? '#1d4ed8' : '#1e3a8a'} !important; color: #93c5fd !important; width: 70px; min-width: 70px; max-width: 70px; border-right: 1px solid #3b82f6; font-weight: 700; font-size: 7.8pt; cursor: pointer; user-select: none;">
+        <div style="display: flex; align-items: center; justify-content: center; gap: 1px; white-space: nowrap; font-size: 7.5pt;">
+          <span>🏢메인실재고</span>
+          ${getSortIcon('mainStock', '#93c5fd')}
+        </div>
+      </th>
+      <th onclick="toggleSubWhSort('inTransit')" title="이동중(입고예정) 수량순 정렬 (클릭 시 많은순 / 적은순 / 초기화)" style="padding: 7px 2px; position: sticky; left: 270px; z-index: 25; background: ${subWhSortColumn === 'inTransit' ? '#1d4ed8' : '#1e3a8a'} !important; color: #fdba74 !important; width: 65px; min-width: 65px; max-width: 65px; border-right: 1px solid #3b82f6; font-weight: 700; font-size: 7.8pt; cursor: pointer; user-select: none;">
+        <div style="display: flex; align-items: center; justify-content: center; gap: 1px; white-space: nowrap; font-size: 7.5pt;">
+          <span>🚚이동중</span>
+          ${getSortIcon('inTransit', '#fdba74')}
+        </div>
+      </th>
+      <th onclick="toggleSubWhSort('effectiveStock')" title="유효재고 수량순 정렬 (클릭 시 많은순 / 적은순 / 초기화)" style="padding: 7px 2px; position: sticky; left: 335px; z-index: 25; background: ${subWhSortColumn === 'effectiveStock' ? '#1d4ed8' : '#1e3a8a'} !important; color: #86efac !important; width: 75px; min-width: 75px; max-width: 75px; border-right: 2px solid #0d9488; font-weight: 700; font-size: 7.8pt; cursor: pointer; user-select: none;">
+        <div style="display: flex; align-items: center; justify-content: center; gap: 1px; white-space: nowrap; font-size: 7.5pt;">
+          <span>⭐유효재고</span>
+          ${getSortIcon('effectiveStock', '#86efac')}
+        </div>
+      </th>
+      ${warehouses.map(wh => {
+        const isWhSorted = subWhSortColumn === wh;
+        return `
+          <th onclick="toggleSubWhSort('${escapeHtml(wh)}')" title="${escapeHtml(wh)} 창고 재고수량순 정렬 (클릭 시 많은순 / 적은순 / 초기화)" style="padding: 7px 2px; background: ${isWhSorted ? '#0f766e' : '#134e4a'} !important; color: #ccfbf1 !important; border-right: 1px solid #0f766e; font-weight: 700; text-align: center; white-space: nowrap; font-size: 8.2pt; cursor: pointer; user-select: none; transition: background 0.15s ease;">
+            <div style="display: inline-flex; align-items: center; justify-content: center; gap: 2px;">
+              <span>${escapeHtml(wh)}</span>
+              ${getSortIcon(wh, '#5eead4')}
+            </div>
+          </th>
+        `;
+      }).join('')}
     </tr>
   `;
 
