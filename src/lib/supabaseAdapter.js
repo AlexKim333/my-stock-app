@@ -5,12 +5,18 @@ import { supabase } from './supabase.js'
 // 품목 ID 캐시 (item_name_color_pkg -> item_id)
 let itemIdCache = new Map()
 
-/** PostgREST 기본 1000행 한도를 넘어 전건 조회 */
-async function fetchAllRows(buildQuery, pageSize = 1000) {
+/**
+ * PostgREST 기본 1000행 한도를 넘어 전건 조회.
+ * range 페이징은 정렬이 고정되지 않으면 페이지 사이에 행이 중복·누락될 수 있으므로
+ * 유일 키(orderBy)로 항상 정렬한다. 뷰처럼 id가 없는 대상은 orderBy를 지정한다.
+ */
+async function fetchAllRows(buildQuery, { orderBy = 'id', pageSize = 1000 } = {}) {
   const all = []
   let from = 0
   for (;;) {
-    const { data, error } = await buildQuery().range(from, from + pageSize - 1)
+    const { data, error } = await buildQuery()
+      .order(orderBy, { ascending: true })
+      .range(from, from + pageSize - 1)
     if (error) throw error
     const rows = data || []
     all.push(...rows)
@@ -748,7 +754,7 @@ export const serverMethods = {
           box_packaging_qty
         )
       `)
-      .or(`invoice_no.eq.${canonical},invoice_no.eq.${rawInv},invoice_no.eq.${dashInv}`)
+      .in('invoice_no', [...new Set([canonical, rawInv, dashInv])])
       .in('transaction_type', txTypes)
 
     if (error) {
@@ -940,7 +946,7 @@ export const serverMethods = {
    */
   async verifyStockIntegrity() {
     const [allStocks, allTxs, itemsList] = await Promise.all([
-      fetchAllRows(() => supabase.from('view_effective_stocks').select('*')),
+      fetchAllRows(() => supabase.from('view_effective_stocks').select('*'), { orderBy: 'item_id' }),
       fetchAllRows(() =>
         supabase.from('stock_transactions').select('item_id, transaction_type, box_qty, unit_qty, warehouse_code')
       ),
@@ -1052,8 +1058,9 @@ export const serverMethods = {
    * 15. 재고시트 데이터 정규화 사전 분석 (중복 코드 및 포장단위 분산 전수 분석)
    */
   async analyzeStockNormalization() {
-    const allStocks = await fetchAllRows(() =>
-      supabase.from('view_effective_stocks').select('*')
+    const allStocks = await fetchAllRows(
+      () => supabase.from('view_effective_stocks').select('*'),
+      { orderBy: 'item_id' }
     )
     const groups = new Map()
 
@@ -1239,7 +1246,7 @@ export const serverMethods = {
 
     // 1. 전체 유효 재고, 8대 서브창고 재고 및 이동 중(PENDING) 주문 병렬 조회 (sub-50ms)
     const [allMainItems, subStocks, pendingOrders] = await Promise.all([
-      fetchAllRows(() => supabase.from('view_effective_stocks').select('*')),
+      fetchAllRows(() => supabase.from('view_effective_stocks').select('*'), { orderBy: 'item_id' }),
       fetchAllRows(() =>
         supabase.from('inventory_stocks').select('warehouse_code, box_qty, item_id').in('warehouse_code', whList)
       ),
@@ -1356,7 +1363,7 @@ export const serverMethods = {
   async analyzeWinterPeakDemandAndSafeStock() {
     // 1. 전체 품목 마스터 및 트랜잭션 병렬 조회
     const [allStocks, allTxs] = await Promise.all([
-      fetchAllRows(() => supabase.from('view_effective_stocks').select('*')),
+      fetchAllRows(() => supabase.from('view_effective_stocks').select('*'), { orderBy: 'item_id' }),
       fetchAllRows(() =>
         supabase.from('stock_transactions')
           .select('item_id, transaction_type, box_qty, unit_qty, created_at, invoice_no')
@@ -1642,8 +1649,9 @@ export const serverMethods = {
     const todayDash = todaySlash.replace(/\//g, '-')
 
     const [allStocks, todayTxRows, pendingOrders, recentTxs] = await Promise.all([
-      fetchAllRows(() =>
-        supabase.from('view_effective_stocks').select('item_id, item_name, color, main_box_qty, box_packaging_qty, safe_stock_boxes, pending_in_boxes')
+      fetchAllRows(
+        () => supabase.from('view_effective_stocks').select('item_id, item_name, color, main_box_qty, box_packaging_qty, safe_stock_boxes, pending_in_boxes'),
+        { orderBy: 'item_id' }
       ),
       fetchAllRows(() =>
         supabase.from('stock_transactions')
