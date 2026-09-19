@@ -769,6 +769,15 @@ function isServerCallBusy(key) {
 
 // 재고 로드 in-flight 가드. filterItems 등 다른 코드도 이 값을 읽는다.
 let isLoadingStockData = false;
+// 로드 중에 들어온 새로고침 요청. 진행 중인 응답은 요청 이전 시점의 재고일 수 있으므로 끝난 뒤 한 번 더 조용히 읽는다.
+let queuedStockReload = null;
+
+function runQueuedStockReload() {
+  if (!queuedStockReload) return;
+  const next = queuedStockReload;
+  queuedStockReload = null;
+  setTimeout(() => loadStockDataShared(next), 0);
+}
 
 /**
  * 재고 데이터 로드의 공통 뼈대: 재진입 가드, 30초 타임아웃, 로딩 표시,
@@ -787,7 +796,7 @@ function loadStockDataShared(options) {
   const hasCache = typeof opts.hasCache === 'function' ? opts.hasCache : (() => false);
 
   if (isLoadingStockData) {
-    console.warn('[loadStockDataShared] 이미 재고 데이터 로딩이 진행 중입니다.');
+    queuedStockReload = { ...opts, silent: true };
     return;
   }
   isLoadingStockData = true;
@@ -830,6 +839,7 @@ function loadStockDataShared(options) {
         document.body.removeChild(loadingIndicator);
       }
       if (typeof opts.onSettled === 'function') opts.onSettled();
+      runQueuedStockReload();
     }
   });
 
@@ -1210,6 +1220,13 @@ window.addEventListener('focus', function() {
       stockDataCache = JSON.parse(cachedStock);
     }
   } catch (err) {}
+});
+
+// 🔄 재고 변경 자동 반영 (stockSync.js). 이 탭의 수정은 처리 후 이미 다시 읽는다.
+window.addEventListener('wms-stock-changed', e => {
+  const d = e.detail || {};
+  const onlyLocal = (d.sources || []).length > 0 && d.sources.every(s => s === 'local');
+  if (!onlyLocal && (d.all || (d.warehouses || []).includes('MAIN'))) loadStockData(true);
 });
 
 function loadStockData(silent = false) {

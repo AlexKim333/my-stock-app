@@ -3300,6 +3300,15 @@ function isServerCallBusy(key) {
 
 // 재고 로드 in-flight 가드. filterItems 등 다른 코드도 이 값을 읽는다.
 let isLoadingStockData = false;
+// 로드 중에 들어온 새로고침 요청. 진행 중인 응답은 요청 이전 시점의 재고일 수 있으므로 끝난 뒤 한 번 더 조용히 읽는다.
+let queuedStockReload = null;
+
+function runQueuedStockReload() {
+  if (!queuedStockReload) return;
+  const next = queuedStockReload;
+  queuedStockReload = null;
+  setTimeout(() => loadStockDataShared(next), 0);
+}
 
 /**
  * 재고 데이터 로드의 공통 뼈대: 재진입 가드, 30초 타임아웃, 로딩 표시,
@@ -3318,7 +3327,7 @@ function loadStockDataShared(options) {
   const hasCache = typeof opts.hasCache === 'function' ? opts.hasCache : (() => false);
 
   if (isLoadingStockData) {
-    console.warn('[loadStockDataShared] 이미 재고 데이터 로딩이 진행 중입니다.');
+    queuedStockReload = { ...opts, silent: true };
     return;
   }
   isLoadingStockData = true;
@@ -3361,6 +3370,7 @@ function loadStockDataShared(options) {
         document.body.removeChild(loadingIndicator);
       }
       if (typeof opts.onSettled === 'function') opts.onSettled();
+      runQueuedStockReload();
     }
   });
 
@@ -11164,6 +11174,7 @@ function openSubWarehouseMatrixModal() {
     const table = document.getElementById('subWhTable');
     if (spinner) spinner.style.display = 'none';
     if (table) table.style.display = 'table';
+    loadSubWarehouseMatrix(true, { silent: true });
   } else {
     loadSubWarehouseMatrix(false);
   }
@@ -11178,20 +11189,36 @@ function closeSubWarehouseMatrixModal() {
   }
 }
 
-function loadSubWarehouseMatrix(forceRefresh) {
+function isSubWhMatrixOpen() {
+  const modal = document.getElementById('subWarehouseMatrixModal');
+  return !!modal && modal.style.display === 'flex';
+}
+
+function loadSubWarehouseMatrix(forceRefresh, options) {
+  const silent = !!(options && options.silent) && !!subWhMatrixData;
   const spinner = document.getElementById('subWhLoadingSpinner');
   const table = document.getElementById('subWhTable');
   const badge = document.getElementById('subWhSyncBadge');
-  if (spinner) spinner.style.display = 'flex';
-  if (table) table.style.display = 'none';
-  if (badge) badge.textContent = '동기화: 불러오는 중...';
+  if (!silent) {
+    if (spinner) spinner.style.display = 'flex';
+    if (table) table.style.display = 'none';
+  }
+  if (badge) badge.textContent = silent ? '동기화: 갱신 중...' : '동기화: 불러오는 중...';
 
   callServer('getSubWarehouseStockMatrix', [forceRefresh || false], {
     key: 'subWhMatrix',
     mode: 'latest',
     timeout: 60000,
     onSuccess: onSubWhMatrixLoaded,
-    onError: onSubWhMatrixError
+    onError: err => {
+      if (silent) {
+        // 이미 보이는 표는 그대로 두고 배지로만 알린다.
+        if (badge) badge.textContent = '동기화 실패 (이전 데이터 표시 중)';
+        console.warn('[SubWhMatrix] 백그라운드 갱신 실패:', err);
+        return;
+      }
+      onSubWhMatrixError(err);
+    }
   });
 }
 
@@ -11221,6 +11248,47 @@ function onSubWhMatrixLoaded(data) {
   updateTruckGauges();
   filterSubWarehouseTable();
 }
+
+// -------------------------------------------------------------------
+// 🔄 재고 변경 자동 반영
+// stockSync.js가 이 탭의 쓰기, 다른 탭, 다른 기기(Supabase Realtime), 장시간 백그라운드 복귀를
+// 0.5초 단위로 모아 'wms-stock-changed' 이벤트로 알린다. 영향받는 화면만 조용히 다시 읽는다.
+// -------------------------------------------------------------------
+function isEditingCartCell() {
+  const el = document.activeElement;
+  return !!(el && el.isContentEditable && el.closest && el.closest('#tableBody'));
+}
+
+function applyStockChange(detail) {
+  // 장바구니 셀을 편집 중이면 표 재렌더로 입력이 끊기지 않도록 잠시 뒤로 미룬다.
+  if (isEditingCartCell()) {
+    setTimeout(() => applyStockChange(detail), 1500);
+    return;
+  }
+  const whs = new Set(detail.warehouses || []);
+  const touches = code => detail.all || whs.has(code);
+  const sources = detail.sources || [];
+  const onlyLocal = sources.length > 0 && sources.every(s => s === 'local');
+
+  // 1) 메인 재고 캐시: 이 탭의 쓰기는 각 처리 화면이 이미 다시 읽으므로 생략
+  if (!onlyLocal && touches('MAIN')) loadStockData(true);
+
+  // 2) 서브창고 매트릭스: 열려 있으면 바로, 닫혀 있으면 다음에 열 때 재조회된다
+  if (subWhMatrixData && isSubWhMatrixOpen()) loadSubWarehouseMatrix(true, { silent: true });
+
+  // 3) 재고조정 화면의 조정 창고 재고
+  if (currentType === 'adj' && getAdjWarehouse() !== 'MAIN' && touches(getAdjWarehouse())) {
+    refreshAdjWarehouseStock(true);
+  }
+
+  // 4) 통합 대시보드가 열려 있으면 다시 집계
+  const dash = document.getElementById('dashboardModal');
+  if (dash && dash.style.display === 'flex' && typeof refreshDashboardData === 'function') {
+    refreshDashboardData();
+  }
+}
+
+window.addEventListener('wms-stock-changed', e => applyStockChange(e.detail || {}));
 
 /**
  * 🚛 8대 창고별 트럭 1대(100상자) 적재율 게이지 바 렌더링

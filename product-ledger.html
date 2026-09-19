@@ -779,6 +779,14 @@
       }
     }
 
+    // 🔄 재고 변경 자동 반영 (stockSync.js): 조회 중인 품목이 바뀌었을 때만 다시 읽는다.
+    window.addEventListener('wms-stock-changed', e => {
+      const d = e.detail || {};
+      const itemId = currentItemData && currentItemData.id;
+      if (!itemId) return;
+      if (d.all || (d.itemIds || []).includes(itemId)) loadProductLedger(itemId);
+    });
+
     /* 4. 원장 데이터 렌더링 */
     function onLedgerDataLoaded(res) {
       if (!res || !res.success) {

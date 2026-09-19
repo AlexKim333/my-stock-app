@@ -2238,6 +2238,10 @@ export function createGoogleScriptRunBridge() {
         if (typeof successCb === 'function') {
           try { successCb(result) } catch (cbErr) { console.error(`[SupabaseAdapter] ${fnName} 성공 핸들러 오류:`, cbErr) }
         }
+        // 재고 동기화(stockSync.js)가 쓰기 성공을 감지해 다른 화면·탭을 갱신한다.
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('wms-bridge-success', { detail: { fnName, args, result } }))
+        }
         return result
       }
     }

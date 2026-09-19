@@ -1,5 +1,6 @@
 import { installSupabaseBridge, preloadItemIdCache } from './lib/supabaseAdapter.js'
 import { supabase, WMS_AUTH_STORAGE_KEY } from './lib/supabase.js'
+import { initStockSync } from './lib/stockSync.js'
 import FlexSearch from 'flexsearch'
 
 // 0. ktk-wms-v2 동급 최강 FlexSearch 초고속 검색엔진 전역 등록
@@ -11,6 +12,9 @@ installSupabaseBridge()
 
 // 2. 품목 ID 캐시 백그라운드 사전 적재
 preloadItemIdCache()
+
+// 2-1. 재고 변경 자동 동기화 (로컬 쓰기 · 다른 탭 · Supabase Realtime)
+initStockSync()
 
 // 3. 브릿지 준비 완료 이벤트 전파
 window.dispatchEvent(new CustomEvent('supabase-bridge-ready'))
