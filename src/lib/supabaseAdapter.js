@@ -515,9 +515,12 @@ export const serverMethods = {
       txType = 'MOVE'
       effectiveTargetWarehouse = partnerBranchCode
     } else if (mode === 'in') {
-      sourceWh = firstRow.warehouse || firstRow.targetWarehouse || firstRow.sourceWarehouse || 'MAIN'
+      sourceWh = firstRow.warehouse || firstRow.targetWarehouse || 'MAIN'
       if (partnerBranchCode && partnerBranchCode !== 'MAIN') {
         pendingFromWarehouse = partnerBranchCode
+        if (sourceWh === partnerBranchCode) {
+          sourceWh = 'MAIN'
+        }
       }
     }
 

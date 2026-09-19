@@ -4744,6 +4744,7 @@ function prefetchLocationCaches() {
 }
 
 function initPage() {
+  migrateLegacyPendingIn();
   let initialPage = '상품등록';
   if (currentType === 'in') initialPage = '입고입력';
   else if (currentType === 'out') initialPage = '출고입력';
@@ -6212,8 +6213,58 @@ function savePending() {
   alert('보류가 저장되었습니다.\n(해당 수량은 가용재고(ATP)에서 자동 선점 예약되어 중복 출고가 차단됩니다.)');
 }
 
+/**
+ * 🔄 [레거시 보류 데이터 자동 마이그레이션]
+ * 과거 pending_in 키로 저장되었던 외부창고 발주 보류 내역을 WMS 정식 키(pendingInRecordsList)로 안전하게 병합 복구합니다.
+ */
+function migrateLegacyPendingIn() {
+  try {
+    const legacyRaw = localStorage.getItem('pending_in');
+    if (!legacyRaw) return;
+    const legacyList = JSON.parse(legacyRaw);
+    if (Array.isArray(legacyList) && legacyList.length > 0) {
+      const inKey = (typeConfig && typeConfig.in && typeConfig.in.pendingStorageKey) || 'pendingInRecordsList';
+      let currentList = [];
+      try {
+        const curSaved = localStorage.getItem(inKey);
+        if (curSaved) currentList = JSON.parse(curSaved);
+      } catch (e) {}
+      if (!Array.isArray(currentList)) currentList = [];
+
+      legacyList.forEach(legacyItem => {
+        const exists = currentList.some(c => 
+          c.createdAt === legacyItem.createdAt && 
+          c.location === legacyItem.location &&
+          (c.records && c.records.length) === (legacyItem.records && legacyItem.records.length)
+        );
+        if (!exists) {
+          if (!legacyItem.targetWarehouse) legacyItem.targetWarehouse = 'MAIN';
+          if (!legacyItem.sourceWarehouse) legacyItem.sourceWarehouse = legacyItem.location;
+          if (Array.isArray(legacyItem.records)) {
+            legacyItem.records.forEach(r => {
+              if (!r.location) r.location = legacyItem.location;
+              if (!r.warehouse) r.warehouse = 'MAIN';
+              if (!r.sourceWarehouse) r.sourceWarehouse = legacyItem.sourceWarehouse;
+              if (!r.targetWarehouse) r.targetWarehouse = 'MAIN';
+              if (r.matchRate === undefined) r.matchRate = 100;
+            });
+          }
+          currentList.push(legacyItem);
+        }
+      });
+      localStorage.setItem(inKey, JSON.stringify(currentList));
+    }
+    localStorage.removeItem('pending_in');
+  } catch (err) {
+    console.warn('migrateLegacyPendingIn warning:', err);
+  }
+}
+
 function updatePendingCount() {
-  const storageKey = typeConfig[currentType].pendingStorageKey;
+  migrateLegacyPendingIn();
+  const cfg = typeConfig && typeConfig[currentType];
+  const storageKey = cfg ? cfg.pendingStorageKey : null;
+  if (!storageKey) return;
   let pendingList = [];
   try {
     const saved = localStorage.getItem(storageKey);
@@ -6221,12 +6272,15 @@ function updatePendingCount() {
   } catch (e) {
   }
   const countSpan = document.getElementById('pendingCount');
-  if (countSpan) countSpan.textContent = pendingList.length;
+  if (countSpan) countSpan.textContent = Array.isArray(pendingList) ? pendingList.length : 0;
 }
 
 function showPendingModal() {
   if (isPendingOperating) return;
-  const storageKey = typeConfig[currentType].pendingStorageKey;
+  migrateLegacyPendingIn();
+  const cfg = typeConfig && typeConfig[currentType];
+  const storageKey = cfg ? cfg.pendingStorageKey : null;
+  if (!storageKey) return;
   let pendingList = [];
   try {
     const saved = localStorage.getItem(storageKey);
@@ -6245,11 +6299,15 @@ function showPendingModal() {
   let summaryHtml = '';
   pendingList.forEach((pending, idx) => {
     const itemCount = new Set(pending.records.map(r => `${r.itemName}_${r.color}`)).size;
+    const isSub = pending.isSubWarehouseOrder;
+    const locBadge = isSub
+      ? `<span style="background: #e0f2fe; color: #0284c7; padding: 2px 7px; border-radius: 4px; font-weight: 700;">🏢 ${escapeHtml(pending.location || '-')} (외부발주)</span>`
+      : escapeHtml(pending.location || '-');
     summaryHtml += `
       <tr onclick="selectPending(${idx})" id="pendingRow${idx}">
         <td>${idx + 1}</td>
         <td>${pending.createdAt}</td>
-        <td>${escapeHtml(pending.location || '-')}</td>
+        <td>${locBadge}</td>
         <td>${escapeHtml(pending.admin || '-')}</td>
         <td>${itemCount}</td>
       </tr>
@@ -6365,9 +6423,18 @@ function loadPending() {
   // 3. 깊은 복사로 데이터 준비
   const clonedRecords = JSON.parse(JSON.stringify(pendingData.records));
 
-  // 4. 출고처/관리자 안전 주입 (리부팅 직후 드롭다운 미로딩 대비)
+  // 4. 창고/출고처/입고처/관리자 안전 주입 (리부팅 직후 드롭다운 미로딩 대비)
   const locationSelect = document.getElementById('location');
   const adminSelect = document.getElementById('adminSelect');
+  const warehouseSelect = document.getElementById('warehouseSelect');
+
+  if (warehouseSelect) {
+    if (pendingData.targetWarehouse) {
+      warehouseSelect.value = pendingData.targetWarehouse;
+    } else if (pendingData.isSubWarehouseOrder) {
+      warehouseSelect.value = 'MAIN';
+    }
+  }
 
   if (locationSelect && pendingData.location) {
     const hasOpt = Array.from(locationSelect.options).some(opt => opt.value === pendingData.location);
@@ -6393,6 +6460,18 @@ function loadPending() {
     }
     adminSelect.value = pendingData.admin;
   }
+
+  // 레코드 필드 무결성 보장
+  const effectiveWh = (warehouseSelect ? warehouseSelect.value : 'MAIN') || 'MAIN';
+  clonedRecords.forEach(r => {
+    if (!r.location && pendingData.location) r.location = pendingData.location;
+    if (!r.warehouse) r.warehouse = effectiveWh;
+    if (!r.targetWarehouse) r.targetWarehouse = r.warehouse;
+    if (pendingData.isSubWarehouseOrder || pendingData.sourceWarehouse) {
+      r.sourceWarehouse = pendingData.sourceWarehouse || pendingData.location;
+    }
+    if (r.matchRate === undefined) r.matchRate = 100;
+  });
 
   // 5. 보류 목록에서 해당 항목 제거
   pendingList.splice(targetIndex, 1);
@@ -6423,7 +6502,7 @@ function loadPending() {
   cancelPendingModal();
   saveMetadata();
   saveTableData();
-  alert('보류 데이터가 로드되었습니다.');
+  alert('보류 데이터가 로드되었습니다.\n\n수량을 확인/수정한 뒤 [🚀 제출] 버튼을 누르면 서브창고 재고 차감 및 본사(MAIN) 입고 처리가 최종 완료됩니다.');
 }
 
 function deletePending() {
@@ -11109,12 +11188,15 @@ function submitOrderDraftToPending() {
   const dateStr = datetimeInput ? datetimeInput.value : new Date().toLocaleString();
   const admin = adminSelect ? adminSelect.value : 'ADMIN';
 
-  // 1. WMS pending_in 에 창고별로 등록
+  // 1. WMS 입고 보류 목록(pendingInRecordsList)에 창고별로 등록
+  migrateLegacyPendingIn();
+  const storageKey = (typeConfig && typeConfig.in && typeConfig.in.pendingStorageKey) || 'pendingInRecordsList';
   let pendingInList = [];
   try {
-    const saved = localStorage.getItem('pending_in');
+    const saved = localStorage.getItem(storageKey);
     if (saved) pendingInList = JSON.parse(saved);
   } catch (e) {}
+  if (!Array.isArray(pendingInList)) pendingInList = [];
 
   whNames.forEach(wh => {
     const whItems = byWarehouse[wh];
@@ -11125,24 +11207,30 @@ function submitOrderDraftToPending() {
       individualQty: 0,
       boxContent: item.boxContent || 0,
       location: wh,
-      unitType: 'box'
+      warehouse: 'MAIN',
+      sourceWarehouse: wh,
+      targetWarehouse: 'MAIN',
+      unitType: 'box',
+      matchRate: 100
     }));
 
     pendingInList.push({
       records: recs,
       location: wh,
+      warehouse: 'MAIN',
+      targetWarehouse: 'MAIN',
+      sourceWarehouse: wh,
       admin: admin,
       date: dateStr,
       createdAt: new Date().toLocaleString(),
-      isSubWarehouseOrder: true,
-      sourceWarehouse: wh
+      isSubWarehouseOrder: true
     });
   });
 
   try {
-    localStorage.setItem('pending_in', JSON.stringify(pendingInList));
+    localStorage.setItem(storageKey, JSON.stringify(pendingInList));
   } catch (e) {
-    console.error('pending_in save error: ' + e.message);
+    console.error('pending storage save error: ' + e.message);
   }
 
   const btn = document.getElementById('btnSubmitDraftToPending');
@@ -11159,14 +11247,27 @@ function submitOrderDraftToPending() {
       filterSubWarehouseTable();
       closeOrderDraftModal();
       closeSubWarehouseMatrixModal();
+
+      // 🔥 1. 즉시 입고입력('in') 화면으로 자동 전환 및 뱃지 카운트 갱신
+      setPage('in');
       updatePendingCount();
       loadSubWarehouseMatrix(true); // 🔄 발주 즉시 매트릭스 가용재고(ATP) 실시간 재집계
 
-      alert(`🎉 [외부창고 발주 등록 완료]\n\n• 발주 창고: ${whNames.join(', ')}\n• 총 수량: ${totalBoxes}상자\n\nWMS [입고입력] > [🔍 보류]에 정상 등록되었으며 외부창고 시트에도 PENDIENTE로 전송되었습니다.\n\n트럭 도착 시 [🔍 보류]에서 불러와 송장 사진을 붙여넣으세요!`);
+      // 🔥 2. 알림창 표시
+      alert(`🎉 [외부창고 발주 등록 완료]\n\n• 발주 창고: ${whNames.join(', ')}\n• 총 수량: ${totalBoxes}상자\n\nWMS [입고입력] 화면으로 자동 이동되었습니다.\n[🔍 보류] 창에서 발주 내역을 확인하고 [선택]을 누르면 입고 품목으로 로드됩니다.`);
+
+      // 🔥 3. 보류 모달창 자동 팝업
+      setTimeout(() => {
+        showPendingModal();
+      }, 100);
     },
     onError: function(err) {
+      setPage('in');
       updatePendingCount();
       alert(`⚠️ 외부 시트 전송 중 경고: ${err.message || err}\n(WMS 로컬 입고 보류에는 안전하게 등록되었습니다.)`);
+      setTimeout(() => {
+        showPendingModal();
+      }, 100);
     },
     onSettled: function() {
       if (btn) { btn.disabled = false; btn.innerHTML = '<span>🚀 입고 보류로 발주 등록 (외부창고 전송)</span>'; }
