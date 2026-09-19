@@ -1758,6 +1758,34 @@
       flex-shrink: 0;
     }
 
+    /* 🏷️ 거래처/지점 카테고리 필터 칩 스타일 */
+    .loc-filter-chip {
+      padding: 5px 11px;
+      font-size: 8.3pt;
+      font-weight: 700;
+      border-radius: 16px;
+      border: 1.5px solid #cbd5e1;
+      background: #ffffff;
+      color: #475569;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      user-select: none;
+    }
+    .loc-filter-chip:hover {
+      border-color: #0d9488;
+      color: #0f766e;
+      background: #f0fdf4;
+    }
+    .loc-filter-chip.active {
+      background: #0f766e;
+      color: #ffffff;
+      border-color: #0f766e;
+      box-shadow: 0 2px 5px rgba(15, 118, 110, 0.25);
+    }
+
     /* 📱 모바일 및 태블릿 화면 고정 해제 & 자유 터치 스크롤/줌 지원 */
     @media (max-width: 960px) {
       html, body {
@@ -3001,8 +3029,16 @@
 
       <!-- 수동 검색 및 선택 섹션 -->
       <div id="multiLocationManualSection" style="display: none; flex-direction: column; gap: 8px; margin-bottom: 14px;">
+        <!-- 카테고리 필터 칩 바 (전체 / 🏢 지점 / 🏭 공급처 / 🛒 고객 / 🤝 겸용) -->
+        <div style="display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 2px;">
+          <button type="button" class="loc-filter-chip active" id="chip_all" onclick="filterLocationsByCategory('ALL')">전체</button>
+          <button type="button" class="loc-filter-chip" id="chip_branch" onclick="filterLocationsByCategory('BRANCH')">🏢 지점 (9)</button>
+          <button type="button" class="loc-filter-chip" id="chip_supplier" onclick="filterLocationsByCategory('SUPPLIER')">🏭 공급처</button>
+          <button type="button" class="loc-filter-chip" id="chip_customer" onclick="filterLocationsByCategory('CUSTOMER')">🛒 고객</button>
+          <button type="button" class="loc-filter-chip" id="chip_both" onclick="filterLocationsByCategory('BOTH')">🤝 겸용</button>
+        </div>
         <div style="position: relative;">
-          <input type="text" id="manualLocSearchInput" placeholder="🔍 출고처 검색 (예: WILLIAM, TIENDA, 101...)" 
+          <input type="text" id="manualLocSearchInput" placeholder="🔍 거래처/지점 검색 (예: PANTACO, WILLIAM...)" 
             oninput="onManualLocSearchInput(this.value)" 
             style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1.5px solid #0d9488; border-radius: 8px; font-size: 10pt; font-weight: 600; outline: none; box-shadow: 0 0 0 2px rgba(13,148,136,0.15);" />
         </div>
@@ -3358,12 +3394,31 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
   const totalIndividuals = records.reduce((sum, r) => sum + Math.abs(r.individualQty), 0);
   const rowsPerPage = 15;
   const pages = Math.ceil(records.length / rowsPerPage);
-  const title = type === 'in' ? 'COMPROBANTE DE ENTRADA' : 'COMPROBANTE DE SALIDA';
-  const titleColor = type === 'in' ? 'red' : 'black';
+  const locationValue = records.length > 0 ? records[0].location : '미지정';
+  const whSelect = document.getElementById('warehouseSelect');
+  const selectedWh = (records.length > 0 && records[0].warehouse) ? records[0].warehouse : (whSelect ? whSelect.value : 'MAIN');
+  const isBranchTarget = typeof isBranchLocation === 'function' ? isBranchLocation(locationValue) : false;
+  const isTransfer = (type === 'out' && isBranchTarget);
+
+  let title = type === 'in' ? 'COMPROBANTE DE ENTRADA' : 'COMPROBANTE DE SALIDA';
+  let titleColor = type === 'in' ? 'red' : 'black';
+  if (isTransfer) {
+    title = 'COMPROBANTE DE TRASPASO';
+    titleColor = '#1e3a8a';
+  }
+
+  let routeLineHtml = '';
+  if (isTransfer) {
+    routeLineHtml = `ORIGEN: <b>[${escapeHtml(selectedWh)}]</b> ➔ DESTINO: <b style="color: #047857;">🏢 [${escapeHtml(locationValue)}]</b>`;
+  } else if (type === 'in') {
+    routeLineHtml = `PROV: <b>${escapeHtml(locationValue)}</b> ➔ DESTINO: <b>[${escapeHtml(selectedWh)}]</b>`;
+  } else {
+    routeLineHtml = `ORIGEN: <b>[${escapeHtml(selectedWh)}]</b> ➔ CLIENTE: <b>${escapeHtml(locationValue)}</b>`;
+  }
+
   const adminColor = admin === 'ADMIN' ? 'black' : 'green';
   const adminStyle = `font-size: 11pt; color: ${adminColor};`;
   let htmlContent = '';
-  const locationValue = records.length > 0 ? records[0].location : '미지정';
   for (let page = 0; page < pages; page++) {
     const startIdx = page * rowsPerPage;
     const endIdx = Math.min(startIdx + rowsPerPage, records.length);
@@ -3395,7 +3450,7 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
             <div class="details">
               <p>No: ${displayNumber}</p>
               <p>fetcha: ${formattedDate}</p>
-              <p class="location">UBICACION: <span class="location-value">${locationValue}</span></p>
+              <p class="location"><span class="location-value">${routeLineHtml}</span></p>
               <p class="admin">VENDEDOR: <span style="${adminStyle}">${admin}</span></p>
               ${summaryTable}
             </div>
@@ -3410,7 +3465,7 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
             <div class="details">
               <p>No: ${displayNumber}</p>
               <p>fetcha: ${formattedDate}</p>
-              <p class="location">UBICACION: <span class="location-value">${locationValue}</span></p>
+              <p class="location"><span class="location-value">${routeLineHtml}</span></p>
               <p class="admin">VENDEDOR: <span style="${adminStyle}">${admin}</span></p>
               ${summaryTable}
             </div>
@@ -4056,6 +4111,7 @@ const typeConfig = {
     sessionStorageKey: 'pendingInRecords',
     metadataStorageKey: 'pendingInMetadata',
     inputs: `
+      <div class="input-row"><label for="warehouseSelect" style="font-weight: 700; color: #0f766e;">입고창고:</label><select id="warehouseSelect" name="warehouseSelect" tabindex="1" onchange="onWarehouseChanged()" style="flex: 1; font-weight: 700; color: #0f766e; background: #f0fdf4; border: 1.5px solid #0d9488; border-radius: 4px; padding: 4px 6px;"><option value="MAIN" selected>🏢 메인허브 (알라르꼰)</option><option value="PANTACO">PANTACO (판타코)</option><option value="IKEA">IKEA (이케아)</option><option value="LERMA">LERMA (레르마)</option><option value="PINO">PINO (피노)</option><option value="YARE">YARE (야레)</option><option value="ALMINTER">ALMINTER (알민테르)</option><option value="TLANE">TLANE (틀라네)</option><option value="STAR">STAR (스타)</option></select></div>
       <div class="input-row"><label id="locationLabel"></label><div style="display: flex; gap: 4px; flex: 1;"><select id="location" name="location" tabindex="1" onchange="onMainLocationChanged()" style="flex: 1;"><option value="">선택</option></select><button type="button" onclick="openLocationPickerForCurrentCart()" title="입고처 검색 및 변경" style="padding: 0 8px; font-size: 9pt; background: #0d9488; color: white; border: 1px solid #0f766e; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center;">🔍</button></div></div>
       <div class="unit-options">
         <label><input type="radio" name="unitType" value="box" checked onchange="updateUnitType()"> 상자</label>
@@ -4087,6 +4143,7 @@ const typeConfig = {
     sessionStorageKey: 'pendingOutRecords',
     metadataStorageKey: 'pendingOutMetadata',
     inputs: `
+      <div class="input-row"><label for="warehouseSelect" style="font-weight: 700; color: #1e3a8a;">출발창고:</label><select id="warehouseSelect" name="warehouseSelect" tabindex="1" onchange="onWarehouseChanged()" style="flex: 1; font-weight: 700; color: #1e3a8a; background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 4px; padding: 4px 6px;"><option value="MAIN" selected>🏢 메인허브 (알라르꼰)</option><option value="PANTACO">PANTACO (판타코)</option><option value="IKEA">IKEA (이케아)</option><option value="LERMA">LERMA (레르마)</option><option value="PINO">PINO (피노)</option><option value="YARE">YARE (야레)</option><option value="ALMINTER">ALMINTER (알민테르)</option><option value="TLANE">TLANE (틀라네)</option><option value="STAR">STAR (스타)</option></select></div>
       <div class="input-row"><label id="locationLabel"></label><div style="display: flex; gap: 4px; flex: 1;"><select id="location" name="location" tabindex="1" onchange="onMainLocationChanged()" style="flex: 1;"><option value="">선택</option></select><button type="button" onclick="openLocationPickerForCurrentCart()" title="출고처 검색 및 전체 변경" style="padding: 0 8px; font-size: 9pt; background: #0d9488; color: white; border: 1px solid #0f766e; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center;">🔍</button></div></div>
       <div class="unit-options">
         <label><input type="radio" name="unitType" value="box" checked onchange="updateUnitType()"> 상자</label>
@@ -4278,15 +4335,53 @@ function loadAdminList() {
   });
 }
 
+// 🏢 9대 거점 창고 및 지점 매핑
+const INTERNAL_BRANCH_MAP = {
+  'MAIN': 'MAIN', '메인허브 (알라르꼰)': 'MAIN', '메인허브': 'MAIN', '알라르꼰': 'MAIN',
+  'PANTACO': 'PANTACO', '판타코': 'PANTACO',
+  'IKEA': 'IKEA', '이케아': 'IKEA',
+  'LERMA': 'LERMA', '레르마': 'LERMA',
+  'PINO': 'PINO', '피노': 'PINO',
+  'YARE': 'YARE', '야레': 'YARE',
+  'ALMINTER': 'ALMINTER', '알민테르': 'ALMINTER',
+  'TLANE': 'TLANE', '틀라네': 'TLANE',
+  'STAR': 'STAR', '스타': 'STAR'
+};
+
+function getBranchCodeFromLocation(locStr) {
+  if (!locStr) return null;
+  const clean = String(locStr).replace(/^🏢\s*(\[지점\]\s*)?/, '').trim();
+  return INTERNAL_BRANCH_MAP[clean.toUpperCase()] || INTERNAL_BRANCH_MAP[clean] || INTERNAL_BRANCH_MAP[locStr.toUpperCase()] || INTERNAL_BRANCH_MAP[locStr] || null;
+}
+
+function isBranchLocation(locStr) {
+  return getBranchCodeFromLocation(locStr) !== null;
+}
+
+let partnersMasterCache = [];
+let partnersMasterMap = new Map();
+let currentCategoryFilter = 'ALL';
+
+function filterLocationsByCategory(category) {
+  currentCategoryFilter = category;
+  document.querySelectorAll('.loc-filter-chip').forEach(btn => {
+    btn.classList.toggle('active', btn.id === `chip_${category.toLowerCase()}`);
+  });
+  const searchInput = document.getElementById('manualLocSearchInput');
+  renderManualLocationResults(searchInput ? searchInput.value : '');
+}
+
 function saveMetadata() {
   if (currentType === 'product') return;
   try {
     const storageKey = typeConfig[currentType].metadataStorageKey;
     const locationSelect = document.getElementById('location');
     const adminSelect = document.getElementById('adminSelect');
+    const warehouseSelect = document.getElementById('warehouseSelect');
     const metadata = {
       location: locationSelect ? locationSelect.value : '',
-      admin: adminSelect ? adminSelect.value : 'ADMIN'
+      admin: adminSelect ? adminSelect.value : 'ADMIN',
+      warehouse: warehouseSelect ? warehouseSelect.value : 'MAIN'
     };
     localStorage.setItem(storageKey, JSON.stringify(metadata));
     if (typeof highlightActiveLocationButton === 'function') highlightActiveLocationButton();
@@ -4294,9 +4389,13 @@ function saveMetadata() {
     // 출고처 선택/변경 시 현재 장바구니 품목들의 출고처 동기화
     if (locationSelect && locationSelect.value && records && records.length > 0) {
       let changed = false;
+      const targetBranch = (currentType === 'out') ? (typeof getBranchCodeFromLocation === 'function' ? getBranchCodeFromLocation(locationSelect.value) : null) : null;
       records.forEach(r => {
         if (r.location !== locationSelect.value) {
           r.location = locationSelect.value;
+          if (currentType === 'out') {
+            r.targetWarehouse = targetBranch;
+          }
           changed = true;
         }
       });
@@ -4310,14 +4409,48 @@ function saveMetadata() {
   }
 }
 
+function onWarehouseChanged() {
+  saveMetadata();
+  const warehouseSelect = document.getElementById('warehouseSelect');
+  const whVal = warehouseSelect ? warehouseSelect.value : 'MAIN';
+  if (records && records.length > 0) {
+    let changed = false;
+    records.forEach(r => {
+      if (currentType === 'in') {
+        if (r.targetWarehouse !== whVal || r.warehouse !== whVal) {
+          r.targetWarehouse = whVal;
+          r.warehouse = whVal;
+          changed = true;
+        }
+      } else if (currentType === 'out') {
+        if (r.sourceWarehouse !== whVal || r.warehouse !== whVal) {
+          r.sourceWarehouse = whVal;
+          r.warehouse = whVal;
+          changed = true;
+        }
+      }
+    });
+    if (changed) {
+      saveTableData();
+      updateTable();
+    }
+  }
+  updateTotals();
+}
+
 function onMainLocationChanged() {
   saveMetadata();
   const locationSelect = document.getElementById('location');
   if (locationSelect && locationSelect.value && records && records.length > 0) {
     let changed = false;
+    const locVal = locationSelect.value;
+    const targetBranch = (currentType === 'out') ? (typeof getBranchCodeFromLocation === 'function' ? getBranchCodeFromLocation(locVal) : null) : null;
     records.forEach(r => {
-      if (r.location !== locationSelect.value) {
-        r.location = locationSelect.value;
+      if (r.location !== locVal) {
+        r.location = locVal;
+        if (currentType === 'out') {
+          r.targetWarehouse = targetBranch;
+        }
         changed = true;
       }
     });
@@ -4353,11 +4486,15 @@ function restoreMetadata() {
       const metadata = JSON.parse(savedMetadata);
       const locationSelect = document.getElementById('location');
       const adminSelect = document.getElementById('adminSelect');
+      const warehouseSelect = document.getElementById('warehouseSelect');
       if (locationSelect && metadata.location && Array.from(locationSelect.options).some(opt => opt.value === metadata.location)) {
         locationSelect.value = metadata.location;
       }
       if (adminSelect && metadata.admin && Array.from(adminSelect.options).some(opt => opt.value === metadata.admin)) {
         adminSelect.value = metadata.admin;
+      }
+      if (warehouseSelect && metadata.warehouse && Array.from(warehouseSelect.options).some(opt => opt.value === metadata.warehouse)) {
+        warehouseSelect.value = metadata.warehouse;
       }
     }
     if (typeof highlightActiveLocationButton === 'function') highlightActiveLocationButton();
@@ -4656,12 +4793,29 @@ function updateClock() {
 }
 
 function loadDropdowns() {
+  if (!partnersMasterCache || partnersMasterCache.length === 0) {
+    callServer('getPartnersMaster', [], {
+      key: 'partnersMaster',
+      mode: 'latest',
+      onSuccess: pList => {
+        partnersMasterCache = pList || [];
+        partnersMasterMap = new Map(partnersMasterCache.map(p => [p.name, p]));
+      }
+    });
+  }
+
+  const formatLocOption = (loc) => {
+    const isBr = typeof isBranchLocation === 'function' && isBranchLocation(loc);
+    const prefix = (currentType === 'out' && isBr) ? '🏢 [지점] ' : '';
+    return `<option value="${escapeHtml(loc)}">${prefix}${escapeHtml(loc)}</option>`;
+  };
+
   const currentCached = currentType === 'in' ? inLocationsCache : outLocationsCache;
   if (currentCached && currentCached.length > 0) {
     locationCache = [...currentCached];
     const select = document.getElementById('location');
     if (select) {
-      select.innerHTML = '<option value="">선택</option>' + locationCache.map(loc => `<option value="${escapeHtml(loc)}">${escapeHtml(loc)}</option>`).join('');
+      select.innerHTML = '<option value="">선택</option>' + locationCache.map(formatLocOption).join('');
     }
     restoreMetadata();
     initLocationHotkeys();
@@ -4681,7 +4835,7 @@ function loadDropdowns() {
       locationCache = data;
       const select = document.getElementById('location');
       if (!select) return;
-      select.innerHTML = '<option value="">선택</option>' + data.map(loc => `<option value="${escapeHtml(loc)}">${escapeHtml(loc)}</option>`).join('');
+      select.innerHTML = '<option value="">선택</option>' + data.map(formatLocOption).join('');
       restoreMetadata();
       initLocationHotkeys();
     },
@@ -5114,6 +5268,10 @@ function addRecord() {
     return;
   }
 
+  const whSelect = document.getElementById('warehouseSelect');
+  const selectedWh = whSelect ? whSelect.value : 'MAIN';
+  const targetBranch = (currentType === 'out') ? (typeof getBranchCodeFromLocation === 'function' ? getBranchCodeFromLocation(location) : null) : null;
+
   const formData = {
     itemName,
     color,
@@ -5121,6 +5279,9 @@ function addRecord() {
     individualQty: unitType === 'individual' ? (currentType === 'out' ? -qty : qty) : 0,
     boxContent,
     location,
+    warehouse: selectedWh,
+    sourceWarehouse: currentType === 'in' ? null : selectedWh,
+    targetWarehouse: currentType === 'in' ? selectedWh : targetBranch,
     unitType,
     matchRate: 100,
     adjType: currentType === 'adj' ? adjType : undefined
@@ -5774,6 +5935,25 @@ function showConfirmModal() {
         </tr>
       `;
     } else {
+      const whSelect = document.getElementById('warehouseSelect');
+      const curWhRaw = (whSelect && whSelect.options && whSelect.selectedIndex >= 0) 
+        ? whSelect.options[whSelect.selectedIndex].text 
+        : (rec.warehouse || '메인허브 (알라르꼰)');
+      const curWh = String(curWhRaw).replace(/^🏢\s*/, '').trim();
+
+      let routeHtml = escapeHtml(rec.location || '');
+      const isBr = typeof isBranchLocation === 'function' && isBranchLocation(rec.location);
+
+      if (currentType === 'in') {
+        routeHtml = `<span style="color:#475569;">${escapeHtml(rec.location || '')}</span> ➔ <span style="color:#059669; font-weight:700;">🏢 ${escapeHtml(curWh)}</span>`;
+      } else if (currentType === 'out') {
+        if (isBr) {
+          routeHtml = `<span style="color:#4f46e5; font-weight:700;">🏢 ${escapeHtml(curWh)}</span> ➔ <span style="color:#2563eb; font-weight:700;">🏢 ${escapeHtml(rec.location)} (지점이동)</span>`;
+        } else {
+          routeHtml = `<span style="color:#4f46e5; font-weight:700;">🏢 ${escapeHtml(curWh)}</span> ➔ <span style="color:#0f172a; font-weight:600;">🛒 ${escapeHtml(rec.location)}</span>`;
+        }
+      }
+
       html += `
         <tr>
           <td>${escapeHtml(rec.itemName)}</td>
@@ -5781,7 +5961,7 @@ function showConfirmModal() {
           <td>${currentType === 'in' ? rec.boxQty : Math.abs(rec.boxQty)}</td>
           <td>${currentType === 'in' ? rec.individualQty : Math.abs(rec.individualQty)}</td>
           <td>${rec.boxContent}</td>
-          <td>${escapeHtml(rec.location)}</td>
+          <td>${routeHtml}</td>
           <td style="text-align: center; font-weight: 700; color: ${(rec.matchRate || 100) >= 80 ? '#15803d' : '#b45309'};">${rec.matchRate !== undefined ? rec.matchRate + '%' : '100%'}</td>
         </tr>
       `;
@@ -6806,8 +6986,22 @@ function updateTotals() {
       const locName = (records && records.length > 0 && records[0].location && records[0].location.trim())
         ? records[0].location.trim()
         : (document.getElementById('location')?.value?.trim() || '미지정');
-      const prefix = currentType === 'in' ? '입고처' : '출고처';
-      cartLocationLabel.textContent = `${prefix}: ${locName}`;
+
+      const whSelect = document.getElementById('warehouseSelect');
+      const curWhRaw = (whSelect && whSelect.options && whSelect.selectedIndex >= 0)
+        ? whSelect.options[whSelect.selectedIndex].text
+        : ((records && records.length > 0 && records[0].warehouse) || '메인허브');
+      const curWh = String(curWhRaw).replace(/^🏢\s*/, '').replace(/\s*\(.*?\)/, '').trim();
+
+      const isBr = typeof isBranchLocation === 'function' && isBranchLocation(locName);
+
+      if (currentType === 'in') {
+        cartLocationLabel.innerHTML = `입고: <b>${escapeHtml(locName)}</b> ➔ <b style="color: #059669;">🏢 ${escapeHtml(curWh)}</b>`;
+      } else if (isBr) {
+        cartLocationLabel.innerHTML = `이동: <b style="color: #1e3a8a;">🏢 ${escapeHtml(curWh)}</b> ➔ <b style="color: #2563eb;">🏢 ${escapeHtml(locName)} (지점이동)</b>`;
+      } else {
+        cartLocationLabel.innerHTML = `출고: <b style="color: #1e3a8a;">🏢 ${escapeHtml(curWh)}</b> ➔ <b>🛒 ${escapeHtml(locName)}</b>`;
+      }
     }
   }
 
@@ -9483,29 +9677,78 @@ function renderManualLocationResults(filterText) {
   const resultsContainer = document.getElementById('manualLocationResultsList');
   if (!resultsContainer) return;
 
-  const currentLocEl = document.getElementById('location');
-  const allLocs = (locationCache && locationCache.length > 0)
-    ? locationCache
-    : (currentLocEl ? Array.from(currentLocEl.options).map(o => o.value).filter(Boolean) : []);
+  // 1. 소스 데이터 결정: partnersMasterCache 우선, 없으면 locationCache
+  let candidates = [];
+  if (partnersMasterCache && partnersMasterCache.length > 0) {
+    candidates = partnersMasterCache.map(p => ({
+      name: p.name,
+      isBranch: !!p.is_branch || (typeof isBranchLocation === 'function' && isBranchLocation(p.name)),
+      isSupplier: !!p.is_supplier,
+      isCustomer: !!p.is_customer,
+      partnerType: p.partner_type
+    }));
+  } else {
+    const currentLocEl = document.getElementById('location');
+    const allLocs = (locationCache && locationCache.length > 0)
+      ? locationCache
+      : (currentLocEl ? Array.from(currentLocEl.options).map(o => o.value).filter(Boolean) : []);
+    candidates = allLocs.map(loc => {
+      const isBr = typeof isBranchLocation === 'function' && isBranchLocation(loc);
+      return {
+        name: loc,
+        isBranch: isBr,
+        isSupplier: false,
+        isCustomer: true,
+        partnerType: isBr ? 'BRANCH' : 'OUTBOUND'
+      };
+    });
+  }
 
+  // 2. 카테고리 필터링 (currentCategoryFilter: 'ALL', 'BRANCH', 'SUPPLIER', 'CUSTOMER', 'BOTH')
+  let filtered = candidates;
+  if (currentCategoryFilter === 'BRANCH') {
+    filtered = candidates.filter(c => c.isBranch);
+  } else if (currentCategoryFilter === 'SUPPLIER') {
+    filtered = candidates.filter(c => c.isSupplier && !c.isBranch);
+  } else if (currentCategoryFilter === 'CUSTOMER') {
+    filtered = candidates.filter(c => c.isCustomer && !c.isBranch);
+  } else if (currentCategoryFilter === 'BOTH') {
+    filtered = candidates.filter(c => c.isSupplier && c.isCustomer && !c.isBranch);
+  }
+
+  // 3. 검색어 필터링
   const q = String(filterText || '').trim().toLowerCase();
   const matched = q
-    ? allLocs.filter(loc => String(loc).toLowerCase().includes(q))
-    : allLocs;
+    ? filtered.filter(c => String(c.name).toLowerCase().includes(q))
+    : filtered;
 
   if (matched.length === 0) {
-    resultsContainer.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 16px; font-size: 9pt;">일치하는 출고처가 없습니다. 검색어를 확인해 주세요.</div>';
+    resultsContainer.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 16px; font-size: 9pt;">일치하는 거래처/지점이 없습니다. 검색어를 확인해 주세요.</div>';
     return;
   }
 
-  // 상위 50개 렌더링
+  // 4. 상위 50개 렌더링 + 역할 뱃지 표시
   const displayList = matched.slice(0, 50);
   let html = '';
-  displayList.forEach(loc => {
+  displayList.forEach(item => {
+    let roleBadge = '';
+    if (item.isBranch) {
+      roleBadge = '<span class="multi-loc-badge" style="background: #e0e7ff; color: #4338ca; border-color: #c7d2fe; font-weight: 700;">🏢 지점</span>';
+    } else if (item.isSupplier && item.isCustomer) {
+      roleBadge = '<span class="multi-loc-badge" style="background: #fef3c7; color: #b45309; border-color: #fde68a; font-weight: 700;">🤝 겸용</span>';
+    } else if (item.isSupplier) {
+      roleBadge = '<span class="multi-loc-badge" style="background: #f0fdf4; color: #15803d; border-color: #bbf7d0; font-weight: 700;">🏭 공급처</span>';
+    } else {
+      roleBadge = '<span class="multi-loc-badge" style="background: #f1f5f9; color: #475569; border-color: #cbd5e1; font-weight: 700;">🛒 고객</span>';
+    }
+
     html += `
-      <button type="button" class="multi-loc-card" onclick="selectDisambiguatedLocation(${jsArg(loc)})" style="justify-content: space-between; padding: 8px 12px;">
-        <span style="font-weight: 600; color: #1e293b; font-size: 9pt;">🏢 ${escapeHtml(loc)}</span>
-        <span class="multi-loc-badge" style="background: #e0f2fe; color: #0369a1; border-color: #bae6fd;">선택</span>
+      <button type="button" class="multi-loc-card" onclick="selectDisambiguatedLocation(${jsArg(item.name)})" style="justify-content: space-between; padding: 8px 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          <span style="font-weight: 600; color: #1e293b; font-size: 9.5pt;">${escapeHtml(item.name)}</span>
+          ${roleBadge}
+        </div>
+        <span class="multi-loc-badge" style="background: #0d9488; color: #ffffff; border-color: #0d9488; font-weight: 700;">선택</span>
       </button>
     `;
   });
@@ -9538,13 +9781,19 @@ function selectDisambiguatedLocation(selectedLoc) {
       if (!Array.from(currentLocEl.options).some(o => o.value === selectedLoc)) {
         const opt = document.createElement('option');
         opt.value = selectedLoc;
-        opt.text = selectedLoc;
+        opt.text = (currentType === 'out' && typeof isBranchLocation === 'function' && isBranchLocation(selectedLoc)) ? `🏢 [지점] ${selectedLoc}` : selectedLoc;
         currentLocEl.add(opt);
       }
       currentLocEl.value = selectedLoc;
     }
     if (records && records.length > 0) {
-      records.forEach(r => { r.location = selectedLoc; });
+      const targetBranch = (currentType === 'out') ? (typeof getBranchCodeFromLocation === 'function' ? getBranchCodeFromLocation(selectedLoc) : null) : null;
+      records.forEach(r => {
+        r.location = selectedLoc;
+        if (currentType === 'out') {
+          r.targetWarehouse = targetBranch;
+        }
+      });
     }
     saveMetadata();
     saveTableData();
@@ -9552,7 +9801,7 @@ function selectDisambiguatedLocation(selectedLoc) {
     updateTotals();
     closeMultiLocationSelectModal();
     pendingMultiLocState = null;
-    alert(`✅ 출고처가 [${selectedLoc}]로 일괄 변경되었습니다.`);
+    showAppToast(`✅ 출고처가 [${selectedLoc}]로 일괄 변경되었습니다.`, 2500);
     return;
   }
 
@@ -9562,6 +9811,12 @@ function selectDisambiguatedLocation(selectedLoc) {
 
   // 1. 상단 드롭다운 및 메타데이터 업데이트
   if (currentLocEl) {
+    if (!Array.from(currentLocEl.options).some(o => o.value === selectedLoc)) {
+      const opt = document.createElement('option');
+      opt.value = selectedLoc;
+      opt.text = (currentType === 'out' && typeof isBranchLocation === 'function' && isBranchLocation(selectedLoc)) ? `🏢 [지점] ${selectedLoc}` : selectedLoc;
+      currentLocEl.add(opt);
+    }
     currentLocEl.value = selectedLoc;
   }
   if (detectedAdmin && currentAdminEl) {
@@ -9569,9 +9824,16 @@ function selectDisambiguatedLocation(selectedLoc) {
   }
   saveMetadata();
 
-  // 2. 대기 품목들에 선택된 출고처 일괄 지정
+  const whSelect = document.getElementById('warehouseSelect');
+  const selectedWh = whSelect ? whSelect.value : 'MAIN';
+  const targetBranch = (currentType === 'out') ? (typeof getBranchCodeFromLocation === 'function' ? getBranchCodeFromLocation(selectedLoc) : null) : null;
+
+  // 2. 대기 품목들에 선택된 출고처 일괄 지정 및 창고 매핑
   pendingRecs.forEach(r => {
     r.location = selectedLoc;
+    r.warehouse = selectedWh;
+    r.sourceWarehouse = currentType === 'in' ? null : selectedWh;
+    r.targetWarehouse = currentType === 'in' ? selectedWh : targetBranch;
   });
 
   // 3. 🚨 장바구니에 품목 추가 (기존 장바구니 품목과의 1줄 통합 지원)
