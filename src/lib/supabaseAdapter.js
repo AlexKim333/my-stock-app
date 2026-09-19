@@ -870,6 +870,13 @@ export const serverMethods = {
     const payload = []
     const updatedKeys = []
 
+    // 조정 창고: 한 전표는 한 창고만 조정한다 (행에 창고가 없으면 MAIN)
+    const warehouses = [...new Set(tableData.map(r => String(r.warehouse || 'MAIN').trim().toUpperCase() || 'MAIN'))]
+    if (warehouses.length > 1) {
+      throw new Error(`한 번에 한 창고만 재고조정할 수 있습니다. (섞인 창고: ${warehouses.join(', ')})`)
+    }
+    const warehouse = warehouses[0]
+
     for (const record of tableData) {
       const name = String(record.itemName || '').trim()
       const color = String(record.color || 'SURTIDO').trim()
@@ -913,14 +920,14 @@ export const serverMethods = {
       updatedKeys.push({ key, name, color, boxContent, adjType, itemId })
     }
 
-    const fingerprint = JSON.stringify({ handler, payload, kind: 'audit' })
+    const fingerprint = JSON.stringify({ handler, payload, warehouse, kind: 'audit' })
     const idemKey = takeIdempotencyKey('adjust_stock', fingerprint)
     let data
     try {
       const res = await supabase.rpc('rpc_adjust_stock', {
         p_admin: handler,
         p_items: payload,
-        p_warehouse: 'MAIN',
+        p_warehouse: warehouse,
         p_idempotency_key: idemKey
       })
       if (res.error) throw new Error(res.error.message || '재고조사 처리에 실패했습니다.')
@@ -936,13 +943,14 @@ export const serverMethods = {
       .from('inventory_stocks')
       .select('item_id, box_qty, unit_qty')
       .in('item_id', itemIds)
-      .eq('warehouse_code', 'MAIN')
+      .eq('warehouse_code', warehouse)
     if (freshErr) console.warn('[SupabaseAdapter] 재고조사 후 재고 재조회 실패:', freshErr)
     const stockMap = new Map((freshStocks || []).map(s => [s.item_id, s]))
 
     return {
       success: true,
       invoiceNumber: data?.invoice_no || '',
+      warehouse,
       adjustedCount: tableData.length,
       updatedItems: updatedKeys.map(up => {
         const fresh = stockMap.get(up.itemId)
@@ -957,6 +965,36 @@ export const serverMethods = {
         discrepancyCount: 0,
         isClean: true
       }
+    }
+  },
+
+  /**
+   * 13-1. 특정 창고의 품목별 실재고 (재고조정 화면의 현재고/예상 표시용)
+   * 반환 key는 getStockData와 같은 `품명_컬러_박스당수량` 형식
+   */
+  async getWarehouseStockList(warehouse) {
+    const wh = String(warehouse || 'MAIN').trim().toUpperCase() || 'MAIN'
+    const rows = await fetchAllRows(() =>
+      supabase
+        .from('inventory_stocks')
+        .select('item_id, box_qty, unit_qty, items(item_name, color, box_packaging_qty)')
+        .eq('warehouse_code', wh)
+    )
+    return {
+      warehouse: wh,
+      items: rows
+        .filter(r => r.items)
+        .map(r => {
+          const name = String(r.items.item_name || '').trim()
+          const color = String(r.items.color || 'SURTIDO').trim()
+          const boxContent = Number(r.items.box_packaging_qty || 1)
+          return {
+            key: `${name}_${color}_${boxContent}`,
+            itemId: r.item_id,
+            stockBox: Number(r.box_qty || 0),
+            stockIndividual: Number(r.unit_qty || 0)
+          }
+        })
     }
   },
 

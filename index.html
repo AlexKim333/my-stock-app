@@ -4146,6 +4146,7 @@ const typeConfig = {
           <span>모바일 현장 간편 실사 모달 열기</span>
         </button>
       </div>
+      <div class="input-row" style="align-items: center; margin-bottom: 6px;"><label for="warehouseSelect" style="font-weight: 700; color: #4338ca; min-width: 90px; margin-bottom: 0;">조정창고:</label><select id="warehouseSelect" name="warehouseSelect" tabindex="1" onchange="onWarehouseChanged()" style="flex: 1; font-weight: 700; color: #4338ca; background: #f5f3ff; border: 1.5px solid #8b5cf6; border-radius: 4px; padding: 4px 6px;"><option value="MAIN" selected>🏢 메인허브 (알라르꼰)</option><option value="PANTACO">PANTACO (판타코)</option><option value="IKEA">IKEA (이케아)</option><option value="LERMA">LERMA (레르마)</option><option value="PINO">PINO (피노)</option><option value="YARE">YARE (야레)</option><option value="ALMINTER">ALMINTER (알민테르)</option><option value="TLANE">TLANE (틀라네)</option><option value="STAR">STAR (스타)</option></select></div>
       <div class="input-row" style="align-items: center; margin-bottom: 6px; padding: 6px 8px; background: #f5f3ff; border: 1.5px solid #ddd6fe; border-radius: 6px;">
         <label style="font-weight: 700; color: #4338ca; min-width: 90px; margin-bottom: 0;">재고조정유형:</label>
         <div class="adj-mode-options" style="display: flex; gap: 14px; align-items: center;">
@@ -4380,6 +4381,11 @@ function onWarehouseChanged() {
           r.warehouse = whVal;
           changed = true;
         }
+      } else if (currentType === 'adj') {
+        if (r.warehouse !== whVal) {
+          r.warehouse = whVal;
+          changed = true;
+        }
       }
     });
     if (changed) {
@@ -4387,6 +4393,7 @@ function onWarehouseChanged() {
       updateTable();
     }
   }
+  if (currentType === 'adj') refreshAdjWarehouseStock();
   updateTotals();
 }
 
@@ -4449,6 +4456,7 @@ function restoreMetadata() {
         warehouseSelect.value = metadata.warehouse;
       }
     }
+    if (currentType === 'adj') refreshAdjWarehouseStock();
     if (typeof highlightActiveLocationButton === 'function') highlightActiveLocationButton();
   } catch (e) {
     localStorage.removeItem(storageKey);
@@ -5421,17 +5429,19 @@ function updateTable() {
   let html = '';
 
   // ★ [성능 최적화] updateTable 호출마다 발생하던 O(records × stock × 3) 반복 연산을 O(stock) 1회 Map 생성 + O(1) 조회로 단축
+  // 재고조정 화면은 선택한 조정 창고의 재고를 기준으로 현재고/예상을 계산한다.
+  const stockList = currentType === 'adj' ? getAdjStockSource() : stockDataCache;
   let stockExactMap = null;
   let stockCleanMap = null;
   let stockSurtidoMap = null;
   let stockNameMap = null;
-  if (stockDataCache && stockDataCache.length > 0) {
+  if (stockList && stockList.length > 0) {
     stockExactMap = new Map();
     stockCleanMap = new Map();
     stockSurtidoMap = new Map();
     stockNameMap = new Map();
-    for (let i = 0; i < stockDataCache.length; i++) {
-      const s = stockDataCache[i];
+    for (let i = 0; i < stockList.length; i++) {
+      const s = stockList[i];
       const sName = (s.name || '').trim();
       const sCleanName = sName.replace(/[\s_\-]/g, '').toLowerCase();
       const sCleanColor = (s.color || 'SURTIDO').trim().toLowerCase();
@@ -5486,7 +5496,8 @@ function updateTable() {
       if (stockExactMap) {
         const recCleanName = (rec.itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
         const recCleanColor = (rec.color || 'SURTIDO').trim().toLowerCase();
-        const sInfo = stockExactMap.get(recCleanName + '__' + recCleanColor)
+        const sInfo = stockCleanMap.get(recCleanName + '__' + recCleanColor)
+                   || stockExactMap.get(recCleanName + '__' + recCleanColor)
                    || stockSurtidoMap.get(recCleanName)
                    || stockNameMap.get(recCleanName)
                    || null;
@@ -5977,8 +5988,12 @@ function confirmSubmit() {
   buttonContainer.appendChild(processingButton);
   const adminSelect = document.getElementById('adminSelect');
   const adminValue = adminSelect ? adminSelect.value : 'ADMIN';
-  const recordsToPrint = [...records];
   const type = currentType;
+  if (type === 'adj') {
+    const adjWh = getAdjWarehouse();
+    records.forEach(r => { r.warehouse = adjWh; });
+  }
+  const recordsToPrint = [...records];
   callServer(typeConfig[type].processFunction, [records, adminValue], {
     key: 'submitForm',
     timeout: 90000, // 다건 전표는 시트 일괄 쓰기가 길어질 수 있다
@@ -6012,7 +6027,7 @@ function confirmSubmit() {
             integrityMsg = `\n\n⚠️ [데이터 정합성 주의]\n${result.integrity.discrepancyCount}건의 오차가 감지되었습니다. [재고정합성검사] 메뉴를 확인해 주세요.`;
           }
         }
-        alert(`✅ [재고조사 처리 완료]\n총 ${count}개 품목의 재고(치환/추가)가 구글 시트에 즉시 반영되었습니다.\n(조사전표번호: ${invNum})${integrityMsg}`);
+        alert(`✅ [재고조사 처리 완료]\n총 ${count}개 품목의 재고(치환/추가)가 구글 시트에 즉시 반영되었습니다.\n(창고: ${(result && result.warehouse) || 'MAIN'} · 조사전표번호: ${invNum})${integrityMsg}`);
         records = [];
         updateTable();
         toggleScroll();
@@ -6027,6 +6042,7 @@ function confirmSubmit() {
         if (confirmModalDiv) confirmModalDiv.style.display = 'none';
         showAppToast('🔄 최신 재고를 시트에서 동기화 중입니다...', 2500);
         loadStockData(true);
+        refreshAdjWarehouseStock(true);
       } else {
         const invNum = (result && result.seq) ? result.seq : (result && result.invoiceNumber) ? result.invoiceNumber : result;
 
@@ -6947,7 +6963,9 @@ function updateTotals() {
 
       const isBr = typeof isBranchLocation === 'function' && isBranchLocation(locName);
 
-      if (currentType === 'in') {
+      if (currentType === 'adj') {
+        cartLocationLabel.innerHTML = `재고조정 창고: <b style="color: #4338ca;">🏢 ${escapeHtml(curWh)}</b>`;
+      } else if (currentType === 'in') {
         cartLocationLabel.innerHTML = `입고: <b>${escapeHtml(locName)}</b> ➔ <b style="color: #059669;">🏢 ${escapeHtml(curWh)}</b>`;
       } else if (isBr) {
         cartLocationLabel.innerHTML = `이동: <b style="color: #1e3a8a;">🏢 ${escapeHtml(curWh)}</b> ➔ <b style="color: #2563eb;">🏢 ${escapeHtml(locName)} (지점이동)</b>`;
@@ -11795,6 +11813,54 @@ function onAdjTypeRadioChanged(val) {
   updateLiveAdjPreview();
 }
 
+// 🏢 재고조정 창고 선택: MAIN이 아니면 그 창고의 실재고를 따로 불러와 현재고/예상 표시에 쓴다.
+let adjWarehouseStock = { code: 'MAIN', map: null, loadedAt: 0 };
+let adjStockSourceMemo = { base: null, code: null, map: null, list: null };
+
+function getAdjWarehouse() {
+  const whSelect = document.getElementById('warehouseSelect');
+  return (currentType === 'adj' && whSelect && whSelect.value) ? whSelect.value : 'MAIN';
+}
+
+function refreshAdjWarehouseStock(force) {
+  if (currentType !== 'adj') return;
+  const code = getAdjWarehouse();
+  if (code === 'MAIN') {
+    adjWarehouseStock = { code: 'MAIN', map: null, loadedAt: Date.now() };
+    updateTable();
+    updateLiveAdjPreview();
+    return;
+  }
+  if (!force && adjWarehouseStock.code === code && adjWarehouseStock.map && Date.now() - adjWarehouseStock.loadedAt < 30000) return;
+  callServer('getWarehouseStockList', [code], {
+    key: 'adjWarehouseStock',
+    mode: 'latest',
+    onSuccess: res => {
+      if (!res || res.warehouse !== getAdjWarehouse()) return;
+      adjWarehouseStock = { code: res.warehouse, map: new Map((res.items || []).map(it => [it.key, it])), loadedAt: Date.now() };
+      updateTable();
+      updateLiveAdjPreview();
+    },
+    onError: err => showAppToast(`⚠️ ${code} 창고 재고를 불러오지 못했습니다: ${err.message || err}`, 3000)
+  });
+}
+
+// 재고조정 화면의 품목 목록: 품목 카탈로그는 MAIN 캐시를 쓰고, 수량은 선택한 창고 기준으로 바꾼다.
+function getAdjStockSource() {
+  const code = getAdjWarehouse();
+  if (code === 'MAIN') return stockDataCache;
+  const map = adjWarehouseStock.code === code ? adjWarehouseStock.map : null;
+  if (adjStockSourceMemo.base === stockDataCache && adjStockSourceMemo.code === code && adjStockSourceMemo.map === map) {
+    return adjStockSourceMemo.list;
+  }
+  const list = (stockDataCache || []).map(it => {
+    const w = map ? map.get(it.key) : null;
+    return { ...it, stockBox: w ? w.stockBox : 0, stockIndividual: w ? w.stockIndividual : 0 };
+  });
+  adjStockSourceMemo = { base: stockDataCache, code, map, list };
+  return list;
+}
+
 function updateLiveAdjPreview() {
   const previewBox = document.getElementById('liveAdjPreviewBox');
   if (!previewBox) return;
@@ -11822,13 +11888,15 @@ function updateLiveAdjPreview() {
   const cleanName = itemName.replace(/[\s_\-]/g, '').toLowerCase();
   const cleanColor = (colorInput ? colorInput.value : 'SURTIDO').trim().toLowerCase();
   let sInfo = null;
-  if (stockDataCache) {
-    sInfo = stockDataCache.find(it => {
+  const adjSource = getAdjStockSource();
+  if (adjSource) {
+    sInfo = adjSource.find(it => {
       const itName = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
       const itColor = (it.color || 'SURTIDO').trim().toLowerCase();
       return itName === cleanName && itColor === cleanColor;
-    }) || stockDataCache.find(it => (it.name || '').replace(/[\s_\-]/g, '').toLowerCase() === cleanName);
+    }) || adjSource.find(it => (it.name || '').replace(/[\s_\-]/g, '').toLowerCase() === cleanName);
   }
+  const whTag = ` · 🏢 ${escapeHtml(getAdjWarehouse())}`;
 
   const curBox = sInfo ? (sInfo.stockBox || 0) : 0;
   const curIndiv = sInfo ? (sInfo.stockIndividual || 0) : 0;
@@ -11841,13 +11909,13 @@ function updateLiveAdjPreview() {
     previewBox.style.background = '#eff6ff';
     previewBox.style.border = '1px solid #bfdbfe';
     previewBox.style.color = '#1e40af';
-    previewBox.innerHTML = `🔄 [치환 미리보기] 현재 ${curBox}상자 ➔ 실사 확정: <strong style="font-size: 9.5pt;">${qty}상자</strong> (<span style="color: ${diffColor};">${diffStr}상자 오차</span>)`;
+    previewBox.innerHTML = `🔄 [치환 미리보기${whTag}] 현재 ${curBox}상자 ➔ 실사 확정: <strong style="font-size: 9.5pt;">${qty}상자</strong> (<span style="color: ${diffColor};">${diffStr}상자 오차</span>)`;
   } else {
     const finalBox = curBox + qty;
     previewBox.style.background = '#ecfdf5';
     previewBox.style.border = '1px solid #a7f3d0';
     previewBox.style.color = '#065f46';
-    previewBox.innerHTML = `➕ [추가 미리보기] 기존 ${curBox}상자 + 추가 ${qty}상자 ➔ 최종: <strong style="font-size: 9.5pt;">${finalBox}상자</strong>`;
+    previewBox.innerHTML = `➕ [추가 미리보기${whTag}] 기존 ${curBox}상자 + 추가 ${qty}상자 ➔ 최종: <strong style="font-size: 9.5pt;">${finalBox}상자</strong>`;
   }
 }
 
@@ -12020,7 +12088,8 @@ function filterMobileAdjItems(query) {
   }
 
   const q = rawQ.toLowerCase();
-  if (!q || !stockDataCache || stockDataCache.length === 0) {
+  const adjSource = getAdjStockSource();
+  if (!q || !adjSource || adjSource.length === 0) {
     dropdown.style.display = 'none';
     _mobileAdjAllMatched = [];
     return;
@@ -12028,7 +12097,7 @@ function filterMobileAdjItems(query) {
 
   // 🎯 순수 입력어 포함 조건 (Exact Substring Match)
   // 사용자가 입력한 검색어(예: '-160')를 하이픈 제거 없이 그대로 포함한 품목만 정확히 매칭
-  _mobileAdjAllMatched = stockDataCache.filter(it => {
+  _mobileAdjAllMatched = adjSource.filter(it => {
     const itName = (it.name || '').toLowerCase();
     const itColor = (it.color || '').toLowerCase();
     return itName.includes(q) || itColor.includes(q);
@@ -12429,7 +12498,8 @@ function submitMobileAdjItem(isContinue) {
     location: origRec ? origRec.location : (currentMobileAdjMode === 'increment' ? '재고추가' : '재고치환'),
     adjType: origRec ? origRec.adjType : currentMobileAdjMode,
     unitType: unit,
-    matchRate: 100
+    matchRate: 100,
+    warehouse: getAdjWarehouse()
   };
 
   const modeName = currentMobileAdjMode === 'increment' ? '➕추가' : '🔄치환';
@@ -12517,12 +12587,13 @@ function editMobileSessionItem(index) {
   const cleanName = (r.itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
   const cleanColor = (r.color || 'SURTIDO').trim().toLowerCase();
   let found = null;
-  if (stockDataCache) {
-    found = stockDataCache.find(it => {
+  const adjSource = getAdjStockSource();
+  if (adjSource) {
+    found = adjSource.find(it => {
       const itN = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
       const itC = (it.color || 'SURTIDO').trim().toLowerCase();
       return itN === cleanName && itC === cleanColor;
-    }) || stockDataCache.find(it => (it.name || '').replace(/[\s_\-]/g, '').toLowerCase() === cleanName);
+    }) || adjSource.find(it => (it.name || '').replace(/[\s_\-]/g, '').toLowerCase() === cleanName);
   }
 
   currentMobileAdjItem = found || {
