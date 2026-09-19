@@ -6119,6 +6119,13 @@ function confirmSubmit() {
         if (adminSelect) adminSelect.value = 'ADMIN';
         showAppToast('🔄 최신 재고를 시트에서 동기화 중입니다...', 2500);
         loadStockData(true);
+        if (typeof loadSubWarehouseMatrix === 'function') {
+          if (typeof isSubWhMatrixOpen === 'function' && isSubWhMatrixOpen()) {
+            loadSubWarehouseMatrix(true, { silent: true });
+          } else {
+            subWhMatrixData = null;
+          }
+        }
 
         // 영수증 인쇄는 안전 격리 블록에서 독립 실행
         try {
@@ -11462,8 +11469,12 @@ function applyStockChange(detail) {
   // 1) 메인 재고 캐시: 이 탭의 쓰기는 각 처리 화면이 이미 다시 읽으므로 생략
   if (!onlyLocal && touches('MAIN')) loadStockData(true);
 
-  // 2) 서브창고 매트릭스: 열려 있으면 바로, 닫혀 있으면 다음에 열 때 재조회된다
-  if (subWhMatrixData && isSubWhMatrixOpen()) loadSubWarehouseMatrix(true, { silent: true });
+  // 2) 서브창고 매트릭스: 열려 있으면 즉시 무음 갱신, 닫혀 있으면 캐시를 비워 열 때 100% 최신 재고 조회
+  if (isSubWhMatrixOpen()) {
+    loadSubWarehouseMatrix(true, { silent: true });
+  } else {
+    subWhMatrixData = null;
+  }
 
   // 3) 재고조정 화면의 조정 창고 재고
   if (currentType === 'adj' && getAdjWarehouse() !== 'MAIN' && touches(getAdjWarehouse())) {
