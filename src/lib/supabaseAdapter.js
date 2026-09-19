@@ -1027,87 +1027,30 @@ export const serverMethods = {
   },
 
   /**
-   * 14. 재고 정합성 자동 검사기 (전수 대사 & 오차 탐지)
+   * 14. 재고 정합성 자동 검사기 (전 창고 전수 대사)
+   * 집계·대조는 서버(rpc_verify_stock_integrity)에서 수행한다.
+   *  - 기준(기초)재고 + 기준시각 이후 거래 = 현재고 대조
+   *  - 창고별 음수 재고, 유령 보류(재고보다 많은 진행 중 발주) 검사
    */
-  async verifyStockIntegrity() {
-    // 거래 합계는 서버에서 창고 방향(MAIN 기준)까지 반영해 집계한다.
-    const [allStocks, movementRes, itemsList] = await Promise.all([
-      fetchAllRows(() => supabase.from('view_effective_stocks').select('*'), { orderBy: 'item_id' }),
-      supabase.rpc('rpc_main_stock_movement_summary'),
-      fetchAllRows(() =>
-        supabase.from('items').select('id, initial_stock_boxes, initial_stock_units, box_packaging_qty')
-      )
-    ])
-    if (movementRes.error) throw movementRes.error
-
-    const itemsMap = new Map(itemsList.map(it => [it.id, it]))
-    const movementMap = new Map((movementRes.data || []).map(m => [m.item_id, m]))
-
-    const discrepancies = []
-    let checkedCount = 0
-
-    allStocks.forEach(st => {
-      checkedCount++
-      const boxContent = Number(st.box_packaging_qty || 1)
-      const currentBox = Number(st.main_box_qty || 0)
-      const currentIndividual = Number(st.main_unit_qty || 0)
-      const currentTotal = (currentBox * boxContent) + currentIndividual
-
-      const itemMeta = itemsMap.get(st.item_id) || {}
-      const initBox = Number(itemMeta.initial_stock_boxes || 0)
-      const initIndiv = Number(itemMeta.initial_stock_units || 0)
-      const initTotal = (initBox * boxContent) + initIndiv
-
-      const mv = movementMap.get(st.item_id) || {}
-      const inTotal = Number(mv.in_units || 0)
-      const outTotal = Number(mv.out_units || 0)
-      const adjTotal = Number(mv.adj_units || 0)
-      const expectedTotal = initTotal + inTotal - outTotal + adjTotal
-
-      // 1) 음수 재고 검증
-      if (currentBox < 0 || currentIndividual < 0) {
-        discrepancies.push({
-          name: st.item_name,
-          color: st.color || 'SURTIDO',
-          boxContent: boxContent,
-          currentBox: currentBox,
-          currentIndividual: currentIndividual,
-          currentTotal: currentTotal,
-          expectedTotal: expectedTotal,
-          diffTotal: currentTotal,
-          diffBoxes: currentBox,
-          diffIndividuals: currentIndividual,
-          initialStock: initBox,
-          inSummary: '음수 재고 감지',
-          outSummary: ''
-        })
-      } else if (currentTotal !== expectedTotal) {
-        // 2) 재고실사 이력이 없는 품목의 트랜잭션 전수 대사 불일치 감지
-        const diff = currentTotal - expectedTotal
-        discrepancies.push({
-          name: st.item_name,
-          color: st.color || 'SURTIDO',
-          boxContent: boxContent,
-          currentBox: currentBox,
-          currentIndividual: currentIndividual,
-          currentTotal: currentTotal,
-          expectedTotal: expectedTotal,
-          diffTotal: diff,
-          diffBoxes: boxContent > 0 ? Math.floor(diff / boxContent) : diff,
-          diffIndividuals: boxContent > 0 ? (diff % boxContent) : 0,
-          initialStock: initBox,
-          inSummary: `입고 ${Number(mv.in_boxes || 0)}박스`,
-          outSummary: `출고 ${Number(mv.out_boxes || 0)}박스`
-        })
-      }
+  async verifyStockIntegrity(warehouse) {
+    const { data, error } = await supabase.rpc('rpc_verify_stock_integrity', {
+      p_warehouse: warehouse ? String(warehouse).toUpperCase().trim() : null
     })
+    if (error) throw error
+    return data || { success: false, error: '검사 결과가 비어 있습니다.' }
+  },
 
-    return {
-      success: true,
-      checkedCount: checkedCount,
-      discrepancyCount: discrepancies.length,
-      discrepancies: discrepancies
-    }
+  /**
+   * 14-1. 현재 재고를 정합성 검사 기준(기초재고)으로 확정 (관리자)
+   * 시트 이관·수동 수정 등 거래 기록이 없는 과거분을 기준선으로 고정한다.
+   */
+  async setStockBaseline(warehouse, memo) {
+    const { data, error } = await supabase.rpc('rpc_set_stock_baseline', {
+      p_warehouse: warehouse ? String(warehouse).toUpperCase().trim() : null,
+      p_memo: memo || null
+    })
+    if (error) throw error
+    return data
   },
 
   /**
