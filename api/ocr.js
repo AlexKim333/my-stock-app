@@ -1,29 +1,79 @@
 // api/ocr.js
 // Vercel Serverless Function: Gemini OCR with Token Circuit Breaker (thinking_budget: 1024)
 
-export default async function handler(req, res) {
-  // CORS & Preflight
-  res.setHeader('Access-Control-Allow-Credentials', true)
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT')
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  )
+// 같은 출처(웹앱)에서만 호출하므로 CORS 허용 헤더를 두지 않는다.
+// Gemini 쿼터 보호를 위해 WMS 로그인 세션을 확인하고, 모델 호출마다 시간 상한을 둔다.
 
-  if (req.method === 'OPTIONS') {
-    res.status(200).end()
-    return
+const MAX_IMAGE_BASE64_CHARS = 6 * 1024 * 1024
+const MODEL_TIMEOUT_MS = 25000
+const SESSION_CHECK_TIMEOUT_MS = 5000
+
+function headerValue(req, name) {
+  const v = req.headers?.[name] ?? req.headers?.[name.toLowerCase()]
+  return Array.isArray(v) ? v[0] : (v || '')
+}
+
+async function fetchWithTimeout(url, options, ms) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ms)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
   }
+}
 
+/** Supabase rpc_session_info로 세션 토큰을 검증한다. */
+async function verifyWmsSession(token) {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
+  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+  if (!supabaseUrl || !anonKey) {
+    return { ok: false, status: 500, error: '서버에 Supabase 환경변수가 설정되지 않았습니다.' }
+  }
+  if (!token) {
+    return { ok: false, status: 401, error: '로그인이 필요합니다.' }
+  }
+  try {
+    const resp = await fetchWithTimeout(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/rpc_session_info`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+        'x-wms-session': token
+      },
+      body: '{}'
+    }, SESSION_CHECK_TIMEOUT_MS)
+    if (!resp.ok) {
+      return { ok: false, status: 401, error: '세션이 만료되었습니다. 다시 로그인하세요.' }
+    }
+    const data = await resp.json().catch(() => null)
+    if (!data?.success) {
+      return { ok: false, status: 401, error: '세션이 만료되었습니다. 다시 로그인하세요.' }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, status: 503, error: `세션 확인 실패: ${e.message}` }
+  }
+}
+
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' })
   }
 
   try {
+    const session = await verifyWmsSession(headerValue(req, 'x-wms-session').trim())
+    if (!session.ok) {
+      return res.status(session.status).json({ error: session.error })
+    }
+
     const { type, imageBase64 } = req.body || {}
-    if (!imageBase64) {
+    if (!imageBase64 || typeof imageBase64 !== 'string') {
       return res.status(400).json({ error: '전달된 이미지 데이터가 없습니다.' })
+    }
+    if (imageBase64.length > MAX_IMAGE_BASE64_CHARS) {
+      return res.status(413).json({ error: '이미지가 너무 큽니다. 해상도를 낮춰 다시 시도하세요.' })
     }
 
     const apiKey = process.env.GEMINI_API_KEY
@@ -118,11 +168,11 @@ Return ONLY valid JSON:
       }
 
       try {
-        const resp = await fetch(url, {
+        const resp = await fetchWithTimeout(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
-        })
+        }, MODEL_TIMEOUT_MS)
 
         if (resp.ok) {
           const json = await resp.json()

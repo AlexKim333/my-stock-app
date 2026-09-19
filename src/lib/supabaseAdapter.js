@@ -1,6 +1,6 @@
 // src/lib/supabaseAdapter.js
 // google.script.run 호환 초고속 Supabase 어댑터 (sub-50ms)
-import { supabase } from './supabase.js'
+import { supabase, readWmsSessionToken } from './supabase.js'
 
 // 품목 ID 캐시 (item_name_color_pkg -> item_id)
 let itemIdCache = new Map()
@@ -46,6 +46,25 @@ export async function preloadItemIdCache() {
   } catch (err) {
     console.warn('[SupabaseAdapter] 품목 ID 캐싱 오류:', err)
   }
+}
+
+/** OCR 서버리스 함수 호출 (로그인 세션 토큰으로 인증) */
+async function postOcr(type, imageBase64, label) {
+  const res = await fetch('/api/ocr', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-wms-session': readWmsSessionToken()
+    },
+    body: JSON.stringify({ type, imageBase64 })
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: '서버 오류' }))
+    const e = new Error(err.error || `${label} 실패 (${res.status})`)
+    if (res.status === 401) notifySessionExpired(e)
+    throw e
+  }
+  return await res.json()
 }
 
 function formatDate(d) {
@@ -945,50 +964,21 @@ export const serverMethods = {
    * 14. 재고 정합성 자동 검사기 (전수 대사 & 오차 탐지)
    */
   async verifyStockIntegrity() {
-    const [allStocks, allTxs, itemsList] = await Promise.all([
+    // 거래 합계는 서버에서 창고 방향(MAIN 기준)까지 반영해 집계한다.
+    const [allStocks, movementRes, itemsList] = await Promise.all([
       fetchAllRows(() => supabase.from('view_effective_stocks').select('*'), { orderBy: 'item_id' }),
-      fetchAllRows(() =>
-        supabase.from('stock_transactions').select('item_id, transaction_type, box_qty, unit_qty, warehouse_code')
-      ),
+      supabase.rpc('rpc_main_stock_movement_summary'),
       fetchAllRows(() =>
         supabase.from('items').select('id, initial_stock_boxes, initial_stock_units, box_packaging_qty')
       )
     ])
+    if (movementRes.error) throw movementRes.error
 
     const itemsMap = new Map(itemsList.map(it => [it.id, it]))
+    const movementMap = new Map((movementRes.data || []).map(m => [m.item_id, m]))
 
     const discrepancies = []
     let checkedCount = 0
-
-    // 트랜잭션 항목별 집계 (총 입고, 총 출고, 재고조사 건수)
-    const txByItem = new Map()
-    allTxs.forEach(tx => {
-      if (!txByItem.has(tx.item_id)) {
-        txByItem.set(tx.item_id, {
-          inBoxTotal: 0,
-          inIndivTotal: 0,
-          outBoxTotal: 0,
-          outIndivTotal: 0,
-          adjBoxTotal: 0,
-          adjIndivTotal: 0,
-          adjustCount: 0
-        })
-      }
-      const t = txByItem.get(tx.item_id)
-      const b = Number(tx.box_qty || 0)
-      const u = Number(tx.unit_qty || 0)
-      if (tx.transaction_type === 'INBOUND' || tx.transaction_type === '재고추가') {
-        t.inBoxTotal += b
-        t.inIndivTotal += u
-      } else if (tx.transaction_type === 'OUTBOUND' || (tx.transaction_type === 'MOVE' && tx.warehouse_code === 'MAIN')) {
-        t.outBoxTotal += b
-        t.outIndivTotal += u
-      } else if (tx.transaction_type === 'ADJUST') {
-        t.adjustCount++
-        t.adjBoxTotal += b
-        t.adjIndivTotal += u
-      }
-    })
 
     allStocks.forEach(st => {
       checkedCount++
@@ -1002,10 +992,10 @@ export const serverMethods = {
       const initIndiv = Number(itemMeta.initial_stock_units || 0)
       const initTotal = (initBox * boxContent) + initIndiv
 
-      const tInfo = txByItem.get(st.item_id) || { inBoxTotal: 0, inIndivTotal: 0, outBoxTotal: 0, outIndivTotal: 0, adjBoxTotal: 0, adjIndivTotal: 0, adjustCount: 0 }
-      const inTotal = (tInfo.inBoxTotal * boxContent) + tInfo.inIndivTotal
-      const outTotal = (tInfo.outBoxTotal * boxContent) + tInfo.outIndivTotal
-      const adjTotal = (tInfo.adjBoxTotal * boxContent) + tInfo.adjIndivTotal
+      const mv = movementMap.get(st.item_id) || {}
+      const inTotal = Number(mv.in_units || 0)
+      const outTotal = Number(mv.out_units || 0)
+      const adjTotal = Number(mv.adj_units || 0)
       const expectedTotal = initTotal + inTotal - outTotal + adjTotal
 
       // 1) 음수 재고 검증
@@ -1040,8 +1030,8 @@ export const serverMethods = {
           diffBoxes: boxContent > 0 ? Math.floor(diff / boxContent) : diff,
           diffIndividuals: boxContent > 0 ? (diff % boxContent) : 0,
           initialStock: initBox,
-          inSummary: `입고 ${tInfo.inBoxTotal}박스`,
-          outSummary: `출고 ${tInfo.outBoxTotal}박스`
+          inSummary: `입고 ${Number(mv.in_boxes || 0)}박스`,
+          outSummary: `출고 ${Number(mv.out_boxes || 0)}박스`
         })
       }
     })
@@ -1361,16 +1351,13 @@ export const serverMethods = {
    * 16. 과거 피크 출고량 분석 및 과학적 안전재고(Safe Stock) 산출 엔진
    */
   async analyzeWinterPeakDemandAndSafeStock() {
-    // 1. 전체 품목 마스터 및 트랜잭션 병렬 조회
-    const [allStocks, allTxs] = await Promise.all([
+    // 1. 전체 품목 마스터 및 품목·일자별 출고 합계(서버 집계, 멕시코시티 날짜 기준) 병렬 조회
+    const [allStocks, dailyRes] = await Promise.all([
       fetchAllRows(() => supabase.from('view_effective_stocks').select('*'), { orderBy: 'item_id' }),
-      fetchAllRows(() =>
-        supabase.from('stock_transactions')
-          .select('item_id, transaction_type, box_qty, unit_qty, created_at, invoice_no')
-          .in('transaction_type', ['OUTBOUND', 'MOVE'])
-          .order('created_at', { ascending: false })
-      )
+      supabase.rpc('rpc_outbound_daily_boxes')
     ])
+    if (dailyRes.error) throw dailyRes.error
+    const dailyRows = dailyRes.data || []
 
     // 2. 일자별 / 품목별 출고 수량 집계
     const itemDailyMap = new Map()
@@ -1379,18 +1366,15 @@ export const serverMethods = {
     const itemWinterTotal = new Map()
     let validTxCount = 0
 
-    allTxs.forEach(tx => {
-      const b = Math.abs(Number(tx.box_qty || 0))
+    dailyRows.forEach(row => {
+      const b = Number(row.boxes || 0)
       if (b <= 0) return
 
-      const dt = new Date(tx.created_at)
-      const m = dt.getMonth() + 1
-      const y = dt.getFullYear()
-      const d = dt.getDate()
-      const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      const dateStr = String(row.day)
+      const m = Number(dateStr.slice(5, 7))
 
-      validTxCount++
-      const itemId = tx.item_id
+      validTxCount += Number(row.tx_count || 0)
+      const itemId = row.item_id
       if (!itemDailyMap.has(itemId)) itemDailyMap.set(itemId, new Map())
       const dMap = itemDailyMap.get(itemId)
       dMap.set(dateStr, (dMap.get(dateStr) || 0) + b)
@@ -1597,48 +1581,21 @@ export const serverMethods = {
    * 15. Gemini 비전 OCR 손글씨 주문서 분석
    */
   async analyzeHandwrittenOrder(imageBase64) {
-    const res = await fetch('/api/ocr', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'handwritten', imageBase64 })
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: '서버 오류' }))
-      throw new Error(err.error || `손글씨 분석 실패 (${res.status})`)
-    }
-    return await res.json()
+    return postOcr('handwritten', imageBase64, '손글씨 분석')
   },
 
   /**
    * 16. Gemini 비전 OCR 화물운송장(Carta de Porte) 분석
    */
   async analyzeCartaDePorte(imageBase64) {
-    const res = await fetch('/api/ocr', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'cartadeporte', imageBase64 })
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: '서버 오류' }))
-      throw new Error(err.error || `송장 분석 실패 (${res.status})`)
-    }
-    return await res.json()
+    return postOcr('cartadeporte', imageBase64, '송장 분석')
   },
 
   /**
    * 17. Gemini 비전 OCR 재고실사표 분석
    */
   async analyzeStockAuditSheet(imageBase64) {
-    const res = await fetch('/api/ocr', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'audit', imageBase64 })
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: '서버 오류' }))
-      throw new Error(err.error || `실사표 분석 실패 (${res.status})`)
-    }
-    return await res.json()
+    return postOcr('audit', imageBase64, '실사표 분석')
   },
 
   /**
@@ -1733,14 +1690,15 @@ export const serverMethods = {
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now)
       d.setDate(d.getDate() - i)
-      const dStr = d.toISOString().split('T')[0]
+      const dStr = formatDate(d).replaceAll('/', '-')
       const label = `${d.getMonth() + 1}/${d.getDate()}`
       dailyMap[dStr] = { date: dStr, label: label, inBoxes: 0, outBoxes: 0 }
     }
 
     recentTxRows.forEach(tx => {
       if (!tx.created_at) return
-      const dStr = tx.created_at.split('T')[0]
+      // created_at(UTC)을 라벨과 같은 로컬 날짜로 버킷팅한다.
+      const dStr = formatDate(new Date(tx.created_at)).replaceAll('/', '-')
       if (dailyMap[dStr]) {
         const b = Math.abs(Number(tx.box_qty || 0))
         if (tx.transaction_type === 'INBOUND') dailyMap[dStr].inBoxes += b
@@ -1983,6 +1941,10 @@ export const serverMethods = {
         .limit(2000)
     ])
 
+    if (effStockRes.error) throw effStockRes.error
+    if (whStockRes.error) throw whStockRes.error
+    if (allTxRes.error) throw allTxRes.error
+
     const eff = effStockRes.data || {}
     const whStocks = whStockRes.data || []
     const allTxs = allTxRes.data || []
@@ -2005,43 +1967,49 @@ export const serverMethods = {
       }
     })
 
-    // 3. 트랜잭션 수불 잔고(Running Balance) 역산 계산
-    let runningBoxes = currentMainBoxes
-    let runningUnits = currentMainUnits
+    // 3. 트랜잭션 수불 잔고(Running Balance) 역산 계산 — MAIN 창고 기준, 개수 단위로 계산
+    //    서브창고에서 일어난 출고·조정·이동은 MAIN 잔고를 바꾸지 않으며, 서브창고→MAIN 이동은 입고로 본다.
+    const pack = Math.max(1, Math.round(Number(item.box_packaging_qty || 1)))
+    const whOf = v => String(v || '').trim().toUpperCase()
+    const mainDeltaUnits = tx => {
+      const type = (tx.transaction_type || '').toUpperCase()
+      const units = Number(tx.box_qty || 0) * pack + Number(tx.unit_qty || 0)
+      const wh = whOf(tx.warehouse_code) || 'MAIN'
+      const src = whOf(tx.source_warehouse) || wh
+      const dst = whOf(tx.target_warehouse)
+      if (type === 'INBOUND' || type === '재고추가') return (dst || wh) === 'MAIN' ? units : 0
+      if (type === 'OUTBOUND') return src === 'MAIN' ? -units : 0
+      if (type === 'MOVE') {
+        if (src === 'MAIN' && dst !== 'MAIN') return -units
+        if (dst === 'MAIN' && src !== 'MAIN') return units
+        return 0
+      }
+      if (type === 'ADJUST') return wh === 'MAIN' ? units : 0
+      return 0
+    }
+
+    let runningTotal = currentMainBoxes * pack + currentMainUnits
 
     const enrichedTxs = allTxs.map(tx => {
-      const bQty = Number(tx.box_qty || 0)
-      const uQty = Number(tx.unit_qty || 0)
-      const type = (tx.transaction_type || '').toUpperCase()
-
-      const balanceAfterBoxes = runningBoxes
-      const balanceAfterUnits = runningUnits
+      const balanceAfterBoxes = Math.floor(runningTotal / pack)
+      const balanceAfterUnits = runningTotal - balanceAfterBoxes * pack
 
       // 다음(더 과거) 트랜잭션 이전 잔고로 롤백
-      if (type === 'INBOUND') {
-        runningBoxes -= bQty
-        runningUnits -= uQty
-      } else if (type === 'OUTBOUND') {
-        runningBoxes += bQty
-        runningUnits += uQty
-      } else if (type === 'MOVE') {
-        runningBoxes += bQty
-        runningUnits += uQty
-      } else if (type === 'ADJUST') {
-        runningBoxes -= bQty
-        runningUnits -= uQty
-      }
+      const delta = mainDeltaUnits(tx)
+      runningTotal -= delta
 
       return {
         ...tx,
+        main_delta_units: delta,
         balance_after_boxes: balanceAfterBoxes,
         balance_after_units: balanceAfterUnits
       }
     })
 
     // 4. 사용자 필터 적용 (startDate, endDate, transactionType, partnerName)
-    const startDate = options.startDate ? new Date(options.startDate + 'T00:00:00Z') : null
-    const endDate = options.endDate ? new Date(options.endDate + 'T23:59:59Z') : null
+    // 날짜 필터는 사용자가 보는 현지 날짜 기준 (UTC 'Z'로 자르면 멕시코 시간과 6시간 어긋난다)
+    const startDate = options.startDate ? new Date(options.startDate + 'T00:00:00') : null
+    const endDate = options.endDate ? new Date(options.endDate + 'T23:59:59.999') : null
     const filterType = options.transactionType && options.transactionType !== 'ALL' ? options.transactionType.toUpperCase() : null
     const filterPartner = options.partnerName ? options.partnerName.trim().toUpperCase() : null
 
