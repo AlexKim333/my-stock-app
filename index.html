@@ -4251,6 +4251,7 @@ function loadStockData(silent = false) {
       updateTable();
       updateTotals();
       if (typeof updateUnitType === 'function') updateUnitType();
+      refreshOpenStockViews();
       return stockDataCache;
     },
     onPersisted: stamp => { lastSyncedStockTime = stamp; },
@@ -11247,6 +11248,57 @@ function onSubWhMatrixLoaded(data) {
 
   updateTruckGauges();
   filterSubWarehouseTable();
+  refreshOpenSubWhQtyModal();
+  warnOrderDraftsOverAvailability();
+}
+
+function findMatrixItem(itemId, codigo, color, boxContent) {
+  const items = (subWhMatrixData && subWhMatrixData.items) || [];
+  if (itemId) {
+    const byId = items.find(it => it.itemId === itemId);
+    if (byId) return byId;
+  }
+  const up = s => String(s || '').trim().toUpperCase();
+  return items.find(it => up(it.codigo) === up(codigo) && up(it.color) === up(color || 'SURTIDO') &&
+    (!boxContent || Number(it.boxContent) === Number(boxContent))) || null;
+}
+
+// 수량 입력 창이 열린 채로 재고가 바뀌면 가용재고·한도를 최신 값으로 맞춘다.
+function refreshOpenSubWhQtyModal() {
+  const modal = document.getElementById('subWarehouseQtyModal');
+  if (!currentSubWhTarget || !modal || modal.style.display !== 'block') return;
+  const { item, warehouse } = currentSubWhTarget;
+  const fresh = findMatrixItem(item.itemId, item.codigo, item.color, item.boxContent);
+  if (!fresh) return;
+  const availStock = fresh.stocks ? (fresh.stocks[warehouse] || 0) : 0;
+  const grossStock = fresh.grossStocks ? (fresh.grossStocks[warehouse] || 0) : availStock;
+  const committed = fresh.committedStocks ? (fresh.committedStocks[warehouse] || 0) : 0;
+  if (availStock === currentSubWhTarget.availStock && committed === currentSubWhTarget.committed) return;
+  currentSubWhTarget = { item: fresh, warehouse, availStock, grossStock, committed };
+  document.getElementById('qtyModalAvailStock').textContent = committed > 0
+    ? `${availStock} 상자 (실보유 ${grossStock} - 발주진행 ${committed}) · 🔄 방금 갱신됨`
+    : `${availStock} 상자 · 🔄 방금 갱신됨`;
+  document.getElementById('qtyModalEffectiveStock').textContent = `실재고 ${fresh.mainStock} + 이동중 ${fresh.inTransit} = 유효 ${fresh.effectiveStock}상자`;
+  const qtyInput = document.getElementById('subWhQtyInput');
+  if (qtyInput) qtyInput.max = availStock;
+  validateQtyInput();
+}
+
+// 브라우저에 남아 있던 발주 장바구니가 최신 가용재고를 넘으면 알린다 (제출 시 서버도 거부한다).
+let lastDraftWarningText = '';
+function warnOrderDraftsOverAvailability() {
+  if (typeof getOrderDraftItems !== 'function') return;
+  const over = [];
+  getOrderDraftItems().forEach(d => {
+    const it = findMatrixItem(d.itemId, d.itemName, d.color, d.boxContent);
+    const avail = it && it.stocks ? (it.stocks[String(d.warehouse || '').toUpperCase()] || 0) : 0;
+    if ((d.boxQty || 0) > avail) over.push(`${d.warehouse} ${d.itemName}(${d.color}) ${d.boxQty}>${avail}`);
+  });
+  const text = over.join(', ');
+  if (text && text !== lastDraftWarningText) {
+    showAppToast(`⚠️ 발주 장바구니 ${over.length}건이 현재 가용재고를 초과합니다: ${text}`, 6000);
+  }
+  lastDraftWarningText = text;
 }
 
 // -------------------------------------------------------------------
@@ -11286,9 +11338,76 @@ function applyStockChange(detail) {
   if (dash && dash.style.display === 'flex' && typeof refreshDashboardData === 'function') {
     refreshDashboardData();
   }
+
+  // 5) 상단 전표번호: 다른 기기가 전표를 만들었을 수 있으므로 다음 번호를 다시 조회.
+  //    이 탭에서 방금 처리한 직후(10초)에는 방금 발급된 번호를 보여주고 있으므로 건드리지 않는다.
+  if (!onlyLocal && currentType !== 'product' && Date.now() - lastLocalWriteAt > 10000) {
+    refreshInvoiceNumberQuietly();
+  }
+
+  // 6) 오래 떠나 있다 돌아오면 거래처·별명 사전도 다시 읽는다 (자주 바뀌지 않아 이때만)
+  if (sources.includes('resume')) {
+    partnersMasterCache = [];
+    partnersMasterMap = new Map();
+    if (typeof loadServerAliases === 'function') loadServerAliases();
+    if (currentType === 'in' || currentType === 'out') loadDropdowns();
+  }
 }
 
 window.addEventListener('wms-stock-changed', e => applyStockChange(e.detail || {}));
+
+// 이 탭의 쓰기 시각 (전표번호 표시 보호용)
+let lastLocalWriteAt = 0;
+window.addEventListener('wms-bridge-success', e => {
+  const fn = (e.detail && e.detail.fnName) || '';
+  if (/^(process|update|submit|register|execute|apply)/.test(fn)) lastLocalWriteAt = Date.now();
+});
+
+function refreshInvoiceNumberQuietly() {
+  const cfg = typeConfig[currentType];
+  if (!cfg || !cfg.invoiceFunction) return;
+  callServer(cfg.invoiceFunction, [], {
+    key: 'initialInvoice',
+    mode: 'latest',
+    onSuccess: num => {
+      if (Date.now() - lastLocalWriteAt <= 10000) return;
+      currentInvoiceNumber = num;
+      const invoiceSpan = document.getElementById('invoiceNumber');
+      if (invoiceSpan) invoiceSpan.textContent = num;
+    },
+    onError: err => console.warn('[StockSync] 전표번호 갱신 실패:', err)
+  });
+}
+
+// 열린 창(모바일 실사 카드, 퀵 재고조정 창)이 보여주는 현재고를 최신 캐시로 맞춘다.
+function refreshOpenStockViews() {
+  const mModal = document.getElementById('mobileStockAdjModal');
+  if (mModal && mModal.style.display === 'flex' && currentMobileAdjItem) {
+    const src = getAdjStockSource() || [];
+    const fresh = src.find(it => it.key && it.key === currentMobileAdjItem.key);
+    if (fresh && (fresh.stockBox !== currentMobileAdjItem.stockBox || fresh.stockIndividual !== currentMobileAdjItem.stockIndividual)) {
+      currentMobileAdjItem = fresh;
+      const cardStock = document.getElementById('mAdjCardCurrentStock');
+      if (cardStock) cardStock.textContent = `${fresh.stockBox || 0}상자 (${fresh.stockIndividual || 0}개) · 🔄 방금 갱신됨`;
+      if (typeof updateMobileAdjLivePreview === 'function') updateMobileAdjLivePreview();
+    }
+  }
+
+  const qModal = document.getElementById('quickStockModal');
+  if (qModal && qModal.style.display === 'block' && activeQuickAdjTarget) {
+    const t = activeQuickAdjTarget;
+    const key = `${t.itemName}_${t.color || 'SURTIDO'}_${t.boxContent || 1}`;
+    const fresh = (stockDataCache || []).find(s => s.key === key);
+    if (fresh && (fresh.stockBox !== t.currentBox || fresh.stockIndividual !== t.currentIndiv)) {
+      t.currentBox = fresh.stockBox;
+      t.currentIndiv = fresh.stockIndividual;
+      const curEl = document.getElementById('qadjCurrentStock');
+      if (curEl) curEl.textContent = `${fresh.stockBox}상자 + ${fresh.stockIndividual}개 · 🔄 방금 갱신됨`;
+    }
+  }
+
+  if (currentType === 'adj' && typeof updateLiveAdjPreview === 'function') updateLiveAdjPreview();
+}
 
 /**
  * 🚛 8대 창고별 트럭 1대(100상자) 적재율 게이지 바 렌더링
@@ -11669,14 +11788,17 @@ function confirmAddSubWarehouseOrder() {
       return;
     }
     currentDraft[existingIdx].boxQty = newQty;
+    currentDraft[existingIdx].itemId = currentDraft[existingIdx].itemId || item.itemId || null;
+    currentDraft[existingIdx].boxContent = currentDraft[existingIdx].boxContent || item.boxContent || 0;
     currentDraft[existingIdx].addedAt = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   } else {
     currentDraft.push({
       warehouse: warehouse,
+      itemId: item.itemId || null,
       itemName: item.codigo,
       color: item.color,
       boxQty: qty,
-      boxContent: 0,
+      boxContent: item.boxContent || 0,
       addedAt: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
     });
   }
@@ -11907,7 +12029,7 @@ function refreshAdjWarehouseStock(force) {
       if (!res || res.warehouse !== getAdjWarehouse()) return;
       adjWarehouseStock = { code: res.warehouse, map: new Map((res.items || []).map(it => [it.key, it])), loadedAt: Date.now() };
       updateTable();
-      updateLiveAdjPreview();
+      refreshOpenStockViews();
     },
     onError: err => showAppToast(`⚠️ ${code} 창고 재고를 불러오지 못했습니다: ${err.message || err}`, 3000)
   });

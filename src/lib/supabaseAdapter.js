@@ -2,8 +2,11 @@
 // google.script.run 호환 초고속 Supabase 어댑터 (sub-50ms)
 import { supabase, readWmsSessionToken } from './supabase.js'
 
-// 품목 ID 캐시 (item_name_color_pkg -> item_id)
+// 품목 ID 캐시 (item_name_color_pkg -> item_id). 활성 품목만 담는다.
 let itemIdCache = new Map()
+
+// 전표 수정 동시성: 검색 시점의 전표 지문 (key: `${txType}|${정규화 전표번호}`)
+const invoiceSignatures = new Map()
 
 /**
  * PostgREST 기본 1000행 한도를 넘어 전건 조회.
@@ -179,12 +182,13 @@ export const serverMethods = {
     const { data, error } = await supabase.rpc('rpc_list_effective_stocks')
     if (error) throw error
     const all = Array.isArray(data) ? data : []
-    return all.map(row => {
+    const freshIdCache = new Map()
+    const list = all.map(row => {
       const name = String(row.item_name || '').trim()
       const color = String(row.color || 'SURTIDO').trim()
       const boxContent = Number(row.box_packaging_qty || 1)
       const key = `${name}_${color}_${boxContent}`
-      itemIdCache.set(key, row.item_id)
+      freshIdCache.set(key, row.item_id)
 
       return {
         name: name,
@@ -199,6 +203,9 @@ export const serverMethods = {
         key: key
       }
     }).filter(item => item.name)
+    // rpc_list_effective_stocks는 활성 품목 전체를 돌려주므로 캐시를 교체해도 빠지는 활성 품목이 없다.
+    itemIdCache = freshIdCache
+    return list
   },
 
   /**
@@ -546,6 +553,7 @@ export const serverMethods = {
         .from('items')
         .select('id, item_name, color, box_packaging_qty')
         .in('item_name', names)
+        .eq('is_active', true)
       if (findErr) throw findErr
 
       const foundMap = new Map()
@@ -753,6 +761,14 @@ export const serverMethods = {
     const dashInv = canonical.replace(/\//g, '-')
     const txTypes = this._normalizeTxTypes(type)
 
+    const sigRes = await supabase.rpc('rpc_invoice_signature', { p_invoice_no: canonical, p_tx_type: txTypes[0] })
+    if (sigRes.error) {
+      console.warn('[SupabaseAdapter] 전표 지문 조회 실패 (동시 수정 검사 없이 진행):', sigRes.error)
+      invoiceSignatures.delete(`${txTypes[0]}|${canonical}`)
+    } else {
+      invoiceSignatures.set(`${txTypes[0]}|${canonical}`, sigRes.data)
+    }
+
     const { data, error } = await supabase
       .from('stock_transactions')
       .select(`
@@ -824,6 +840,7 @@ export const serverMethods = {
             .eq('item_name', name)
             .eq('color', color)
             .eq('box_packaging_qty', boxContent)
+            .eq('is_active', true)
             .maybeSingle()
           if (found) {
             itemId = found.id
@@ -843,17 +860,24 @@ export const serverMethods = {
     }
 
     // 2. 원자적 롤백 & 재반영 RPC 실행
+    const sigKey = `${txType}|${targetInv}`
     const { data, error } = await supabase.rpc('rpc_update_transaction_records', {
       p_invoice_no: targetInv,
       p_tx_type: txType,
       p_new_records: payloadRecords,
-      p_admin: admin || 'ADMIN'
+      p_admin: admin || 'ADMIN',
+      p_expected_signature: invoiceSignatures.get(sigKey) || null
     })
 
     if (error) {
       console.error('[SupabaseAdapter] updatePendingRecords 실패:', error)
       throw new Error(error.message || '전표 수정에 실패했습니다.')
     }
+
+    // 같은 화면에서 이어서 다시 수정할 수 있도록 방금 저장한 상태의 지문으로 갱신
+    const newSig = await supabase.rpc('rpc_invoice_signature', { p_invoice_no: targetInv, p_tx_type: txType })
+    if (newSig.error) invoiceSignatures.delete(sigKey)
+    else invoiceSignatures.set(sigKey, newSig.data)
 
     return data || { success: true, message: '전표가 성공적으로 수정되었습니다.' }
   },
@@ -891,6 +915,7 @@ export const serverMethods = {
           .eq('item_name', name)
           .eq('color', color)
           .eq('box_packaging_qty', boxContent)
+          .eq('is_active', true)
           .maybeSingle()
         if (findErr) throw findErr
         if (found) {
@@ -1329,6 +1354,7 @@ export const serverMethods = {
       const effectiveStock = mainStock + inTransit
 
       return {
+        itemId: row.item_id,
         codigo: row.item_name,
         color: row.color || 'SURTIDO',
         mainStock: mainStock,
@@ -1364,10 +1390,10 @@ export const serverMethods = {
     const normalizedByWh = {}
     for (const [wh, items] of Object.entries(byWarehouse)) {
       normalizedByWh[wh] = (items || []).map(it => ({
-        item_id: it.item_id || null,
+        item_id: it.itemId || it.item_id || null,
         item_name: String(it.itemName || it.item_name || it.name || '').trim(),
         color: String(it.color || 'SURTIDO').trim(),
-        box_content: Number(it.boxContent || it.box_packaging_qty || 1),
+        box_content: Number(it.boxContent || it.box_packaging_qty || 0),
         box_qty: Math.abs(Number(it.boxQty || it.box_qty || 0))
       }))
     }
