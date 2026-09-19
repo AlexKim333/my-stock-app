@@ -658,11 +658,16 @@ export const serverMethods = {
       if (!itemId) {
         throw new Error(`등록되지 않은 상품입니다: ${name} (${color})`)
       }
+      const targetBox = Number(adj.targetBoxQty ?? adj.targetBox)
+      const targetUnit = Number(adj.targetIndividualQty ?? adj.targetIndividual ?? 0)
+      if (!Number.isFinite(targetBox) || targetBox < 0 || !Number.isFinite(targetUnit) || targetUnit < 0) {
+        throw new Error(`[${name}(${color})] 조정 수량이 올바르지 않습니다.`)
+      }
       payload.push({
         item_id: itemId,
         adj_mode: 'replace',
-        box_qty: Number(adj.targetBoxQty ?? 0),
-        unit_qty: Number(adj.targetIndividualQty ?? 0),
+        box_qty: targetBox,
+        unit_qty: targetUnit,
         reason: adj.reason || '실사'
       })
     }
@@ -685,7 +690,30 @@ export const serverMethods = {
       if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('adjust_stock')
       throw err
     }
-    return { success: true, invoiceNumber: data?.invoice_no, message: '재고 조정이 완료되었습니다.' }
+    const { data: freshStocks, error: freshErr } = await supabase
+      .from('inventory_stocks')
+      .select('item_id, box_qty, unit_qty')
+      .in('item_id', payload.map(p => p.item_id))
+      .eq('warehouse_code', 'MAIN')
+    if (freshErr) console.warn('[SupabaseAdapter] 조정 후 재고 재조회 실패:', freshErr)
+    const stockMap = new Map((freshStocks || []).map(st => [st.item_id, st]))
+
+    return {
+      success: true,
+      invoiceNumber: data?.invoice_no,
+      message: '재고 조정이 완료되었습니다.',
+      stockVerified: !freshErr,
+      updatedItems: adjustments.map((adj, idx) => {
+        const fresh = stockMap.get(payload[idx].item_id)
+        return {
+          name: String(adj.itemName || '').trim(),
+          color: String(adj.color || 'SURTIDO').trim(),
+          boxContent: Number(adj.boxContent || 1),
+          stockBox: fresh ? Number(fresh.box_qty || 0) : payload[idx].box_qty,
+          stockIndividual: fresh ? Number(fresh.unit_qty || 0) : payload[idx].unit_qty
+        }
+      })
+    }
   },
 
   /**
@@ -745,6 +773,12 @@ export const serverMethods = {
     const txType = txTypes[0] || 'OUTBOUND'
     const targetInv = normalizeInvoiceNo(invoiceNumber)
 
+    // 재고조정 전표는 부호 있는 증감(Δ)을 그대로 보낸다. 입·출고는 절대값.
+    const toQty = v => {
+      const n = Number(v || 0)
+      return txType === 'ADJUST' ? Math.trunc(n) : Math.abs(n)
+    }
+
     // 1. 새 레코드의 item_id 보정
     const payloadRecords = []
     for (const rec of (newRecords || [])) {
@@ -774,8 +808,8 @@ export const serverMethods = {
         item_name: String(rec.itemName || rec.item_name || '').trim(),
         color: String(rec.color || 'SURTIDO').trim(),
         box_content: Number(rec.boxContent || rec.box_packaging_qty || 1),
-        box_qty: Math.abs(Number(rec.boxQty || rec.box_qty || 0)),
-        unit_qty: Math.abs(Number(rec.individualQty || rec.unit_qty || 0)),
+        box_qty: toQty(rec.boxQty ?? rec.box_qty),
+        unit_qty: toQty(rec.individualQty ?? rec.unit_qty),
         partner_name: String(rec.location || rec.partner_name || '').trim()
       })
     }

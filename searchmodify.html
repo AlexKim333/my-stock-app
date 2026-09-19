@@ -1519,6 +1519,13 @@ function handleEditableFocus(el, e) {
   });
 }
 
+// 재고조정 전표는 부호 있는 증감(Δ)이므로 부호를 유지해 표시한다.
+function qtyForDisplay(v) {
+  const typeRadio = document.querySelector('input[name="recordType"]:checked');
+  const n = Number(v) || 0;
+  return typeRadio && typeRadio.value === 'adj' ? n : Math.abs(n);
+}
+
 function handleEditableKeyDown(e, el, idx, field) {
   if (e.key === 'Enter') {
     e.preventDefault();
@@ -1526,7 +1533,7 @@ function handleEditableKeyDown(e, el, idx, field) {
   } else if (e.key === 'Escape') {
     e.preventDefault();
     if (records && records[idx]) {
-      el.textContent = Math.abs(records[idx][field] || 0);
+      el.textContent = qtyForDisplay(records[idx][field]);
     }
     el.blur();
   }
@@ -1541,8 +1548,8 @@ function updateTable() {
         <td><input type="checkbox" class="rowCheckbox" data-index="${idx}"></td>
         <td>${escapeHtml(rec.itemName)}</td>
         <td>${escapeHtml(rec.color)}</td>
-        <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${Math.abs(rec.boxQty)}</td>
-        <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${Math.abs(rec.individualQty)}</td>
+        <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'boxQty')" onblur="updateRecord(${idx}, 'boxQty', this.textContent)">${qtyForDisplay(rec.boxQty)}</td>
+        <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${qtyForDisplay(rec.individualQty)}</td>
         <td>${rec.boxContent}</td>
         <td>${escapeHtml(rec.location)}</td>
       </tr>
