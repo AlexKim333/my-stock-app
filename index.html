@@ -3723,11 +3723,8 @@ let pendingRecord = null;
 let selectedPendingIndex = -1;
 let isPendingOperating = false;
 let stockDataCache = [];
-let recentQuickAdjustments = {};
-try {
-  const savedAdj = localStorage.getItem('recent_quick_adjustments');
-  if (savedAdj) recentQuickAdjustments = JSON.parse(savedAdj);
-} catch (e) {}
+// 과거 버전이 남긴 퀵조정 덮어쓰기 캐시 정리 (서버 재고만 신뢰한다)
+try { localStorage.removeItem('recent_quick_adjustments'); } catch (e) {}
 
 // 🏷️ 대표 상품 별명(Alias) 룰북 매핑 사전 (사장님 요청 8대 대표 모델 공식 별명)
 let PRODUCT_ALIAS_MAP = {
@@ -3983,54 +3980,10 @@ function checkAndPromptRegisterAlias(rawAlias, targetModel) {
   }, 120);
 }
 
-function applyRecentAdjustments(dataList) {
-  if (!dataList || dataList.length === 0) return dataList;
-  const now = Date.now();
-  const validThreshold = 10 * 60 * 1000; // 10분간 보호
-  let hasValid = false;
-
-  Object.keys(recentQuickAdjustments).forEach(k => {
-    const adj = recentQuickAdjustments[k];
-    if (now - adj.timestamp < validThreshold) {
-      hasValid = true;
-      const targetClean = (adj.itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
-      const targetColor = (adj.color || 'SURTIDO').trim().toLowerCase();
-      let found = false;
-      dataList.forEach(s => {
-        const sClean = (s.name || '').replace(/[\s_\-]/g, '').toLowerCase();
-        const sColor = (s.color || 'SURTIDO').trim().toLowerCase();
-        if (sClean === targetClean && sColor === targetColor) {
-          s.stockBox = adj.targetBox;
-          s.stockIndividual = adj.targetIndividual;
-          found = true;
-        }
-      });
-      if (!found) {
-        dataList.push({
-          name: adj.itemName,
-          color: adj.color || 'SURTIDO',
-          stockBox: adj.targetBox,
-          stockIndividual: adj.targetIndividual,
-          boxContent: adj.boxContent || 0,
-          safeStock: 0
-        });
-      }
-    } else {
-      delete recentQuickAdjustments[k];
-    }
-  });
-
-  try {
-    localStorage.setItem('recent_quick_adjustments', JSON.stringify(recentQuickAdjustments));
-  } catch (e) {}
-
-  return dataList;
-}
-
 try {
   const cachedStock = localStorage.getItem('cached_stock_data') || sessionStorage.getItem('cached_stock_data');
   if (cachedStock) {
-    stockDataCache = applyRecentAdjustments(JSON.parse(cachedStock));
+    stockDataCache = JSON.parse(cachedStock);
   }
 } catch (e) {}
 let locationCache = [];
@@ -4056,8 +4009,7 @@ window.addEventListener('storage', function(e) {
     try {
       const cachedStock = localStorage.getItem('cached_stock_data');
       if (cachedStock) {
-        // ★ [정합성 보장] applyRecentAdjustments를 반드시 적용하여 퀵재고 롤백 방지
-        stockDataCache = applyRecentAdjustments(JSON.parse(cachedStock));
+        stockDataCache = JSON.parse(cachedStock);
         try {
           lastSyncedStockTime = localStorage.getItem('stock_data_updated') || '';
         } catch (e) {}
@@ -4088,7 +4040,7 @@ window.addEventListener('focus', function() {
     if (cachedStock) {
       const parsed = JSON.parse(cachedStock);
       if (parsed && parsed.length > 0) {
-        stockDataCache = applyRecentAdjustments(parsed);
+        stockDataCache = parsed;
         lastSyncedStockTime = updatedTime;
         if (typeof initProductHotkeys === 'function') initProductHotkeys();
         if (typeof updateTable === 'function') updateTable();
@@ -4280,7 +4232,7 @@ function loadStockData(silent = false) {
     silent: silent,
     hasCache: () => stockDataCache && stockDataCache.length > 0,
     apply: data => {
-      stockDataCache = applyRecentAdjustments(data);
+      stockDataCache = data;
       if (typeof WmsSearchEngine !== 'undefined') {
         WmsSearchEngine.rebuildIndex(stockDataCache);
       }
@@ -5979,24 +5931,22 @@ function showConfirmModal() {
 function applyBackendAuthoritativeStock(updatedItems) {
   if (!updatedItems || !Array.isArray(updatedItems) || !updatedItems.length || !Array.isArray(stockDataCache)) return;
 
+  // 품명+컬러+포장수량(key)이 정확히 같은 품목만 갱신한다. 포장수량이 다른 동명 품목을 덮어쓰지 않는다.
+  let missing = false;
   updatedItems.forEach(up => {
-    const targetClean = (up.name || '').replace(/[\s_\-]/g, '').toLowerCase();
-    const targetColor = (up.color || 'SURTIDO').trim().toLowerCase();
-
-    let target = stockDataCache.find(it => {
-      const itClean = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
-      const itColor = (it.color || 'SURTIDO').trim().toLowerCase();
-      return itClean === targetClean && itColor === targetColor;
-    });
-
+    const upKey = up.key || `${up.name}_${up.color || 'SURTIDO'}_${Number(up.boxContent || 1)}`;
+    const target = stockDataCache.find(it => it.key === upKey);
     if (target) {
       target.stockBox = up.stockBox;
       target.stockIndividual = up.stockIndividual;
-      if (up.boxContent) target.boxContent = up.boxContent;
     } else {
-      stockDataCache.push(up);
+      missing = true;
     }
   });
+  if (missing) {
+    // 캐시에 없는 품목(방금 자동 등록된 신규 품목 등)은 서버 전체 목록으로 다시 맞춘다.
+    setTimeout(() => loadStockData(true), 0);
+  }
 
   try {
     localStorage.setItem('cached_stock_data', JSON.stringify(stockDataCache));
@@ -6083,6 +6033,8 @@ function confirmSubmit() {
         // ★ [백엔드 공인 정합성 보장] 백엔드가 시트에 기록 완료한 공인 최종 재고로 인메모리 캐시 100% 무결성 동기화
         if (result && Array.isArray(result.updatedItems) && result.updatedItems.length > 0) {
           applyBackendAuthoritativeStock(result.updatedItems);
+        } else {
+          loadStockData(true);
         }
 
         alert('입출고가 성공적으로 처리되었습니다.');
@@ -8204,47 +8156,46 @@ function submitQuickStockAdjustment() {
     admin: currentAdmin
   }];
 
+  const activeQuickAdjTargetSnapshot = { ...activeQuickAdjTarget };
   callServer('processQuickStockAdjustment', [payload, currentAdmin], {
     key: 'quickAdjust',
     timeout: 60000,
     onSuccess: function(res) {
       closeQuickStockModal();
 
-      // 1. 최근 조정 목록에 등록 (향후 10분간 구글 시트 복제 지연으로 인한 이전 수량 덮어쓰기 완벽 방지)
-      const targetCleanName = (payload[0].itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
-      const targetCleanColor = (payload[0].color || 'SURTIDO').trim().toLowerCase();
-      const adjKey = `${targetCleanName}__${targetCleanColor}`;
+      // 1. 서버가 확정한 재고로 캐시 갱신 (로컬 추정값으로 덮어쓰지 않는다)
+      const target = activeQuickAdjTargetSnapshot;
+      const serverItem = (res && Array.isArray(res.updatedItems) && res.updatedItems[0]) || null;
+      const confirmedBox = serverItem ? serverItem.stockBox : targetBox;
+      const confirmedIndiv = serverItem ? serverItem.stockIndividual : targetIndiv;
+      const cacheKey = `${target.itemName}_${target.color || 'SURTIDO'}_${target.boxContent || 1}`;
+      const cached = stockDataCache.find(s => s.key === cacheKey) || stockDataCache.find(s =>
+        s.name === target.itemName &&
+        (s.color || 'SURTIDO') === (target.color || 'SURTIDO') &&
+        Number(s.boxContent || 1) === Number(target.boxContent || 1)
+      );
+      if (cached) {
+        cached.stockBox = confirmedBox;
+        cached.stockIndividual = confirmedIndiv;
+      }
 
-      recentQuickAdjustments[adjKey] = {
-        itemName: payload[0].itemName,
-        color: payload[0].color || 'SURTIDO',
-        boxContent: payload[0].boxContent || 0,
-        targetBox: targetBox,
-        targetIndividual: targetIndiv,
-        timestamp: Date.now()
-      };
-
-      // 2. In-memory stockDataCache 즉시 갱신
-      applyRecentAdjustments(stockDataCache);
-
-      // 3. 로컬 스토리지 캐시 및 다른 창/탭 실시간 동기화 브로드캐스트
+      // 2. 로컬 스토리지 캐시 및 다른 창/탭 실시간 동기화 브로드캐스트
       const stamp = Date.now().toString();
       try {
-        localStorage.setItem('recent_quick_adjustments', JSON.stringify(recentQuickAdjustments));
         localStorage.setItem('cached_stock_data', JSON.stringify(stockDataCache));
         localStorage.setItem('stock_data_updated', stamp);
         localStorage.setItem('wms_cross_window_stock_sync', stamp);
       } catch (e) {}
       lastSyncedStockTime = stamp; // 이 창이 쓴 값이므로 포커스 복귀 시 재렌더 불필요
 
-      // 4. 즉각 화면 렌더링 (재고부족 빨간색 경고 및 퀵재고 버튼 즉시 해제 & 가용재고 즉시 표시)
+      // 3. 즉각 화면 렌더링 (재고부족 빨간색 경고 및 퀵재고 버튼 즉시 해제 & 가용재고 즉시 표시)
       updateTable();
       updateTotals();
 
-      // 5. 브라우저 DOM 렌더링 완료 후 완료 알림 표시
+      // 4. 브라우저 DOM 렌더링 완료 후 완료 알림 표시
       requestAnimationFrame(() => {
         setTimeout(() => {
-          alert(`✅ [${payload[0].itemName} (${payload[0].color || 'SURTIDO'})] 재고가 ${targetBox}상자로 즉시 조정되었습니다.\n\n테이블 가용재고가 (${targetBox}+${targetIndiv})로 즉각 반영되었습니다.`);
+          alert(`✅ [${payload[0].itemName} (${payload[0].color || 'SURTIDO'})] 재고가 ${confirmedBox}상자 + ${confirmedIndiv}개로 조정되었습니다.`);
         }, 50);
       });
     },

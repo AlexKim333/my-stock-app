@@ -606,16 +606,18 @@ export const serverMethods = {
     const invoiceNumber = rpcResult?.invoice_no || ''
     const seq = invoiceNumber.includes('-') ? invoiceNumber.split('-').pop() : ''
 
-    // 🛡️ [정합성 100% 무결성 보장] 메인창고 재고 캐시 즉각 동기화를 위해 방금 커밋된 최종 재고 조회
+    // 화면 재고 캐시는 MAIN 기준이므로 출발창고와 무관하게 방금 커밋된 MAIN 재고를 다시 읽는다.
+    // 재조회에 실패하면 추정값(0)을 내보내지 않고 빈 목록을 돌려 화면이 전체 재동기화하도록 한다.
     const itemIds = itemsPayload.map(i => i.item_id)
-    const { data: freshStocks } = await supabase
+    const { data: freshStocks, error: freshErr } = await supabase
       .from('inventory_stocks')
       .select('item_id, box_qty, unit_qty')
       .in('item_id', itemIds)
-      .eq('warehouse_code', sourceWh || 'MAIN')
+      .eq('warehouse_code', 'MAIN')
+    if (freshErr) console.warn('[SupabaseAdapter] 처리 후 재고 재조회 실패:', freshErr)
 
     const stockMap = new Map((freshStocks || []).map(s => [s.item_id, s]))
-    const authoritativeItems = updatedItems.map((up, idx) => {
+    const authoritativeItems = freshErr ? [] : updatedItems.map((up, idx) => {
       const fresh = stockMap.get(itemsPayload[idx]?.item_id)
       return {
         ...up,
@@ -633,10 +635,11 @@ export const serverMethods = {
       targetWarehouse: effectiveTargetWarehouse,
       partner: partner,
       updatedItems: authoritativeItems,
+      stockVerified: !freshErr,
       integrity: {
         checkedCount: itemsPayload.length,
         discrepancyCount: 0,
-        isClean: true
+        isClean: !freshErr
       }
     }
   },
@@ -904,11 +907,12 @@ export const serverMethods = {
     }
 
     const itemIds = payload.map(p => p.item_id)
-    const { data: freshStocks } = await supabase
+    const { data: freshStocks, error: freshErr } = await supabase
       .from('inventory_stocks')
       .select('item_id, box_qty, unit_qty')
       .in('item_id', itemIds)
       .eq('warehouse_code', 'MAIN')
+    if (freshErr) console.warn('[SupabaseAdapter] 재고조사 후 재고 재조회 실패:', freshErr)
     const stockMap = new Map((freshStocks || []).map(s => [s.item_id, s]))
 
     return {
@@ -2174,6 +2178,18 @@ export const serverMethods = {
 }
 
 
+const SESSION_ERROR_RE = /세션이 만료|로그인이 필요/
+
+function isSessionError(err) {
+  return SESSION_ERROR_RE.test(String(err?.message || err || ''))
+}
+
+/** 서버가 세션 만료를 알리면 화면이 로그인 창으로 돌아갈 수 있도록 이벤트를 보낸다. */
+function notifySessionExpired(err) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('wms-session-expired', { detail: { message: String(err?.message || err || '') } }))
+}
+
 /**
  * google.script.run 클라이언트 브릿지 생성자
  */
@@ -2190,19 +2206,25 @@ export function createGoogleScriptRunBridge() {
 
     for (const [fnName, fn] of Object.entries(serverMethods)) {
       runner[fnName] = async function (...args) {
+        const usesCallbacks = typeof successCb === 'function' || typeof failureCb === 'function'
+        let result
         try {
-          const result = await fn.apply(serverMethods, args)
-          if (typeof successCb === 'function') {
-            successCb(result)
-          }
-          return result
+          result = await fn.apply(serverMethods, args)
         } catch (err) {
           console.error(`[SupabaseAdapter] ${fnName} 오류:`, err)
           if (typeof failureCb === 'function') {
-            failureCb(err)
+            try { failureCb(err) } catch (cbErr) { console.error(`[SupabaseAdapter] ${fnName} 실패 핸들러 오류:`, cbErr) }
           }
+          if (isSessionError(err)) notifySessionExpired(err)
+          // google.script.run 방식(콜백) 호출자는 반환 Promise를 기다리지 않으므로 다시 던지지 않는다.
+          if (usesCallbacks) return undefined
           throw err
         }
+        // 성공 핸들러의 UI 오류가 실패 핸들러로 번지지 않도록 분리한다.
+        if (typeof successCb === 'function') {
+          try { successCb(result) } catch (cbErr) { console.error(`[SupabaseAdapter] ${fnName} 성공 핸들러 오류:`, cbErr) }
+        }
+        return result
       }
     }
 
