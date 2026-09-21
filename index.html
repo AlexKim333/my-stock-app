@@ -15180,11 +15180,29 @@ if (document.readyState === 'loading') {
     // 3. 거래처/출고처 셀렉트 박스 자동 선택
     const locSelect = document.getElementById('location');
     if (locSelect && currentAiDraft.location) {
-      const cleanTarget = String(currentAiDraft.location).toUpperCase().replace(/지점|매장|창고/g, '').trim();
+      const aliasMap = {
+        '티엔다': 'TIENDA',
+        '매장': 'TIENDA',
+        '상점': 'TIENDA',
+        '센트로': 'CENTRO',
+        '아르헨티나': 'ARGENTINA',
+        '아즈테카': 'AZTECAS',
+        '보데가': 'BODEGA 도매 출고',
+        '도매': 'BODEGA 도매 출고'
+      };
+      const rawLoc = String(currentAiDraft.location).trim();
+      let mappedLoc = rawLoc;
+      for (const [k, v] of Object.entries(aliasMap)) {
+        if (rawLoc.includes(k)) {
+          mappedLoc = v;
+          break;
+        }
+      }
+      const cleanTarget = mappedLoc.toUpperCase().replace(/지점|매장|창고/g, '').trim();
       let matchedOption = null;
       for (const opt of locSelect.options) {
         const optClean = opt.value.toUpperCase();
-        if (optClean.includes(cleanTarget) || cleanTarget.includes(optClean)) {
+        if (optClean === cleanTarget || optClean.includes(cleanTarget) || (cleanTarget && optClean && cleanTarget.includes(optClean))) {
           matchedOption = opt.value;
           break;
         }
