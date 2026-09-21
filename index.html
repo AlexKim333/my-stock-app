@@ -5398,8 +5398,21 @@ function addRecord() {
       );
       if (existingIndex !== -1) {
         const exist = records[existingIndex];
-        exist.boxQty = (exist.boxQty || 0) + (formData.boxQty || 0);
-        exist.individualQty = (exist.individualQty || 0) + (formData.individualQty || 0);
+        const addedBox = formData.boxQty || 0;
+        const addedIndiv = formData.individualQty || 0;
+        const addedStr = (addedBox > 0) ? `${addedBox}상자` : `${addedIndiv}개`;
+
+        if (!exist.history || !Array.isArray(exist.history)) {
+          const prevB = exist.boxQty || 0;
+          const prevI = exist.individualQty || 0;
+          const prevStr = (prevB > 0 && prevI > 0) ? `${prevB}상자+${prevI}개` : (prevB > 0 ? `${prevB}상자` : `${prevI}개`);
+          exist.history = [prevStr, addedStr];
+        } else {
+          exist.history.push(addedStr);
+        }
+
+        exist.boxQty = (exist.boxQty || 0) + addedBox;
+        exist.individualQty = (exist.individualQty || 0) + addedIndiv;
         const sumStr = (exist.boxQty > 0 && exist.individualQty > 0)
           ? `${exist.boxQty}상자 + ${exist.individualQty}개`
           : (exist.boxQty > 0 ? `${exist.boxQty}상자` : `${exist.individualQty}개`);
@@ -5411,6 +5424,9 @@ function addRecord() {
         updateTotals();
         return;
       }
+      const initBox = formData.boxQty || 0;
+      const initIndiv = formData.individualQty || 0;
+      formData.history = [(initBox > 0) ? `${initBox}상자` : `${initIndiv}개`];
     }
     records.push(formData);
   }
@@ -13331,7 +13347,7 @@ function showMoreMobileAdjItems(event) {
 
 let pendingMobileDuplicateIndex = -1;
 
-function showMobileDuplicatePromptModal(index, item, existQty, existUnit, existBox, existIndiv) {
+function showMobileDuplicatePromptModal(index, item, existQty, existUnit, existBox, existIndiv, existHistory) {
   pendingMobileDuplicateIndex = index;
   const modal = document.getElementById('mAdjDuplicatePromptModal');
   const nameEl = document.getElementById('mAdjDupItemName');
@@ -13355,7 +13371,12 @@ function showMobileDuplicatePromptModal(index, item, existQty, existUnit, existB
     existStr = `${existQty || 0}${existUnit || '상자'}`;
   }
 
-  if (qtyEl) qtyEl.textContent = existStr;
+  if (existHistory && Array.isArray(existHistory) && existHistory.length > 1) {
+    existStr += `<div style="font-size: 8pt; font-weight: 700; color: #047857; margin-top: 4px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 4px; padding: 2px 6px;">📜 이전 합산 이력: ${escapeHtml(existHistory.join(' + '))}</div>`;
+    if (qtyEl) qtyEl.innerHTML = existStr;
+  } else {
+    if (qtyEl) qtyEl.textContent = existStr;
+  }
   if (unitEl) unitEl.textContent = '';
 
   if (modal) modal.style.display = 'flex';
@@ -13458,7 +13479,7 @@ function selectMobileAdjItem(index) {
     }
 
     // 2. 🚀 [대표님 요청 핵심] 리스트 볼 필요 없이 즉시 확인 팝업 모달 띄우기!
-    showMobileDuplicatePromptModal(existingSessionIndex, item, existStr, '', existBox, existIndiv);
+    showMobileDuplicatePromptModal(existingSessionIndex, item, existStr, '', existBox, existIndiv, existRec.history);
     return;
   } else {
     // 💡 스마트 힌트 (제안 4번)
@@ -13685,6 +13706,8 @@ function submitMobileAdjItem(isContinue) {
 
   let saveBoxQty = 0;
   let saveIndivQty = 0;
+  let historyList = [];
+  const currentStepStr = (unit === 'box') ? `${qty}상자` : `${qty}개`;
 
   if (isEditing && editingMobileSubMode === 'add') {
     // 🛡️ [A안 준수: 단위별 분리 독립 합산]
@@ -13699,6 +13722,11 @@ function submitMobileAdjItem(isContinue) {
       saveBoxQty = origBox;
       saveIndivQty = origIndiv + qty;
     }
+
+    const prevHist = (origRec && Array.isArray(origRec.history) && origRec.history.length > 0)
+      ? origRec.history
+      : [(origBox > 0 && origIndiv > 0 ? `${origBox}상자+${origIndiv}개` : (origBox > 0 ? `${origBox}상자` : `${origIndiv}개`))];
+    historyList = [...prevHist, currentStepStr];
   } else if (isEditing && editingMobileSubMode === 'replace') {
     // [수량 직접 수정]
     if (unit === 'box') {
@@ -13712,11 +13740,16 @@ function submitMobileAdjItem(isContinue) {
     // 신규 추가
     saveBoxQty = unit === 'box' ? qty : 0;
     saveIndivQty = unit === 'individual' ? qty : 0;
+    historyList = [currentStepStr];
   }
 
   const finalSummaryStr = (saveBoxQty > 0 && saveIndivQty > 0)
     ? `${saveBoxQty}상자 + ${saveIndivQty}개`
     : (saveBoxQty > 0 ? `${saveBoxQty}상자` : `${saveIndivQty}개`);
+
+  if (isEditing && editingMobileSubMode === 'replace') {
+    historyList = [`수정(${finalSummaryStr})`];
+  }
 
   const newRec = {
     itemName: currentMobileAdjItem.name,
@@ -13728,7 +13761,8 @@ function submitMobileAdjItem(isContinue) {
     adjType: origRec ? origRec.adjType : currentMobileAdjMode,
     unitType: (saveBoxQty > 0 && saveIndivQty === 0) ? 'box' : (saveBoxQty === 0 && saveIndivQty > 0) ? 'individual' : 'mixed',
     matchRate: 100,
-    warehouse: getAdjWarehouse()
+    warehouse: getAdjWarehouse(),
+    history: historyList
   };
 
   const modeName = currentMobileAdjMode === 'increment' ? '➕추가' : '🔄치환';
@@ -13951,6 +13985,31 @@ function renderMobileAdjSessionList() {
       qtyHtml = `<span style="font-weight: 800; font-size: 11pt; color: #2563eb;">${ind}개</span>`;
     }
 
+    let historyHtml = '';
+    if (isEditing) {
+      historyHtml = '<strong style="color: #2563eb;">🔄 현재 상단 입력란에서 롤백/합산 중...</strong>';
+    } else if (r.history && Array.isArray(r.history) && r.history.length > 1) {
+      const histText = r.history.join(' + ');
+      historyHtml = `
+        <span style="display: inline-flex; align-items: center; gap: 4px; font-weight: 700; color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; padding: 2px 7px; border-radius: 4px; font-size: 7.5pt; max-width: 100%; box-sizing: border-box;" title="합산 이력: ${escapeHtml(histText)}">
+          <span>📜 합산:</span> <span style="letter-spacing: -0.2px;">${escapeHtml(histText)}</span>
+        </span>
+      `;
+    } else if (r.history && Array.isArray(r.history) && r.history.length === 1) {
+      historyHtml = `
+        <span style="color: #64748b; font-size: 7.5pt; display: inline-flex; align-items: center; gap: 4px;">
+          <span>📦 1차 실사:</span> <strong style="color: #334155;">${escapeHtml(r.history[0])}</strong>
+        </span>
+      `;
+    } else {
+      const fallbackStr = (b > 0 && ind > 0) ? `${b}상자 + ${ind}개` : (b > 0 ? `${b}상자` : `${ind}개`);
+      historyHtml = `
+        <span style="color: #64748b; font-size: 7.5pt; display: inline-flex; align-items: center; gap: 4px;">
+          <span>📦 1차 실사:</span> <strong style="color: #334155;">${escapeHtml(fallbackStr)}</strong>
+        </span>
+      `;
+    }
+
     html += `
       <div onclick="editMobileSessionItem(${i})" style="padding: 9px 12px; margin-bottom: 5px; border-radius: 8px; background: ${rowBg}; border: ${rowBorder}; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: all 0.15s ease; -webkit-tap-highlight-color: rgba(99,102,241,0.15);" title="터치하여 입력란으로 롤백 및 합산/수정">
         <div style="flex: 1; min-width: 0; padding-right: 8px;">
@@ -13959,8 +14018,8 @@ function renderMobileAdjSessionList() {
             <span style="font-size: 8.5pt; color: #64748b;">(${escapeHtml(r.color)})</span>
             <span style="font-size: 7.5pt; font-weight: 700; background: ${tagBg}; color: ${tagColor}; border: 1px solid ${tagBorder}; padding: 1px 6px; border-radius: 4px;">${tagText}</span>
           </div>
-          <div style="font-size: 7.5pt; color: #64748b; margin-top: 3px;">
-            ${isEditing ? '<strong style="color: #2563eb;">🔄 현재 상단 입력란에서 롤백/합산 중...</strong>' : '<span style="color: #6366f1; font-weight: 600;">👆 터치하여 추가 발견 합산 / 수정</span>'}
+          <div style="margin-top: 3px; line-height: 1.3;">
+            ${historyHtml}
           </div>
         </div>
         <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
