@@ -2177,7 +2177,36 @@ export const serverMethods = {
       dailyTrend,
       ledger: filteredLedger
     }
+  },
+
+    /**
+     * 35. AI 자연어 재고조회 & 피벗 분석 봇 호출 (Chat BI)
+     */
+    async askAiInventoryBot(question) {
+      const token = readWmsSessionToken()
+      if (!token) {
+        throw new Error('로그인이 필요합니다. 로그인 후 이용해 주세요.')
+      }
+      const res = await fetch('/api/ai-query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-wms-session': token
+        },
+        body: JSON.stringify({ question })
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: '서버 오류' }))
+        const e = new Error(err.error || `AI 질의 실패 (${res.status})`)
+        if (res.status === 401) notifySessionExpired(e)
+        throw e
+      }
+      return await res.json()
+    }
   }
+
+export async function askAiInventoryBot(question) {
+  return await serverMethods.askAiInventoryBot(question)
 }
 
 

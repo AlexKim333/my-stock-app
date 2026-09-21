@@ -14582,13 +14582,651 @@ if (document.readyState === 'loading') {
             if (btn) {
               btn.disabled = false;
               btn.innerHTML = '<span>✅ 선택 항목 별명사전(aliases)에 영구 등록</span>';
-            }
-            alert('별명사전 등록 중 오류가 발생했습니다: ' + err);
-          })
-          .saveBatchProductAliases(toCommit);
       }
     }
   </script>
 
+  <!-- ============================================================================== -->
+  <!-- 🤖 AI 물류 인텔리전스 & 피벗 분석 봇 (Chat BI) UI & 컨트롤러                     -->
+  <!-- ============================================================================== -->
+
+  <!-- 1. 우측 하단 플로팅 챗봇 버튼 (FAB) -->
+  <div id="aiBotFabContainer" style="position:fixed; bottom:24px; right:24px; z-index:99999; display:flex; flex-direction:column; align-items:flex-end;">
+    <button id="aiBotFabBtn" onclick="toggleAiBotModal()" title="AI 재고조회 & 피벗 분석 봇 (Chat BI)" style="
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #2563eb 100%);
+      border: 2px solid rgba(255, 255, 255, 0.9);
+      box-shadow: 0 8px 24px rgba(79, 70, 229, 0.45), 0 2px 6px rgba(0,0,0,0.15);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      outline: none;
+      position: relative;
+    " onmouseenter="this.style.transform='scale(1.1) translateY(-2px)'" onmouseleave="this.style.transform='scale(1) translateY(0)'">
+      <!-- 펄스 링 -->
+      <span style="
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(124, 58, 237, 0.35);
+        animation: aiPulse 2.4s infinite;
+        z-index: 1;
+        pointer-events: none;
+      "></span>
+      <!-- 로봇 아바타 SVG -->
+      <svg style="width: 32px; height: 32px; fill: white; z-index: 2; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));" viewBox="0 0 24 24">
+        <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2M7.5 13A2.5 2.5 0 0 0 5 15.5 2.5 2.5 0 0 0 7.5 18a2.5 2.5 0 0 0 2.5-2.5A2.5 2.5 0 0 0 7.5 13m9 0a2.5 2.5 0 0 0-2.5 2.5 2.5 2.5 0 0 0 2.5 2.5 2.5 2.5 0 0 0 2.5-2.5 2.5 2.5 0 0 0-2.5-2.5"/>
+      </svg>
+      <!-- AI 배지 -->
+      <span style="
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        background: #ef4444;
+        color: white;
+        font-size: 7pt;
+        font-weight: 800;
+        padding: 1px 5px;
+        border-radius: 10px;
+        border: 1.5px solid white;
+        z-index: 3;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+      ">AI</span>
+    </button>
+  </div>
+
+  <!-- 2. AI 대화 및 피벗 결과 모달 다이얼로그 -->
+  <div id="aiBotModal" style="
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(15, 23, 42, 0.65);
+    backdrop-filter: blur(5px);
+    z-index: 100000;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+  ">
+    <div style="
+      background: #ffffff;
+      width: 95%;
+      max-width: 980px;
+      max-height: 92vh;
+      border-radius: 16px;
+      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.35);
+      border: 1px solid #e0e7ff;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: aiModalPop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    ">
+      <!-- 상단 헤더 -->
+      <div style="
+        padding: 12px 18px;
+        background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid #4338ca;
+        flex-wrap: wrap;
+      ">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 22px;">🤖</span>
+          <div>
+            <div style="font-weight: 800; font-size: 11.5pt; letter-spacing: -0.3px; display: flex; align-items: center; gap: 6px;">
+              AI 재고조회 & 피벗 분석
+              <span style="background: #4f46e5; color: #e0e7ff; font-size: 7.5pt; padding: 2px 6px; border-radius: 4px; font-weight: 600;">Chat BI</span>
+            </div>
+            <div style="font-size: 7.8pt; color: #a5b4fc; margin-top: 1px;">
+              자연어로 질의하면 Gemini AI가 테이블 스키마 기반 실시간 피벗 데이터를 즉석 생성합니다.
+            </div>
+          </div>
+        </div>
+
+        <!-- 3대 토큰 미터 (입력 / 출력 / 추론 / 총 토큰 / 소요시간) -->
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div id="aiTokenMeterBar" style="
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(15, 23, 42, 0.75);
+            border: 1px solid #4338ca;
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 7.8pt;
+            color: #cbd5e1;
+            white-space: nowrap;
+          " title="Gemini 3대 토큰 실시간 미터링">
+            <span>입력: <b id="tmPrompt" style="color:#38bdf8;">0</b></span>
+            <span style="color:#64748b;">|</span>
+            <span>출력: <b id="tmOutput" style="color:#4ade80;">0</b></span>
+            <span style="color:#64748b;">|</span>
+            <span>추론: <b id="tmThoughts" style="color:#c084fc;">0</b></span>
+            <span style="color:#64748b;">|</span>
+            <span style="color:#ffffff; font-weight:700;">총: <b id="tmTotal" style="color:#fbbf24;">0</b>토큰</span>
+            <span style="color:#64748b;">|</span>
+            <span style="color:#34d399; font-weight:700;">⚡ <span id="tmTime">0ms</span></span>
+          </div>
+
+          <button onclick="closeAiBotModal()" style="
+            background: rgba(255, 255, 255, 0.15);
+            border: none;
+            color: white;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 14pt;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s;
+          " onmouseenter="this.style.background='rgba(255,255,255,0.3)'" onmouseleave="this.style.background='rgba(255,255,255,0.15)'">✕</button>
+        </div>
+      </div>
+
+      <!-- 본문 영역 -->
+      <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; flex: 1;">
+        
+        <!-- 빠른 질문 칩 (Quick Chips) -->
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+          <span style="font-size: 8pt; font-weight: 700; color: #64748b;">⚡ 빠른 질문:</span>
+          <button type="button" class="ai-quick-chip" onclick="askQuickQuery('창고별 현재고 상자 합계와 품목 수 보여줘')">📦 창고별 재고 현황 피벗</button>
+          <button type="button" class="ai-quick-chip" onclick="askQuickQuery('안전재고 미달된 품목 목록과 부족 상자 수 보여줘')">⚠️ 안전재고 미달 품목 Top 20</button>
+          <button type="button" class="ai-quick-chip" onclick="askQuickQuery('가장 출고량이 많은 지점 Top 5')">🏢 출고 상위 지점 Top 5</button>
+          <button type="button" class="ai-quick-chip" onclick="askQuickQuery('최근 7일간 창고간 이동(MOVE) 내역 상위 10건')">🚚 최근 창고 이동 현황</button>
+          <button type="button" class="ai-quick-chip" onclick="askQuickQuery('최근 14일간 출고 상위 품목 Top 10')">🔥 출고 베스트 품목 Top 10</button>
+        </div>
+
+        <!-- 질문 입력창 및 전송 버튼 -->
+        <div style="display: flex; gap: 8px;">
+          <div style="position: relative; flex: 1;">
+            <input type="text" id="aiBotInput" placeholder="자연어로 질문하세요 (예: 창고별 재고 현황 피벗, 안전재고 부족 품목, 지점별 출고량 등)" style="
+              width: 100%;
+              box-sizing: border-box;
+              padding: 10px 36px 10px 14px;
+              font-size: 9.5pt;
+              border: 1.5px solid #cbd5e1;
+              border-radius: 8px;
+              outline: none;
+              transition: border-color 0.15s, box-shadow 0.15s;
+            " onfocus="this.style.borderColor='#6366f1'; this.style.boxShadow='0 0 0 3px rgba(99,102,241,0.15)';" onblur="this.style.borderColor='#cbd5e1'; this.style.boxShadow='none';" onkeydown="if(event.key==='Enter') submitAiQuery();">
+            <button type="button" onclick="document.getElementById('aiBotInput').value=''; document.getElementById('aiBotInput').focus();" style="
+              position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+              background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 11pt; padding: 4px;
+            " title="지우기">✕</button>
+          </div>
+          <button id="aiBotSendBtn" type="button" onclick="submitAiQuery()" style="
+            background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+            color: white;
+            border: none;
+            padding: 0 20px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 9.5pt;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+            box-shadow: 0 2px 6px rgba(79, 70, 229, 0.3);
+            transition: transform 0.15s, filter 0.15s;
+          " onmouseenter="this.style.filter='brightness(1.08)'" onmouseleave="this.style.filter='brightness(1)'">
+            <span>🚀 전송</span>
+          </button>
+        </div>
+
+        <!-- AI 해설 및 생성된 SQL 뷰어 카드 -->
+        <div id="aiResponseCard" style="display: none; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 15px;">💡</span>
+              <span id="aiExplanationText" style="font-weight: 700; color: #1e293b; font-size: 9pt;"></span>
+            </div>
+            <button type="button" onclick="toggleAiSqlView()" style="
+              background: none; border: 1px solid #cbd5e1; border-radius: 4px; padding: 3px 8px;
+              font-size: 7.5pt; color: #475569; cursor: pointer; white-space: nowrap;
+            ">🔍 SQL 쿼리 보기</button>
+          </div>
+          <!-- 접이식 SQL 코드 뷰어 -->
+          <div id="aiSqlBox" style="display: none; margin-top: 8px; background: #0f172a; color: #38bdf8; padding: 10px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 8pt; overflow-x: auto; white-space: pre-wrap; word-break: break-all;"></div>
+        </div>
+
+        <!-- 로딩 인디케이터 -->
+        <div id="aiLoadingSpinner" style="display: none; text-align: center; padding: 28px 10px;">
+          <div style="display: inline-block; width: 36px; height: 36px; border: 3px solid #e0e7ff; border-top-color: #6366f1; border-radius: 50%; animation: aiSpin 0.8s linear infinite;"></div>
+          <div style="margin-top: 10px; font-size: 9pt; font-weight: 700; color: #4338ca;">
+            Gemini AI가 자연어를 분석하여 초고속 피벗 쿼리를 연산 중입니다...
+          </div>
+          <div style="font-size: 7.8pt; color: #64748b; margin-top: 2px;">(평균 처리시간: 0.8초 ~ 1.5초)</div>
+        </div>
+
+        <!-- 에러 메시지 카드 -->
+        <div id="aiErrorMessage" style="display: none; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 12px; border-radius: 8px; font-size: 8.5pt;"></div>
+
+        <!-- 결과 피벗 테이블 영역 -->
+        <div id="aiResultArea" style="display: none; flex-direction: column; gap: 8px; flex: 1;">
+          <!-- 테이블 툴바 -->
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span id="aiResultTitle" style="font-weight: 800; font-size: 9.5pt; color: #0f172a;"></span>
+              <span id="aiResultCountBadge" style="background: #e0e7ff; color: #3730a3; font-weight: 700; font-size: 7.5pt; padding: 2px 7px; border-radius: 12px;"></span>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <!-- 테이블 내 검색 필터 -->
+              <input type="text" id="aiTableFilter" placeholder="결과 내 검색..." oninput="filterAiTable()" style="
+                padding: 4px 8px; font-size: 8pt; border: 1px solid #cbd5e1; border-radius: 6px; width: 140px; outline: none;
+              ">
+
+              <!-- 엑셀 CSV 다운로드 버튼 -->
+              <button type="button" onclick="downloadAiResultCsv()" style="
+                background: #059669; color: white; border: none; padding: 5px 12px; border-radius: 6px;
+                font-size: 8pt; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+              " onmouseenter="this.style.background='#047857'" onmouseleave="this.style.background='#059669'">
+                <span>📥 엑셀 CSV 다운로드</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 스크롤 가능한 테이블 컨테이너 -->
+          <div id="aiTableWrap" style="
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            overflow: auto;
+            max-height: 420px;
+            background: #ffffff;
+          ">
+            <table id="aiDataTable" style="width: 100%; border-collapse: collapse; font-size: 8.5pt; text-align: left;">
+              <thead id="aiTableHead" style="background: #f1f5f9; position: sticky; top: 0; z-index: 10;"></thead>
+              <tbody id="aiTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <style>
+  @keyframes aiPulse {
+    0% { transform: scale(1); opacity: 0.8; }
+    50% { transform: scale(1.35); opacity: 0; }
+    100% { transform: scale(1.35); opacity: 0; }
+  }
+  @keyframes aiModalPop {
+    0% { transform: scale(0.94); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @keyframes aiSpin {
+    to { transform: rotate(360deg); }
+  }
+  .ai-quick-chip {
+    background: #f1f5f9;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+    padding: 4px 10px;
+    border-radius: 14px;
+    font-size: 7.8pt;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .ai-quick-chip:hover {
+    background: #e0e7ff;
+    color: #3730a3;
+    border-color: #818cf8;
+    transform: translateY(-1px);
+  }
+  .ai-th-cell {
+    padding: 8px 10px;
+    font-weight: 700;
+    color: #1e293b;
+    border-bottom: 2px solid #cbd5e1;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .ai-th-cell:hover {
+    background: #e2e8f0;
+  }
+  .ai-td-cell {
+    padding: 6px 10px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #334155;
+    white-space: nowrap;
+  }
+  .ai-table-row:hover {
+    background-color: #f8fafc;
+  }
+  </style>
+
+  <script>
+  let currentAiRows = [];
+  let currentAiCols = [];
+  let currentAiSortCol = null;
+  let currentAiSortAsc = true;
+  let currentAiTitle = '재고 데이터 분석 결과';
+
+  function toggleAiBotModal() {
+    const modal = document.getElementById('aiBotModal');
+    if (!modal) return;
+    if (modal.style.display === 'flex') {
+      closeAiBotModal();
+    } else {
+      modal.style.display = 'flex';
+      setTimeout(() => {
+        const inp = document.getElementById('aiBotInput');
+        if (inp) inp.focus();
+      }, 100);
+    }
+  }
+
+  function closeAiBotModal() {
+    const modal = document.getElementById('aiBotModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function askQuickQuery(text) {
+    const inp = document.getElementById('aiBotInput');
+    if (inp) {
+      inp.value = text;
+      submitAiQuery();
+    }
+  }
+
+  function toggleAiSqlView() {
+    const box = document.getElementById('aiSqlBox');
+    if (!box) return;
+    box.style.display = (box.style.display === 'none' || !box.style.display) ? 'block' : 'none';
+  }
+
+  async function submitAiQuery() {
+    const inp = document.getElementById('aiBotInput');
+    const btn = document.getElementById('aiBotSendBtn');
+    const spinner = document.getElementById('aiLoadingSpinner');
+    const errBox = document.getElementById('aiErrorMessage');
+    const respCard = document.getElementById('aiResponseCard');
+    const resArea = document.getElementById('aiResultArea');
+
+    const question = inp ? inp.value.trim() : '';
+    if (!question) {
+      alert('질문 내용을 입력해주세요.');
+      if (inp) inp.focus();
+      return;
+    }
+
+    if (errBox) errBox.style.display = 'none';
+    if (spinner) spinner.style.display = 'block';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ 분석 중...</span>';
+    }
+
+    try {
+      let data = null;
+      if (typeof window.askAiInventoryBot === 'function') {
+        data = await window.askAiInventoryBot(question);
+      } else if (typeof google !== 'undefined' && google.script && google.script.run) {
+        data = await new Promise((resolve, reject) => {
+          google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject)
+            .askAiInventoryBot(question);
+        });
+      } else {
+        // Direct fetch fallback
+        const res = await fetch('/api/ai-query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question })
+        });
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({ error: '서버 오류' }));
+          throw new Error(errJson.error || `오류 발생 (${res.status})`);
+        }
+        data = await res.json();
+      }
+
+      if (!data || !data.success) {
+        throw new Error(data?.error || '데이터 분석 결과가 없습니다.');
+      }
+
+      // 1. 3대 토큰 미터 갱신
+      const tm = data.tokenMetrics || {};
+      const elPrompt = document.getElementById('tmPrompt');
+      const elOutput = document.getElementById('tmOutput');
+      const elThoughts = document.getElementById('tmThoughts');
+      const elTotal = document.getElementById('tmTotal');
+      const elTime = document.getElementById('tmTime');
+
+      if (elPrompt) elPrompt.textContent = (tm.promptTokenCount || 0).toLocaleString();
+      if (elOutput) elOutput.textContent = (tm.candidatesTokenCount || 0).toLocaleString();
+      if (elThoughts) elThoughts.textContent = (tm.thoughtsTokenCount || 0).toLocaleString();
+      if (elTotal) elTotal.textContent = (tm.totalTokenCount || 0).toLocaleString();
+      if (elTime) elTime.textContent = (data.executionTimeMs || 0) + 'ms';
+
+      // 2. AI 해설 및 SQL 표시
+      const expText = document.getElementById('aiExplanationText');
+      const sqlBox = document.getElementById('aiSqlBox');
+      if (expText) expText.textContent = data.explanation || '질의 분석 완료';
+      if (sqlBox) {
+        sqlBox.textContent = data.sql || '';
+        sqlBox.style.display = 'none'; // 기본은 접힘 상태
+      }
+      if (respCard) respCard.style.display = 'block';
+
+      // 3. 피벗 결과 테이블 렌더링
+      currentAiRows = data.rows || [];
+      currentAiCols = data.columns || [];
+      currentAiTitle = data.title || '재고 데이터 분석 결과';
+      currentAiSortCol = null;
+
+      const titleEl = document.getElementById('aiResultTitle');
+      const cntBadge = document.getElementById('aiResultCountBadge');
+      if (titleEl) titleEl.textContent = `📊 ${currentAiTitle}`;
+      if (cntBadge) cntBadge.textContent = `${data.rowCount || currentAiRows.length}건`;
+
+      renderAiTable(currentAiCols, currentAiRows);
+      if (resArea) resArea.style.display = 'flex';
+
+    } catch (err) {
+      console.error('AI Query Error:', err);
+      if (errBox) {
+        errBox.textContent = `❌ ${err.message || 'AI 질의 중 오류가 발생했습니다.'}`;
+        errBox.style.display = 'block';
+      }
+      if (resArea) resArea.style.display = 'none';
+    } finally {
+      if (spinner) spinner.style.display = 'none';
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>🚀 전송</span>';
+      }
+    }
+  }
+
+  function renderAiTable(cols, rows) {
+    const thead = document.getElementById('aiTableHead');
+    const tbody = document.getElementById('aiTableBody');
+    if (!thead || !tbody) return;
+
+    if (!cols || cols.length === 0) {
+      thead.innerHTML = '';
+      tbody.innerHTML = '<tr><td colspan="100" style="padding:24px; text-align:center; color:#94a3b8;">조회된 데이터가 없습니다.</td></tr>';
+      return;
+    }
+
+    // Determine numeric columns
+    const isNumCol = {};
+    cols.forEach(c => {
+      let isAllNum = true;
+      let checkCount = 0;
+      for (const r of rows.slice(0, 10)) {
+        const val = r[c];
+        if (val !== null && val !== undefined && val !== '') {
+          checkCount++;
+          if (isNaN(Number(val))) {
+            isAllNum = false;
+            break;
+          }
+        }
+      }
+      isNumCol[c] = (checkCount > 0 && isAllNum);
+    });
+
+    // Render <thead>
+    let headHtml = '<tr>';
+    headHtml += '<th class="ai-th-cell" style="width:40px; text-align:center; color:#64748b;">#</th>';
+    cols.forEach(c => {
+      const align = isNumCol[c] ? 'right' : 'left';
+      let sortIndicator = ' ↕';
+      if (currentAiSortCol === c) {
+        sortIndicator = currentAiSortAsc ? ' ▲' : ' ▼';
+      }
+      headHtml += `<th class="ai-th-cell" style="text-align:${align};" onclick="sortAiTable('${c}')">${escapeHtml(c)}${sortIndicator}</th>`;
+    });
+    headHtml += '</tr>';
+    thead.innerHTML = headHtml;
+
+    // Render <tbody>
+    renderAiTableBody(cols, rows, isNumCol);
+  }
+
+  function renderAiTableBody(cols, rows, isNumCol) {
+    const tbody = document.getElementById('aiTableBody');
+    if (!tbody) return;
+
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="100" style="padding:24px; text-align:center; color:#94a3b8;">검색 결과가 없습니다.</td></tr>';
+      return;
+    }
+
+    let bodyHtml = '';
+    rows.forEach((r, idx) => {
+      bodyHtml += `<tr class="ai-table-row">`;
+      bodyHtml += `<td class="ai-td-cell" style="text-align:center; color:#94a3b8; font-size:7.8pt;">${idx + 1}</td>`;
+      cols.forEach(c => {
+        const val = r[c];
+        const align = isNumCol && isNumCol[c] ? 'right' : 'left';
+        let displayVal = '-';
+        if (val !== null && val !== undefined) {
+          if (isNumCol && isNumCol[c]) {
+            displayVal = Number(val).toLocaleString();
+          } else {
+            displayVal = escapeHtml(String(val));
+          }
+        }
+        bodyHtml += `<td class="ai-td-cell" style="text-align:${align};">${displayVal}</td>`;
+      });
+      bodyHtml += `</tr>`;
+    });
+    tbody.innerHTML = bodyHtml;
+  }
+
+  function sortAiTable(col) {
+    if (currentAiSortCol === col) {
+      currentAiSortAsc = !currentAiSortAsc;
+    } else {
+      currentAiSortCol = col;
+      currentAiSortAsc = true;
+    }
+
+    const isNum = currentAiRows.some(r => r[col] !== null && r[col] !== undefined && !isNaN(Number(r[col])));
+
+    currentAiRows.sort((a, b) => {
+      let va = a[col];
+      let vb = b[col];
+      if (va === null || va === undefined) return 1;
+      if (vb === null || vb === undefined) return -1;
+      if (isNum) {
+        va = Number(va) || 0;
+        vb = Number(vb) || 0;
+        return currentAiSortAsc ? va - vb : vb - va;
+      } else {
+        return currentAiSortAsc
+          ? String(va).localeCompare(String(vb))
+          : String(vb).localeCompare(String(va));
+      }
+    });
+
+    renderAiTable(currentAiCols, currentAiRows);
+  }
+
+  function filterAiTable() {
+    const filterVal = (document.getElementById('aiTableFilter')?.value || '').trim().toLowerCase();
+    if (!filterVal) {
+      renderAiTable(currentAiCols, currentAiRows);
+      return;
+    }
+
+    const filtered = currentAiRows.filter(r => {
+      return Object.values(r).some(val => {
+        if (val === null || val === undefined) return false;
+        return String(val).toLowerCase().includes(filterVal);
+      });
+    });
+
+    const cntBadge = document.getElementById('aiResultCountBadge');
+    if (cntBadge) cntBadge.textContent = `${filtered.length}건 (필터됨 / 전체 ${currentAiRows.length}건)`;
+
+    const tbody = document.getElementById('aiTableBody');
+    if (tbody) {
+      // Re-render body with filtered rows
+      const isNumCol = {};
+      currentAiCols.forEach(c => {
+        isNumCol[c] = currentAiRows.some(r => r[c] !== null && !isNaN(Number(r[c])));
+      });
+      renderAiTableBody(currentAiCols, filtered, isNumCol);
+    }
+  }
+
+  function downloadAiResultCsv() {
+    if (!currentAiRows || currentAiRows.length === 0) {
+      alert('다운로드할 데이터가 없습니다.');
+      return;
+    }
+
+    const cols = currentAiCols;
+    const csvRows = [];
+
+    // Header row
+    csvRows.push(cols.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','));
+
+    // Data rows
+    currentAiRows.forEach(r => {
+      const rowVals = cols.map(c => {
+        const v = r[c];
+        if (v === null || v === undefined) return '""';
+        return `"${String(v).replace(/"/g, '""')}"`;
+      });
+      csvRows.push(rowVals.join(','));
+    });
+
+    // Add UTF-8 BOM (\uFEFF) for Excel compatibility
+    const csvString = '\uFEFF' + csvRows.join('\r\n');
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const timeStr = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    const cleanTitle = (currentAiTitle || 'ai_query_export').replace(/[^a-zA-Z0-9가-힣_]/g, '_');
+    a.download = `${cleanTitle}_${timeStr}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+  </script>
+
 </body>
-</html>
+</html>

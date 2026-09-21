@@ -1,10 +1,11 @@
-import { installSupabaseBridge, preloadItemIdCache } from './lib/supabaseAdapter.js'
+import { installSupabaseBridge, preloadItemIdCache, askAiInventoryBot } from './lib/supabaseAdapter.js'
 import { supabase, WMS_AUTH_STORAGE_KEY } from './lib/supabase.js'
 import { initStockSync } from './lib/stockSync.js'
 import FlexSearch from 'flexsearch'
 
 // 0. ktk-wms-v2 동급 최강 FlexSearch 초고속 검색엔진 전역 등록
 window.FlexSearch = FlexSearch
+window.askAiInventoryBot = askAiInventoryBot
 
 
 // 1. Supabase 브릿지 설치
