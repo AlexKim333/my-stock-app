@@ -14963,6 +14963,10 @@ if (document.readyState === 'loading') {
             if (btn) {
               btn.disabled = false;
               btn.innerHTML = '<span>✅ 선택 항목 별명사전(aliases)에 영구 등록</span>';
+            }
+            alert('별명사전 등록 중 오류가 발생했습니다: ' + err);
+          })
+          .saveBatchProductAliases(toCommit);
       }
     }
   </script>
