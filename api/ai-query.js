@@ -3,8 +3,12 @@
 // Token Circuit Breaker (thinking_budget: 0) & 3-Tier Token Breakdown
 
 const MODEL_TIMEOUT_MS = 15000
-const SESSION_CHECK_TIMEOUT_MS = 5000
+const SESSION_CHECK_TIMEOUT_MS = 10000
 const DB_TIMEOUT_MS = 15000
+
+// 세션 토큰 60초 메모리 캐시 (불필요한 Tokyo 왕복 지연 방지)
+const sessionCache = new Map()
+const SESSION_CACHE_TTL_MS = 60 * 1000
 
 function headerValue(req, name) {
   const v = req.headers?.[name] ?? req.headers?.[name.toLowerCase()]
@@ -26,6 +30,13 @@ async function verifyWmsSession(token, supabaseUrl, anonKey) {
   if (!token) {
     return { ok: false, status: 401, error: '로그인이 필요합니다.' }
   }
+
+  // 1. 메모리 캐시 확인
+  const cached = sessionCache.get(token)
+  if (cached && cached.expiry > Date.now()) {
+    return { ok: true, user: cached.user }
+  }
+
   try {
     const resp = await fetchWithTimeout(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/rpc_session_info`, {
       method: 'POST',
@@ -38,12 +49,17 @@ async function verifyWmsSession(token, supabaseUrl, anonKey) {
       body: '{}'
     }, SESSION_CHECK_TIMEOUT_MS)
     if (!resp.ok) {
+      sessionCache.delete(token)
       return { ok: false, status: 401, error: '세션이 만료되었습니다. 다시 로그인하세요.' }
     }
     const data = await resp.json().catch(() => null)
     if (!data?.success) {
+      sessionCache.delete(token)
       return { ok: false, status: 401, error: '세션이 만료되었습니다. 다시 로그인하세요.' }
     }
+
+    // 캐시 저장
+    sessionCache.set(token, { user: data.user, expiry: Date.now() + SESSION_CACHE_TTL_MS })
     return { ok: true, user: data.user }
   } catch (e) {
     return { ok: false, status: 503, error: `세션 확인 실패: ${e.message}` }
