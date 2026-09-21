@@ -6155,6 +6155,7 @@ function confirmSubmit() {
   processingButton.textContent = '처리 중...';
   buttonContainer.appendChild(processingButton);
   const adminSelect = document.getElementById('adminSelect');
+  const adminValue = adminSelect ? adminSelect.value : 'ADMIN';
   let type = currentType;
   // 🛡️ [치명적 오류 방어 가드레일] 만약 레코드에 재고조정 필드(adjType 또는 location이 재고치환/재고추가)가 포함되어 있다면,
   // 현재 페이지(currentType)가 out이나 in으로 되어 있더라도 무조건 'adj'로 자동 교정하여 출고/입고 오작동을 원천 차단한다!
