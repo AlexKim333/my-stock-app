@@ -3990,7 +3990,25 @@ let PRODUCT_ALIAS_MAP = {
   'BULUSACUELLOALTO': 'L-AL165',
   'LAL165': 'L-AL165',
   'L-AL165': 'L-AL165',
-  'AL165': 'L-AL165'
+  'AL165': 'L-AL165',
+
+  // YE5015, YE5006, YE5007, YE5077 (대표 모델 오인식 사전 방어)
+  'S015': 'YE5015',
+  'SO15': 'YE5015',
+  '5015': 'YE5015',
+  '5O15': 'YE5015',
+  'S006': 'YE5006',
+  'SO06': 'YE5006',
+  '5006': 'YE5006',
+  '5O06': 'YE5006',
+  'S007': 'YE5007',
+  'SO07': 'YE5007',
+  '5007': 'YE5007',
+  '5O07': 'YE5007',
+  'S077': 'YE5077',
+  'SO77': 'YE5077',
+  '5077': 'YE5077',
+  '5O77': 'YE5077'
 };
 
 function normalizeAliasCleanKey(str) {
@@ -4004,16 +4022,49 @@ function normalizeAliasCleanKey(str) {
 function resolveModelAlias(rawQuery) {
   if (!rawQuery) return null;
   const clean = normalizeAliasCleanKey(rawQuery);
+  if (!clean) return null;
+
+  // 1. 직접 매핑
   if (PRODUCT_ALIAS_MAP[clean]) {
     return { targetModel: PRODUCT_ALIAS_MAP[clean], rawAlias: rawQuery.trim() };
   }
+
+  // 2. OCR 문자 혼동 정규화 키 (O <-> 0 상호 치환, S <-> 5 접두 치환)
+  const clean0 = clean.replace(/O/g, '0');
+  const cleanO = clean.replace(/0/g, 'O');
+  if (PRODUCT_ALIAS_MAP[clean0]) {
+    return { targetModel: PRODUCT_ALIAS_MAP[clean0], rawAlias: rawQuery.trim() };
+  }
+  if (PRODUCT_ALIAS_MAP[cleanO]) {
+    return { targetModel: PRODUCT_ALIAS_MAP[cleanO], rawAlias: rawQuery.trim() };
+  }
+  if (/^S[0O]\d+$/.test(clean)) {
+    const s5_0 = '5' + clean.slice(1).replace(/O/g, '0');
+    if (PRODUCT_ALIAS_MAP[s5_0]) return { targetModel: PRODUCT_ALIAS_MAP[s5_0], rawAlias: rawQuery.trim() };
+  } else if (/^5[0O]\d+$/.test(clean)) {
+    const sS_0 = 'S' + clean.slice(1).replace(/O/g, '0');
+    if (PRODUCT_ALIAS_MAP[sS_0]) return { targetModel: PRODUCT_ALIAS_MAP[sS_0], rawAlias: rawQuery.trim() };
+  }
+
+  // 3. 별명 맵 전수 비교 (완전 일치, O/0 혼동 무시 일치, 접두사 일치)
   for (const [aliasClean, target] of Object.entries(PRODUCT_ALIAS_MAP)) {
     const normA = normalizeAliasCleanKey(aliasClean);
-    if (clean === normA) {
+    if (!normA) continue;
+    const normA0 = normA.replace(/O/g, '0');
+
+    // 3-1. 완전 일치 (O/0 혼동 무시)
+    if (clean === normA || clean0 === normA0) {
       return { targetModel: target, rawAlias: rawQuery.trim() };
     }
-    if (normA.length >= 4 && (clean.startsWith(normA) || normA.startsWith(clean))) {
-      return { targetModel: target, rawAlias: rawQuery.trim() };
+
+    // 3-2. 접두사 일치 (예: query가 'SO15 SURTIDO' 처럼 색상/수량이 뒤에 붙은 경우)
+    if (normA.length >= 3) {
+      if (clean.startsWith(normA) || clean0.startsWith(normA0)) {
+        return { targetModel: target, rawAlias: rawQuery.trim() };
+      }
+      if (normA.startsWith(clean) || normA0.startsWith(clean0)) {
+        return { targetModel: target, rawAlias: rawQuery.trim() };
+      }
     }
   }
   return null;
@@ -4028,8 +4079,12 @@ function loadServerAliases() {
       .withSuccessHandler(serverAliasMap => {
         if (serverAliasMap && typeof serverAliasMap === 'object') {
           Object.assign(PRODUCT_ALIAS_MAP, serverAliasMap);
-          const count = Object.keys(serverAliasMap).length;
-          console.log(`[별명사전] 서버 룰북 ${count}건 동기화 완료`);
+          for (const [k, target] of Object.entries(serverAliasMap)) {
+            PRODUCT_ALIAS_MAP[k.replace(/O/g, '0')] = target;
+            PRODUCT_ALIAS_MAP[k.replace(/0/g, 'O')] = target;
+          }
+          const count = Object.keys(PRODUCT_ALIAS_MAP).length;
+          console.log(`[별명사전] 서버 룰북 동기화 완료 (총 ${count}개 매핑)`);
         }
       })
       .withFailureHandler(err => {
@@ -4063,9 +4118,11 @@ function checkAndPromptRegisterAlias(rawAlias, targetModel) {
     );
 
     if (confirmRegister) {
-      // 1. 클라이언트 메모리에 즉시 반영
+      // 1. 클라이언트 메모리에 즉시 반영 (O/0 혼동 자동 방어)
       PRODUCT_ALIAS_MAP[cleanRaw] = targetModel;
       PRODUCT_ALIAS_MAP[rawAlias.toUpperCase().trim()] = targetModel;
+      PRODUCT_ALIAS_MAP[cleanRaw.replace(/O/g, '0')] = targetModel;
+      PRODUCT_ALIAS_MAP[cleanRaw.replace(/0/g, 'O')] = targetModel;
 
       // 2. 서버 스프레드시트에 영구 저장
       const curAdmin = (document.getElementById('admin')?.value || '작업자');
@@ -8936,7 +8993,10 @@ function findBestCatalogMatch(query, catalog, threshold = 0.55) {
   const qClean = q.replace(/[\s_\-\/]/g, '').toLowerCase();
 
   // -1단계: 🏷️ 사장님 별명(Alias) 룰북 최우선 매칭 (100% 일치율 보장)
-  const aliasMatch = resolveModelAlias(query);
+  let aliasMatch = resolveModelAlias(query);
+  if (!aliasMatch && query !== qClean) {
+    aliasMatch = resolveModelAlias(qClean);
+  }
   if (aliasMatch) {
     const targetClean = aliasMatch.targetModel.replace(/[\s_\-\/]/g, '').toLowerCase();
     const matchedItem = catalog.find(item => {
@@ -8946,6 +9006,13 @@ function findBestCatalogMatch(query, catalog, threshold = 0.55) {
     if (matchedItem) {
       return { item: matchedItem, score: 1.0, isAlias: true, rawAlias: aliasMatch.rawAlias };
     }
+    // 룰북에 명시된 품목이면 카탈로그에 일시 미로딩되었더라도 지정된 타겟 모델명으로 100% 확정 반환
+    return {
+      item: { name: aliasMatch.targetModel, color: 'SURTIDO', boxContent: 0 },
+      score: 1.0,
+      isAlias: true,
+      rawAlias: aliasMatch.rawAlias
+    };
   }
 
   // 0단계: 품명 + 색상 동시 완전 일치 최우선 (예: "pd60blanco" === "pd60blanco")
@@ -10519,7 +10586,23 @@ function onHandwrittenExtracted(data) {
 
       const queryBase = base || rawModel;
       const combinedQuery = queryBase ? `${queryBase} ${color}`.trim() : color;
-      matchRes = findBestCatalogMatch(combinedQuery, stockDataCache, 0.55);
+
+      // 0순위: 모델 코드(queryBase) 또는 복합 쿼리(combinedQuery)의 별명사전 룰북 우선 검사
+      const aliasDirect = resolveModelAlias(queryBase) || resolveModelAlias(combinedQuery);
+      if (aliasDirect) {
+        const targetClean = aliasDirect.targetModel.replace(/[\s_\-\/]/g, '').toLowerCase();
+        const matchedItem = (stockDataCache || []).find(it => 
+          (it.name || '').replace(/[\s_\-\/]/g, '').toLowerCase() === targetClean
+        );
+        matchRes = {
+          item: matchedItem || { name: aliasDirect.targetModel, color: color || 'SURTIDO', boxContent: 0 },
+          score: 1.0,
+          isAlias: true,
+          rawAlias: aliasDirect.rawAlias
+        };
+      } else {
+        matchRes = findBestCatalogMatch(combinedQuery, stockDataCache, 0.55);
+      }
 
       // 스마트 숫자 역검색 보강 (독립 행에 접두사 없는 숫자만 들어온 경우 자동 보정)
       if (!matchRes && /^\d{2,4}$/.test(queryBase)) {
@@ -11011,10 +11094,12 @@ function applyTriageAliasSelect(idx, targetModel) {
     rec.boxContent = matchedMaster.boxContent;
   }
 
-  // 2. 클라이언트 룰북 반영
+  // 2. 클라이언트 룰북 반영 (O/0 혼동 자동 방어)
   const cleanRaw = normalizeAliasCleanKey(raw);
   PRODUCT_ALIAS_MAP[cleanRaw] = targetModel;
   PRODUCT_ALIAS_MAP[raw.toUpperCase().trim()] = targetModel;
+  PRODUCT_ALIAS_MAP[cleanRaw.replace(/O/g, '0')] = targetModel;
+  PRODUCT_ALIAS_MAP[cleanRaw.replace(/0/g, 'O')] = targetModel;
 
   // 3. 서버 스프레드시트에 영구 저장
   const curAdmin = (document.getElementById('admin')?.value || '작업자');

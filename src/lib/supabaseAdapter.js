@@ -402,6 +402,19 @@ export const serverMethods = {
         const cleanKey = alias.replace(/[\s_\-\/.,#]+/g, '').toUpperCase()
         map[cleanKey] = target
         map[alias.toUpperCase()] = target
+        // ★ OCR 혼동 방어: O <-> 0 상호 치환 키 자동 확장 등록 (SO15 <-> S015)
+        map[cleanKey.replace(/O/g, '0')] = target
+        map[cleanKey.replace(/0/g, 'O')] = target
+        map[alias.toUpperCase().replace(/O/g, '0')] = target
+        map[alias.toUpperCase().replace(/0/g, 'O')] = target
+        // ★ 멕시코 손글씨 S <-> 5 혼동 (예: S015 <-> 5015)
+        if (/^S[0O]\d+$/.test(cleanKey)) {
+          map['5' + cleanKey.slice(1).replace(/O/g, '0')] = target
+          map['5' + cleanKey.slice(1).replace(/0/g, 'O')] = target
+        } else if (/^5[0O]\d+$/.test(cleanKey)) {
+          map['S' + cleanKey.slice(1).replace(/O/g, '0')] = target
+          map['S' + cleanKey.slice(1).replace(/0/g, 'O')] = target
+        }
       }
     })
     return map
@@ -415,8 +428,17 @@ export const serverMethods = {
     const target = String(targetModel || '').trim()
     if (!alias || !target) return { success: false, error: '유효하지 않은 별명/모델명' }
 
+    const p_aliases = [{ alias, target_item_name: target }]
+    const alt0 = alias.replace(/O/g, '0')
+    const altO = alias.replace(/0/g, 'O')
+    if (alt0 !== alias) p_aliases.push({ alias: alt0, target_item_name: target })
+    if (altO !== alias) p_aliases.push({ alias: altO, target_item_name: target })
+    if (/^S[0O]\d+$/.test(alias)) {
+      p_aliases.push({ alias: '5' + alias.slice(1).replace(/O/g, '0'), target_item_name: target })
+    }
+
     const { error } = await supabase.rpc('rpc_upsert_aliases', {
-      p_aliases: [{ alias, target_item_name: target }]
+      p_aliases
     })
 
     if (error) throw error

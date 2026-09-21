@@ -114,7 +114,7 @@ Rules:
    - "requester": Internal salesperson name only if underlined or explicitly marked.
 2. Category vs Model: Do NOT prepend category titles (e.g. "Termico niños") to model name. If row has only "60", extract "60".
 3. Row Parsing:
-   - "modelo": Product code (clean uppercase code, e.g. "CK928K", "CCAK999C", "MIS0081", "SLT1205").
+   - "modelo": Product code (clean uppercase code, e.g. "CK928K", "CCAK999C", "MIS0081", "SLT1205", "5015", "YE5015"). Note: Mexican handwritten digits often have curved '5' resembling 'S' and '0' resembling 'O'. Transcribe numeric model codes accurately.
    - "color": Color word (Negro, Blanco, Azul, Surtido, etc.). If letter variant like CK928O, append letter to model and color="SURTIDO".
    - "raw_qty": Exact quantity string (e.g. "5", "3 x 72", "2 x 120", "10P").
    - "boxes": Integer boxes count.
