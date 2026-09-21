@@ -1413,7 +1413,12 @@ export const serverMethods = {
       const nov = itemNovBoxes.get(st.item_id) || 0
       const dec = itemDecBoxes.get(st.item_id) || 0
       const totalWinter = itemWinterTotal.get(st.item_id) || (nov + dec)
-      const currentSafe = Number(st.safe_stock_boxes || 0)
+      let currentSafe = Number(st.safe_stock_boxes || 0)
+      const boxContent = Number(st.box_packaging_qty || 1)
+      // 낱개(개) 입력 데이터에 대한 상자(Box) 자동 정규화 가드레일 (LIGA1204 제외)
+      if (st.item_name !== 'LIGA1204' && boxContent > 1 && (currentSafe >= boxContent || currentSafe >= 50)) {
+        currentSafe = Math.max(1, Math.ceil(currentSafe / boxContent))
+      }
       const currentBox = Number(st.main_box_qty || 0)
 
       // 서브창고 리드타임 1일 + 버퍼 1.3배
@@ -1425,7 +1430,7 @@ export const serverMethods = {
         item_id: st.item_id,
         name: st.item_name,
         color: st.color || 'SURTIDO',
-        boxContent: Number(st.box_packaging_qty || 1),
+        boxContent: boxContent,
         currentSafeStock: currentSafe,
         peakDailyBoxes: peakBoxes,
         peakDate: peakDate,
@@ -1480,6 +1485,18 @@ export const serverMethods = {
       backupSheetName: 'Supabase PostgreSQL (ACID)',
       message: data?.message || '안전재고가 원장에 일괄 반영되었습니다.'
     }
+  },
+
+  /**
+   * 17-1. 안전재고 낱개(개) ➔ 상자(Box) 일괄 정규화 RPC 호출
+   */
+  async normalizeSafeStockUnits() {
+    const { data, error } = await supabase.rpc('rpc_normalize_safe_stock_units')
+    if (error) {
+      console.error('[SupabaseAdapter] normalizeSafeStockUnits 실패:', error)
+      throw new Error(error.message || '안전재고 단위 정규화 실패')
+    }
+    return data || { success: true, updated_count: 0 }
   },
 
   /**

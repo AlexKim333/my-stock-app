@@ -4167,7 +4167,7 @@ const typeConfig = {
       <div class="input-row"><label for="itemName">품명:</label><input type="text" id="itemName" name="itemName" autocomplete="off" oninput="filterItems(this.value)" onchange="autoFillColor()" tabindex="1"><div id="customDropdown" class="dropdown-container" style="display: none;"><ul id="itemSuggestionsList"></ul></div></div>
       <div class="input-row"><label for="color">색상:</label><input type="text" id="color" name="color" value="SURTIDO" tabindex="2"></div>
       <div class="input-row"><label for="boxContent">박스당수량:</label><input type="number" id="boxContent" name="boxContent" tabindex="3"></div>
-      <div class="input-row"><label for="safeStock">안전재고:</label><input type="number" id="safeStock" name="safeStock" tabindex="4"></div>
+      <div class="input-row"><label for="safeStock">안전재고(상자):</label><input type="number" id="safeStock" name="safeStock" placeholder="상자 단위 (예: 2)" tabindex="4"></div>
       <div class="input-row"><label for="initialStock">기초재고:</label><input type="number" id="initialStock" name="initialStock" tabindex="5"></div>
       <div class="input-row"><label for="manufacturer">제조사:</label><select id="manufacturer" name="manufacturer" tabindex="6"><option value="">선택</option></select></div>
     `
@@ -5184,6 +5184,13 @@ function addRecord() {
     if (!itemName) {
       alert('품명을 입력하세요.');
       return;
+    }
+    if (boxContent > 1 && safeStock >= boxContent) {
+      const isConfirmed = confirm(`⚠️ [안전재고 단위 확인]\n\n입력하신 안전재고는 "${safeStock}상자"입니다.\n(박스당수량 ${boxContent}개 기준 총 ${(safeStock * boxContent).toLocaleString()}개 분량)\n\n혹시 낱개(개수)가 아닌 '상자' 수량이 맞습니까?\n\n[확인]: ${safeStock}상자로 등록\n[취소]: 다시 수정`);
+      if (!isConfirmed) {
+        if (safeStockInput) safeStockInput.focus();
+        return;
+      }
     }
     const formData = {
       itemName, color, boxContent, safeStock, initialStock, manufacturer
