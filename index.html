@@ -5978,6 +5978,13 @@ function submitForm() {
 }
 
 function showConfirmModal() {
+  // 🛡️ 실사 레코드가 포함된 경우 확인창 렌더링 시에도 '재고조정(adj)' 모드로 자동 보정
+  const hasAdjRecords = records.some(r => r && (r.adjType || r.location === '재고치환' || r.location === '재고추가'));
+  if (hasAdjRecords && currentType !== 'adj') {
+    if (typeof setPage === 'function') setPage('재고조정');
+    else currentType = 'adj';
+  }
+
   const tbody = document.getElementById('confirmBody');
   const confirmModalDiv = document.getElementById('confirmModal');
   if (!tbody || !confirmModalDiv) return;
@@ -6099,8 +6106,16 @@ function confirmSubmit() {
   processingButton.textContent = '처리 중...';
   buttonContainer.appendChild(processingButton);
   const adminSelect = document.getElementById('adminSelect');
-  const adminValue = adminSelect ? adminSelect.value : 'ADMIN';
-  const type = currentType;
+  let type = currentType;
+  // 🛡️ [치명적 오류 방어 가드레일] 만약 레코드에 재고조정 필드(adjType 또는 location이 재고치환/재고추가)가 포함되어 있다면,
+  // 현재 페이지(currentType)가 out이나 in으로 되어 있더라도 무조건 'adj'로 자동 교정하여 출고/입고 오작동을 원천 차단한다!
+  const hasAdjRecords = records.some(r => r && (r.adjType || r.location === '재고치환' || r.location === '재고추가'));
+  if (hasAdjRecords && type !== 'adj') {
+    console.warn('⚠️ [안전 가드레일 작동] 실사 레코드가 감지되어 전표 유형을 ' + type + '에서 adj(재고조정)로 자동 교정합니다.');
+    type = 'adj';
+    currentType = 'adj';
+  }
+
   if (type === 'adj') {
     const adjWh = getAdjWarehouse();
     records.forEach(r => { r.warehouse = adjWh; });
@@ -13050,6 +13065,11 @@ function toggleRecordAdjType(idx) {
 // -------------------------------------------------------------------
 
 function openMobileStockAdjModal() {
+  // 🛡️ 모바일 실사 진입 시 WMS 모드를 반드시 '재고조정(adj)'으로 동기화하여 출고/입고 전표 혼선 원천 차단
+  if (typeof setPage === 'function' && currentType !== 'adj') {
+    setPage('재고조정');
+  }
+
   const modal = document.getElementById('mobileStockAdjModal');
   const overlay = document.getElementById('modalOverlay');
   if (modal) {
@@ -13864,6 +13884,10 @@ function submitFormFromMobileModal() {
   if (!records || records.length === 0) {
     alert('제출할 실사 데이터가 없습니다.');
     return;
+  }
+  // 🛡️ 모바일 실사 제출 시 WMS 모드를 무조건 '재고조정(adj)'으로 확정
+  if (typeof setPage === 'function' && currentType !== 'adj') {
+    setPage('재고조정');
   }
   closeMobileStockAdjModal();
   submitForm();
