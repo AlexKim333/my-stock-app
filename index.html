@@ -13345,6 +13345,19 @@ function showMoreMobileAdjItems(event) {
   if (searchInput) searchInput.focus();
 }
 
+// 🎨 [재고실사 히스토리 컬러 태깅] 상자는 초록색(#047857), 낱개는 파란색(#1d4ed8) 전용 칩으로 시인성 극대화
+function formatAdjHistoryHtml(histArray) {
+  if (!histArray || !Array.isArray(histArray) || histArray.length === 0) return '';
+  return histArray.map(step => {
+    let text = escapeHtml(String(step || '').trim());
+    // 상자 수량 (예: '6상자') -> 에메랄드 그린 미니 칩
+    text = text.replace(/(\d+상자)/g, '<span style="color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; font-weight: 800; padding: 1px 5px; border-radius: 4px;">$1</span>');
+    // 낱개 수량 (예: '380개') -> 코발트 블루 미니 칩
+    text = text.replace(/(\d+개)/g, '<span style="color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; font-weight: 800; padding: 1px 5px; border-radius: 4px;">$1</span>');
+    return text;
+  }).join('<span style="color: #94a3b8; font-weight: 700; margin: 0 3px;">+</span>');
+}
+
 let pendingMobileDuplicateIndex = -1;
 
 function showMobileDuplicatePromptModal(index, item, existQty, existUnit, existBox, existIndiv, existHistory) {
@@ -13362,21 +13375,20 @@ function showMobileDuplicatePromptModal(index, item, existQty, existUnit, existB
   const b = Number(existBox || 0);
   const ind = Number(existIndiv || 0);
   if (b > 0 && ind > 0) {
-    existStr = `${b}상자 + ${ind}개`;
+    existStr = `<span style="color: #047857;">${b}상자</span> <span style="color: #94a3b8; font-size: 14pt;">+</span> <span style="color: #1d4ed8;">${ind}개</span>`;
   } else if (b > 0) {
-    existStr = `${b}상자`;
+    existStr = `<span style="color: #047857;">${b}상자</span>`;
   } else if (ind > 0) {
-    existStr = `${ind}개`;
+    existStr = `<span style="color: #1d4ed8;">${ind}개</span>`;
   } else {
     existStr = `${existQty || 0}${existUnit || '상자'}`;
   }
 
   if (existHistory && Array.isArray(existHistory) && existHistory.length > 1) {
-    existStr += `<div style="font-size: 8pt; font-weight: 700; color: #047857; margin-top: 4px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 4px; padding: 2px 6px;">📜 이전 합산 이력: ${escapeHtml(existHistory.join(' + '))}</div>`;
-    if (qtyEl) qtyEl.innerHTML = existStr;
-  } else {
-    if (qtyEl) qtyEl.textContent = existStr;
+    const histColored = formatAdjHistoryHtml(existHistory);
+    existStr += `<div style="font-size: 8pt; font-weight: 700; margin-top: 6px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: center;"><span style="color: #475569;">📜 이전 합산 이력:</span> ${histColored}</div>`;
   }
+  if (qtyEl) qtyEl.innerHTML = existStr;
   if (unitEl) unitEl.textContent = '';
 
   if (modal) modal.style.display = 'flex';
@@ -13989,23 +14001,29 @@ function renderMobileAdjSessionList() {
     if (isEditing) {
       historyHtml = '<strong style="color: #2563eb;">🔄 현재 상단 입력란에서 롤백/합산 중...</strong>';
     } else if (r.history && Array.isArray(r.history) && r.history.length > 1) {
-      const histText = r.history.join(' + ');
+      const rawHistText = r.history.join(' + ');
+      const coloredHist = formatAdjHistoryHtml(r.history);
       historyHtml = `
-        <span style="display: inline-flex; align-items: center; gap: 4px; font-weight: 700; color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; padding: 2px 7px; border-radius: 4px; font-size: 7.5pt; max-width: 100%; box-sizing: border-box;" title="합산 이력: ${escapeHtml(histText)}">
-          <span>📜 합산:</span> <span style="letter-spacing: -0.2px;">${escapeHtml(histText)}</span>
+        <span style="display: inline-flex; align-items: center; gap: 4px; font-weight: 700; background: #f8fafc; border: 1px solid #cbd5e1; padding: 2px 6px; border-radius: 5px; font-size: 7.5pt; max-width: 100%; box-sizing: border-box; flex-wrap: wrap;" title="합산 이력: ${escapeHtml(rawHistText)}">
+          <span style="color: #475569; font-weight: 800;">📜 합산:</span>
+          ${coloredHist}
         </span>
       `;
     } else if (r.history && Array.isArray(r.history) && r.history.length === 1) {
+      const coloredSingle = formatAdjHistoryHtml(r.history);
       historyHtml = `
-        <span style="color: #64748b; font-size: 7.5pt; display: inline-flex; align-items: center; gap: 4px;">
-          <span>📦 1차 실사:</span> <strong style="color: #334155;">${escapeHtml(r.history[0])}</strong>
+        <span style="font-size: 7.5pt; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+          <span style="color: #64748b; font-weight: 700;">📦 1차 실사:</span>
+          ${coloredSingle}
         </span>
       `;
     } else {
       const fallbackStr = (b > 0 && ind > 0) ? `${b}상자 + ${ind}개` : (b > 0 ? `${b}상자` : `${ind}개`);
+      const coloredFallback = formatAdjHistoryHtml([fallbackStr]);
       historyHtml = `
-        <span style="color: #64748b; font-size: 7.5pt; display: inline-flex; align-items: center; gap: 4px;">
-          <span>📦 1차 실사:</span> <strong style="color: #334155;">${escapeHtml(fallbackStr)}</strong>
+        <span style="font-size: 7.5pt; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+          <span style="color: #64748b; font-weight: 700;">📦 1차 실사:</span>
+          ${coloredFallback}
         </span>
       `;
     }
