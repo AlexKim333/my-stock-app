@@ -4809,6 +4809,13 @@ function initPage() {
   let initialPage = '상품등록';
   if (currentType === 'in') initialPage = '입고입력';
   else if (currentType === 'out') initialPage = '출고입력';
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const requestedPage = urlParams.get('page');
+    if (requestedPage && ['입고입력', '출고입력', '상품등록', '재고조정'].includes(requestedPage)) {
+      initialPage = requestedPage;
+    }
+  } catch (e) {}
   setPage(initialPage);
   updateClock();
   setInterval(updateClock, 1000);

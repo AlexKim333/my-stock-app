@@ -1174,6 +1174,28 @@ window.WmsSearchEngine = WmsSearchEngine;
 </script>
 
 <script>
+/**
+ * 탭 전환 브릿지 (메인 WMS 창 연동)
+ * - iframe 모달로 열린 경우: 부모 창(window.parent)의 setPage 호출 후 모달 닫기
+ * - 단독 창으로 열린 경우: 메인 WMS URL로 페이지 파라미터와 함께 이동
+ */
+function setPage(pageName) {
+  if (pageName === '검색수정') return;
+  if (window.parent && window.parent !== window && typeof window.parent.setPage === 'function') {
+    try {
+      window.parent.setPage(pageName);
+      if (typeof window.parent.closeSearchModifyModal === 'function') {
+        window.parent.closeSearchModifyModal();
+      }
+      return;
+    } catch (err) {
+      console.warn('[SearchModify] 부모 창 setPage 호출 실패, location 이동 대체:', err);
+    }
+  }
+  window.location.href = '/?page=' + encodeURIComponent(pageName);
+}
+window.setPage = setPage;
+
 let dropdownVisible = false;
 let records = [];
 let originalRecords = [];

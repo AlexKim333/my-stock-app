@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "verify": "node scripts/verify_integrity.mjs",
+    "test": "npm run verify",
     "update-types": "npx supabase gen types typescript --project-id xfxmodlrczofwylyedjh > src/types/supabase.ts",
     "sync-db": "npm run update-types"
   },
