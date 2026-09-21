@@ -2634,17 +2634,21 @@
             <span id="mAdjDupItemQty">10</span><span id="mAdjDupItemUnit" style="font-size: 11pt; font-weight: 800; margin-left: 2px;">상자</span>
           </div>
         </div>
-        <p style="margin: 0 0 16px 0; font-size: 9pt; color: #334155; font-weight: 700; line-height: 1.45;">
-          기존 입력 항목에 새로 발견한 수량을<br/><strong style="color: #059669; font-size: 10pt;">➕ 추가 합산(롤백)</strong>하시겠습니까?
+        <p style="margin: 0 0 14px 0; font-size: 9pt; color: #334155; font-weight: 700; line-height: 1.45;">
+          기존 입력 내역을 어떻게 처리하시겠습니까?
         </p>
-        <div style="display: flex; flex-direction: column; gap: 8px;">
-          <button type="button" id="btnMAdjDupConfirmYes" onclick="confirmMobileDuplicateRollback()" 
-            style="width: 100%; height: 48px; background: linear-gradient(135deg, #059669, #047857); color: white; border: none; border-radius: 8px; font-size: 11pt; font-weight: 800; cursor: pointer; box-shadow: 0 4px 12px rgba(5,150,105,0.35); display: flex; align-items: center; justify-content: center; gap: 6px;">
-            <span>➕ 예 (기존 수량에 합산 롤백)</span>
+        <div style="display: flex; flex-direction: column; gap: 7px;">
+          <button type="button" id="btnMAdjDupConfirmAdd" onclick="confirmMobileDuplicateRollback('add')" 
+            style="width: 100%; height: 44px; background: linear-gradient(135deg, #059669, #047857); color: white; border: none; border-radius: 8px; font-size: 10pt; font-weight: 800; cursor: pointer; box-shadow: 0 4px 12px rgba(5,150,105,0.3); display: flex; align-items: center; justify-content: center; gap: 6px;">
+            <span>➕ 기존 수량에 누적 합산</span>
+          </button>
+          <button type="button" id="btnMAdjDupConfirmReplace" onclick="confirmMobileDuplicateRollback('replace')" 
+            style="width: 100%; height: 44px; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border: none; border-radius: 8px; font-size: 10pt; font-weight: 800; cursor: pointer; box-shadow: 0 4px 12px rgba(37,99,235,0.3); display: flex; align-items: center; justify-content: center; gap: 6px;">
+            <span>🔄 새 수량으로 덮어쓰기 (치환)</span>
           </button>
           <button type="button" onclick="closeMobileDuplicatePromptModal()" 
-            style="width: 100%; height: 40px; background: #f8fafc; color: #64748b; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 9.5pt; font-weight: 700; cursor: pointer;">
-            ✕ 아니오 (새 항목으로 별도 입력)
+            style="width: 100%; height: 36px; background: #f8fafc; color: #64748b; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 8.5pt; font-weight: 700; cursor: pointer;">
+            ✕ 취소 (새 항목으로 별도 입력)
           </button>
         </div>
       </div>
@@ -12968,19 +12972,12 @@ function checkItemAuditHint(itemName) {
     hintBox.style.background = '#fef3c7';
     hintBox.style.border = '1px solid #fde68a';
     hintBox.style.color = '#92400e';
-    hintBox.innerHTML = `⚠️ 오늘 ${hint.timeStr}에 ${hint.box}상자 실사됨 (${hint.typeStr}) ➔ <strong>[추가]</strong> 모드 추천!`;
-
-    // 💡 제안 4번: 자동으로 추가 모드로 추천 전환
-    const incRadio = document.querySelector('input[name="adjType"][value="increment"]');
-    if (incRadio) {
-      incRadio.checked = true;
-      updateLiveAdjPreview();
-    }
+    hintBox.innerHTML = `⚠️ 오늘 ${hint.timeStr}에 ${hint.box}상자 실사됨 (${hint.typeStr}) (필요시 [추가] 선택)`;
   } else {
     hintBox.style.background = '#f1f5f9';
     hintBox.style.border = '1px solid #cbd5e1';
     hintBox.style.color = '#475569';
-    hintBox.innerHTML = `ℹ️ 최근 실사: ${hint.dateStr} (${hint.box}상자 ${hint.typeStr}) ➔ <strong>[치환]</strong> 모드 추천`;
+    hintBox.innerHTML = `ℹ️ 최근 실사: ${hint.dateStr} (${hint.box}상자 ${hint.typeStr})`;
   }
 }
 
@@ -13210,6 +13207,17 @@ function setMobileAdjMode(mode) {
       btnRep.style.color = '#475569';
     }
   }
+
+  // 🛡️ 항목 수정 롤백 중일 때도 상단 모드와 서브모드(치환 vs 합산) 100% 일체화 동기화!
+  if (editingMobileRecordIndex >= 0) {
+    const targetSubMode = (mode === 'replace') ? 'replace' : 'add';
+    if (typeof setEditSubMode === 'function') {
+      setEditSubMode(targetSubMode, true); // skipModeSync=true
+    } else {
+      editingMobileSubMode = targetSubMode;
+    }
+  }
+
   updateMobileAdjLivePreview();
 }
 
@@ -13407,7 +13415,7 @@ function closeMobileDuplicatePromptModal() {
   pendingMobileDuplicateIndex = -1;
 }
 
-function confirmMobileDuplicateRollback() {
+function confirmMobileDuplicateRollback(mode = 'add') {
   const idx = pendingMobileDuplicateIndex;
   closeMobileDuplicatePromptModal();
   if (idx >= 0 && idx < records.length) {
@@ -13416,7 +13424,15 @@ function confirmMobileDuplicateRollback() {
     const b = Number(rec.boxQty || 0);
     const ind = Number(rec.individualQty || 0);
     const str = (b > 0 && ind > 0) ? `${b}상자 + ${ind}개` : (b > 0 ? `${b}상자` : `${ind}개`);
-    showAppToast(`🔄 [#${idx + 1}번] 기존 ${str}에 추가 합산 모드로 전환되었습니다.`, 2000);
+    if (mode === 'replace') {
+      setMobileAdjMode('replace');
+      setEditSubMode('replace');
+      showAppToast(`🔄 [#${idx + 1}번] 새 수량으로 덮어쓰기(치환) 모드로 전환되었습니다.`, 2200);
+    } else {
+      setMobileAdjMode('increment');
+      setEditSubMode('add');
+      showAppToast(`➕ [#${idx + 1}번] 기존 ${str}에 추가 합산 모드로 전환되었습니다.`, 2000);
+    }
   }
 }
 
@@ -13509,22 +13525,19 @@ function selectMobileAdjItem(index) {
         hintBadge.style.background = '#fef3c7';
         hintBadge.style.border = '1px solid #fde68a';
         hintBadge.style.color = '#92400e';
-        hintBadge.innerHTML = `⚠️ 오늘 ${hint.timeStr}에 ${hint.box}상자 실사됨 (${hint.typeStr}) ➔ [추가] 모드 추천`;
-        setMobileAdjMode('increment');
+        hintBadge.innerHTML = `⚠️ 오늘 ${hint.timeStr}에 ${hint.box}상자 실사됨 (${hint.typeStr})`;
       } else {
         hintBadge.style.background = '#f1f5f9';
         hintBadge.style.border = '1px solid #cbd5e1';
         hintBadge.style.color = '#475569';
-        hintBadge.innerHTML = `ℹ️ 최근 실사: ${hint.dateStr} (${hint.box}상자 ${hint.typeStr}) ➔ [치환] 모드 추천`;
-        setMobileAdjMode('replace');
+        hintBadge.innerHTML = `ℹ️ 최근 실사: ${hint.dateStr} (${hint.box}상자 ${hint.typeStr})`;
       }
     } else if (hintBadge) {
       hintBadge.style.display = 'block';
       hintBadge.style.background = '#f8fafc';
       hintBadge.style.border = '1px solid #e2e8f0';
       hintBadge.style.color = '#64748b';
-      hintBadge.innerHTML = `✨ 이번 재고조사 첫 실사 ➔ [치환] 모드 추천`;
-      setMobileAdjMode('replace');
+      hintBadge.innerHTML = `✨ 이번 재고조사 첫 실사`;
     }
   }
 
@@ -13546,13 +13559,26 @@ let editingMobileOriginalBoxQty = 0;
 let editingMobileOriginalIndivQty = 0;
 let editingMobileSubMode = 'add'; // 'add' (누적 합산) | 'replace' (수량 직접 수정)
 
-function setEditSubMode(subMode) {
+function setEditSubMode(subMode, skipModeSync = false) {
   editingMobileSubMode = subMode;
   const btnAdd = document.getElementById('btnEditSubModeAdd');
   const btnRep = document.getElementById('btnEditSubModeReplace');
   const qtyInput = document.getElementById('mAdjQtyInput');
 
   if (subMode === 'add') {
+    if (!skipModeSync) {
+      currentMobileAdjMode = 'increment';
+      const bRep = document.getElementById('btnMAdjModeReplace');
+      const bInc = document.getElementById('btnMAdjModeIncrement');
+      if (bRep && bInc) {
+        bInc.style.background = '#ecfdf5';
+        bInc.style.borderColor = '#10b981';
+        bInc.style.color = '#047857';
+        bRep.style.background = '#ffffff';
+        bRep.style.borderColor = '#cbd5e1';
+        bRep.style.color = '#475569';
+      }
+    }
     if (btnAdd) {
       btnAdd.style.background = '#ecfdf5';
       btnAdd.style.borderColor = '#10b981';
@@ -13571,6 +13597,19 @@ function setEditSubMode(subMode) {
       setTimeout(() => qtyInput.focus(), 60);
     }
   } else {
+    if (!skipModeSync) {
+      currentMobileAdjMode = 'replace';
+      const bRep = document.getElementById('btnMAdjModeReplace');
+      const bInc = document.getElementById('btnMAdjModeIncrement');
+      if (bRep && bInc) {
+        bRep.style.background = '#eff6ff';
+        bRep.style.borderColor = '#3b82f6';
+        bRep.style.color = '#1d4ed8';
+        bInc.style.background = '#ffffff';
+        bInc.style.borderColor = '#cbd5e1';
+        bInc.style.color = '#475569';
+      }
+    }
     if (btnRep) {
       btnRep.style.background = '#eff6ff';
       btnRep.style.borderColor = '#3b82f6';
@@ -13728,47 +13767,37 @@ function submitMobileAdjItem(isContinue) {
   let historyList = [];
   const currentStepStr = (unit === 'box') ? `${qty}상자` : `${qty}개`;
 
-  if (isEditing && editingMobileSubMode === 'add') {
-    // 🛡️ [A안 준수: 단위별 분리 독립 합산]
-    // 상자는 상자끼리 누적 합산, 낱개는 낱개끼리 누적 합산!
-    const origBox = Number(editingMobileOriginalBoxQty || 0);
-    const origIndiv = Number(editingMobileOriginalIndivQty || 0);
-
-    if (unit === 'box') {
-      saveBoxQty = origBox + qty;
-      saveIndivQty = origIndiv;
-    } else {
-      saveBoxQty = origBox;
-      saveIndivQty = origIndiv + qty;
-    }
-
-    const prevHist = (origRec && Array.isArray(origRec.history) && origRec.history.length > 0)
-      ? origRec.history
-      : [(origBox > 0 && origIndiv > 0 ? `${origBox}상자+${origIndiv}개` : (origBox > 0 ? `${origBox}상자` : `${origIndiv}개`))];
-    historyList = [...prevHist, currentStepStr];
-  } else if (isEditing && editingMobileSubMode === 'replace') {
-    // [수량 직접 수정]
-    if (unit === 'box') {
-      saveBoxQty = qty;
-      saveIndivQty = Number(editingMobileOriginalIndivQty || 0);
-    } else {
-      saveBoxQty = Number(editingMobileOriginalBoxQty || 0);
-      saveIndivQty = qty;
-    }
+  // 🎯 수량 계산 로직 (사용자가 상단에서 [치환]을 골랐으면 100% 덮어쓰기 치환!)
+  if (currentMobileAdjMode === 'replace') {
+    saveBoxQty = (unit === 'box') ? qty : 0;
+    saveIndivQty = (unit === 'individual') ? qty : 0;
+    historyList = isEditing ? [`수정(${currentStepStr})`] : [currentStepStr];
   } else {
-    // 신규 추가
-    saveBoxQty = unit === 'box' ? qty : 0;
-    saveIndivQty = unit === 'individual' ? qty : 0;
-    historyList = [currentStepStr];
+    // [추가 모드 (+ 누적더하기)]
+    if (isEditing) {
+      const origBox = Number(editingMobileOriginalBoxQty || 0);
+      const origIndiv = Number(editingMobileOriginalIndivQty || 0);
+      if (unit === 'box') {
+        saveBoxQty = origBox + qty;
+        saveIndivQty = origIndiv;
+      } else {
+        saveBoxQty = origBox;
+        saveIndivQty = origIndiv + qty;
+      }
+      const prevHist = (origRec && Array.isArray(origRec.history) && origRec.history.length > 0)
+        ? origRec.history
+        : [(origBox > 0 && origIndiv > 0 ? `${origBox}상자+${origIndiv}개` : (origBox > 0 ? `${origBox}상자` : `${origIndiv}개`))];
+      historyList = [...prevHist, currentStepStr];
+    } else {
+      saveBoxQty = (unit === 'box') ? qty : 0;
+      saveIndivQty = (unit === 'individual') ? qty : 0;
+      historyList = [currentStepStr];
+    }
   }
 
   const finalSummaryStr = (saveBoxQty > 0 && saveIndivQty > 0)
     ? `${saveBoxQty}상자 + ${saveIndivQty}개`
     : (saveBoxQty > 0 ? `${saveBoxQty}상자` : `${saveIndivQty}개`);
-
-  if (isEditing && editingMobileSubMode === 'replace') {
-    historyList = [`수정(${finalSummaryStr})`];
-  }
 
   const newRec = {
     itemName: currentMobileAdjItem.name,
@@ -13776,8 +13805,8 @@ function submitMobileAdjItem(isContinue) {
     boxQty: saveBoxQty,
     individualQty: saveIndivQty,
     boxContent: currentMobileAdjItem.boxContent || 0,
-    location: origRec ? origRec.location : (currentMobileAdjMode === 'increment' ? '재고추가' : '재고치환'),
-    adjType: origRec ? origRec.adjType : currentMobileAdjMode,
+    location: (currentMobileAdjMode === 'increment' ? '재고추가' : '재고치환'),
+    adjType: currentMobileAdjMode, // 🚨 사용자의 현재 선택(치환 vs 추가)을 100% 보장!
     unitType: (saveBoxQty > 0 && saveIndivQty === 0) ? 'box' : (saveBoxQty === 0 && saveIndivQty > 0) ? 'individual' : 'mixed',
     matchRate: 100,
     warehouse: getAdjWarehouse(),
@@ -13924,11 +13953,16 @@ function editMobileSessionItem(index) {
     editNoticeText.innerHTML = `<strong>#${index + 1}번 [${escapeHtml(r.itemName)}]</strong> 기존 실사: <span style="color:#059669; font-size:10pt; font-weight:800;">${origStr}</span>`;
   }
 
-  // 7. 기본 모드는 [➕ 추가 발견 합산] 모드 활성화 (대표님 핵심 요구: 분산 보관된 5개 발견 시 5만 입력)
-  setEditSubMode('add');
+  // 7. 기존 품목의 모드(치환/추가)에 맞춰 수정 모드 활성화
+  const initialSubMode = (r.adjType === 'increment') ? 'add' : 'replace';
+  setEditSubMode(initialSubMode);
 
   renderMobileAdjSessionList();
-  showAppToast(`🔄 [${r.itemName}] 기존 ${origStr} 롤백 ➔ 추가 수량을 입력하세요.`, 1800);
+  if (initialSubMode === 'replace') {
+    showAppToast(`🔄 [${r.itemName}] 기존 ${origStr} 롤백 ➔ 새 실사 수량으로 덮어씁니다.`, 1800);
+  } else {
+    showAppToast(`➕ [${r.itemName}] 기존 ${origStr} 롤백 ➔ 추가 수량을 입력하세요.`, 1800);
+  }
 }
 
 function cancelMobileEditItem() {
