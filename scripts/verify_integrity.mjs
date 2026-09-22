@@ -1,10 +1,11 @@
 // scripts/verify_integrity.mjs
 /**
- * 🛡️ WMS 4대 전주기 자동 검증 게이트 (Zero-Defect Verification Lifecycle)
+ * 🛡️ WMS 5대 전주기 자동 검증 게이트 (Zero-Defect Verification Lifecycle)
  * 1. 전체 HTML <script> 및 JS 파일 구문 오류(Syntax Error) 전수 검사
  * 2. 인라인 이벤트 핸들러(정적 태그 및 동적 템플릿 리터럴) 유령 함수(Missing Functions) 검출
  * 3. Supabase Adapter 서버 브릿지 미구현 메서드 검출
- * 4. 결함 발생 시 즉각 빌드 차단(Exit Code 1)
+ * 4. 동일 스코프 내 최상위 함수 중복 선언(Silent Shadowing) 검출
+ * 5. 결함 발생 시 즉각 빌드 차단(Exit Code 1)
  */
 import fs from 'fs';
 import path from 'path';
@@ -57,6 +58,27 @@ const bridgeCalls = new Map();      // fnName -> [{ file, line }]
 const inlineEventCalls = [];        // { file, line, fnName, eventType, fullAttr }
 const syntaxErrors = [];
 
+// scopeKey(파일 자체, 또는 '파일::module') -> Map(fnName -> [{ file, line }])
+// 같은 scopeKey 안에서 이름이 2번 이상 나오면 "나중 선언이 이전 선언을 조용히 덮어쓰는" 회귀 위험이다.
+// HTML 페이지별(index/searchmodify/product-ledger)로는 각자 독립된 window 스코프(별도 iframe)라
+// 파일을 넘나드는 비교는 하지 않고, 같은 파일(또는 같은 모듈) 안의 최상위 function 선언만 비교한다.
+const topLevelDecls = new Map();
+
+function collectTopLevelFunctionDecls(ast, filename, lineOffset, isModule) {
+  const scopeKey = isModule ? `${filename}::module` : filename;
+  if (!topLevelDecls.has(scopeKey)) topLevelDecls.set(scopeKey, new Map());
+  const scopeMap = topLevelDecls.get(scopeKey);
+  const body = ast.program?.body || [];
+  for (const stmt of body) {
+    if (stmt.type === 'FunctionDeclaration' && stmt.id?.name) {
+      const name = stmt.id.name;
+      const line = (stmt.loc?.start.line || 0) + lineOffset;
+      if (!scopeMap.has(name)) scopeMap.set(name, []);
+      scopeMap.get(name).push({ file: filename, line });
+    }
+  }
+}
+
 function checkSyntaxAndCollect(code, filename, lineOffset = 0, isModule = false) {
   let ast;
   try {
@@ -69,6 +91,8 @@ function checkSyntaxAndCollect(code, filename, lineOffset = 0, isModule = false)
     syntaxErrors.push({ file: filename, line: errLine, message: err.message });
     return;
   }
+
+  collectTopLevelFunctionDecls(ast, filename, lineOffset, isModule);
 
   walkAst(ast, (node) => {
     // 1. 함수 선언식
@@ -264,6 +288,29 @@ if (ghostFunctions.length > 0) {
   failed = true;
 } else {
   console.log(`✅ 3. HTML/템플릿 인라인 이벤트 유령 함수 검사 통과 (총 ${inlineEventCalls.length}회 호출 정상 확인)`);
+}
+
+// 4) Duplicate Top-Level Function Declarations (Silent Shadowing)
+const duplicateDecls = [];
+let totalTopLevelFns = 0;
+for (const [scopeKey, scopeMap] of topLevelDecls.entries()) {
+  for (const [name, occurrences] of scopeMap.entries()) {
+    totalTopLevelFns += 1;
+    if (occurrences.length > 1) {
+      duplicateDecls.push({ scopeKey, name, occurrences });
+    }
+  }
+}
+
+if (duplicateDecls.length > 0) {
+  console.error(`🚨 [치명적] 동일 스코프 내 함수 중복 선언 ${duplicateDecls.length}건 발견! (나중 선언이 이전 선언을 조용히 덮어씁니다)`);
+  duplicateDecls.forEach(d => {
+    console.error(`   ❌ 함수 [${d.name}]이(가) [${d.scopeKey}] 안에서 ${d.occurrences.length}번 선언됨:`);
+    d.occurrences.forEach(o => console.error(`      - ${o.file}:${o.line}`));
+  });
+  failed = true;
+} else {
+  console.log(`✅ 4. 동일 스코프 내 함수 중복 선언 검사 통과 (총 ${totalTopLevelFns}개 최상위 함수 고유성 확인)`);
 }
 
 console.log('================================================================');
