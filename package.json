@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "verify": "node scripts/verify_integrity.mjs",
     "test": "npm run verify",
+    "smoke": "node scripts/smoke_test.mjs",
     "update-types": "npx supabase gen types typescript --project-id xfxmodlrczofwylyedjh > src/types/supabase.ts",
     "sync-db": "npm run update-types"
   },
