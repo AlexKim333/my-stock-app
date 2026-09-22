@@ -5152,7 +5152,7 @@ function getReservedQty(itemName, color, boxContent) {
 
   // 1. 현재 출고 보류 목록(pendingOutRecordsList)의 수량 집계
   try {
-    const saved = localStorage.getItem('pendingOutRecordsList');
+    const saved = localStorage.getItem(typeConfig.out.pendingStorageKey);
     if (saved) {
       const pList = JSON.parse(saved);
       pList.forEach(p => {
@@ -12984,6 +12984,7 @@ function setupHotkeyShortcuts() {
 
 let currentMobileAdjItem = null;
 let currentMobileAdjMode = 'replace'; // 'replace' or 'increment'
+let preEditMobileAdjMode = 'replace'; // 항목 수정 진입 직전의 상단 모드 (편집 취소 시 복원용)
 
 function recordStockAuditHistory(itemName, color, box, indiv, adjType) {
   try {
@@ -13975,6 +13976,9 @@ function submitMobileAdjItem(isContinue) {
 // ✏️ 하단 실사 목록 항목 클릭 시 입력란으로 롤백 (수정 / 추가합산 기능)
 function editMobileSessionItem(index) {
   if (index < 0 || index >= records.length) return;
+  // 🛡️ 편집 시작 직전 상단 모드를 저장해둔다 — setMobileAdjMode()가 이 항목의
+  // 모드로 상단 토글을 일시적으로 덮어쓰므로, 취소 시 원래 값으로 되돌리기 위함.
+  if (editingMobileRecordIndex < 0) preEditMobileAdjMode = currentMobileAdjMode;
   editingMobileRecordIndex = index;
   const r = records[index];
 
@@ -14057,6 +14061,8 @@ function cancelMobileEditItem() {
   editingMobileOriginalBoxQty = 0;
   editingMobileOriginalIndivQty = 0;
   editingMobileSubMode = 'add';
+  // 🛡️ 편집 중 상단 토글이 이 항목의 모드로 바뀌어 있었다면, 취소 시 편집 진입 전 모드로 복원한다.
+  setMobileAdjMode(preEditMobileAdjMode);
   const editNotice = document.getElementById('mAdjEditNotice');
   if (editNotice) editNotice.style.display = 'none';
 
