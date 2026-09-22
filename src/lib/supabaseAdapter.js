@@ -403,6 +403,25 @@ export const serverMethods = {
   },
 
   /**
+   * 3-1c. 거래처별 전체 거래내역 조회 (partner_id FK 기반, 최신순)
+   */
+  async getPartnerTransactionHistory(partnerId, opts) {
+    if (!partnerId) throw new Error('거래처가 지정되지 않았습니다.')
+    const o = opts || {}
+    const limit = Math.min(Math.max(Number(o.limit) || 300, 1), 1000)
+
+    const { data, error } = await supabase
+      .from('stock_transactions')
+      .select('id, transaction_type, warehouse_code, source_warehouse, target_warehouse, handler_name, box_qty, unit_qty, invoice_no, memo, created_at, items(item_name, color)')
+      .eq('partner_id', partnerId)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (error) throw error
+    return data || []
+  },
+
+  /**
    * 3-2. 입고처 목록 (공급처 및 겸용 거래처)
    */
   async getInLocations() {

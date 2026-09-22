@@ -14682,6 +14682,36 @@ if (document.readyState === 'loading') {
     </div>
   </div>
 
+  <!-- 📜 거래처별 전체 거래내역 모달 -->
+  <div id="partnerHistoryModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.6); z-index:10060; justify-content:center; align-items:center;">
+    <div style="background:#ffffff; width:94%; max-width:860px; height:82%; max-height:640px; border-radius:10px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 20px 40px rgba(0,0,0,0.35);">
+      <div style="padding:12px 16px; background:#1e293b; color:#ffffff; display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
+        <div style="min-width:0;">
+          <div id="partnerHistoryTitle" style="font-weight:800; font-size:10.5pt; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">거래내역</div>
+          <div id="partnerHistorySummary" style="font-size:7.8pt; color:#94a3b8;"></div>
+        </div>
+        <button type="button" onclick="closePartnerHistory()" style="background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:5px 12px; cursor:pointer; font-weight:bold; font-size:9pt; flex-shrink:0;">✕ 닫기</button>
+      </div>
+      <div style="flex:1; overflow-y:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:8.3pt;">
+          <thead style="position:sticky; top:0; background:#f8fafc; z-index:1;">
+            <tr style="border-bottom:1.5px solid #cbd5e1; color:#475569;">
+              <th style="padding:6px 10px; text-align:left;">일시</th>
+              <th style="padding:6px 10px; text-align:left;">구분</th>
+              <th style="padding:6px 10px; text-align:left;">품목</th>
+              <th style="padding:6px 10px; text-align:right;">박스</th>
+              <th style="padding:6px 10px; text-align:right;">낱개</th>
+              <th style="padding:6px 10px; text-align:left;">창고</th>
+              <th style="padding:6px 10px; text-align:left;">담당자</th>
+              <th style="padding:6px 10px; text-align:left;">전표번호</th>
+            </tr>
+          </thead>
+          <tbody id="partnerHistoryTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- 📜 상품수불원장 & 물동량 독립 분석기 모달 -->
   <div id="productLedgerModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9998; justify-content:center; align-items:center; backdrop-filter:blur(2px);">
     <div style="background:#ffffff; width:99%; max-width:1500px; height:95vh; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.4);">
@@ -15554,6 +15584,7 @@ if (document.readyState === 'loading') {
               ${inactive ? `<span style="font-size:7.5pt; font-weight:700; color:#dc2626;">● 비활성</span>` : ''}
             </div>
             <div style="display:flex; gap:6px; flex-shrink:0;">
+              <button type="button" onclick="openPartnerHistory(${jsArg(p.id)})" style="padding:4px 10px; background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; border-radius:5px; cursor:pointer; font-size:7.8pt; font-weight:700;">📜 내역</button>
               <button type="button" onclick="openPartnerForm(${jsArg(p.id)})" style="padding:4px 10px; background:#f1f5f9; color:#334155; border:1px solid #e2e8f0; border-radius:5px; cursor:pointer; font-size:7.8pt; font-weight:700;">✏️ 수정</button>
               <button type="button" onclick="togglePartnerActive(${jsArg(p.id)}, ${inactive})" style="padding:4px 10px; background:${inactive ? '#f0fdf4' : '#fef2f2'}; color:${inactive ? '#15803d' : '#dc2626'}; border:1px solid ${inactive ? '#bbf7d0' : '#fecaca'}; border-radius:5px; cursor:pointer; font-size:7.8pt; font-weight:700;">${inactive ? '✅ 활성화' : '⛔ 비활성화'}</button>
             </div>
@@ -15672,6 +15703,82 @@ if (document.readyState === 'loading') {
       inLocationsCache = [];
       outLocationsCache = [];
       if (currentType === 'in' || currentType === 'out') loadDropdowns();
+    }
+
+    /* ---------------- 📜 거래처별 전체 거래내역 조회 ---------------- */
+    const PARTNER_HISTORY_TYPE_LABEL = {
+      INBOUND: '📥 입고',
+      OUTBOUND: '📤 출고',
+      MOVE: '🔀 이동',
+      ADJUST: '⚖️ 조정'
+    };
+
+    function openPartnerHistory(partnerId) {
+      const p = partnersAdminCache.find(x => x.id === partnerId);
+      if (!p) return;
+
+      const modal = document.getElementById('partnerHistoryModal');
+      if (!modal) return;
+      document.getElementById('partnerHistoryTitle').textContent = `📜 ${p.name} 전체 거래내역`;
+      document.getElementById('partnerHistorySummary').textContent = '불러오는 중...';
+      document.getElementById('partnerHistoryTableBody').innerHTML = '<tr><td colspan="8" style="padding:24px; text-align:center; color:#94a3b8;">⏳ 불러오는 중...</td></tr>';
+      modal.style.display = 'flex';
+
+      callServer('getPartnerTransactionHistory', [partnerId, { limit: 300 }], {
+        key: 'partnerHistory',
+        mode: 'latest',
+        onSuccess: rows => renderPartnerHistory(p, rows || []),
+        onError: err => {
+          document.getElementById('partnerHistoryTableBody').innerHTML = `<tr><td colspan="8" style="padding:24px; text-align:center; color:#dc2626;">불러오지 못했습니다: ${escapeHtml(err?.message || String(err))}</td></tr>`;
+          document.getElementById('partnerHistorySummary').textContent = '';
+        }
+      });
+    }
+
+    function closePartnerHistory() {
+      const modal = document.getElementById('partnerHistoryModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function renderPartnerHistory(partner, rows) {
+      const tbody = document.getElementById('partnerHistoryTableBody');
+      const summary = document.getElementById('partnerHistorySummary');
+      if (!tbody) return;
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px; text-align:center; color:#94a3b8;">거래내역이 없습니다.</td></tr>';
+        if (summary) summary.textContent = '총 0건';
+        return;
+      }
+
+      let totalBoxes = 0;
+      rows.forEach(r => { totalBoxes += Math.abs(Number(r.box_qty || 0)); });
+      if (summary) summary.textContent = `최근 ${rows.length}건 · 박스 합계 ${totalBoxes.toLocaleString()}개`;
+
+      tbody.innerHTML = rows.map(r => {
+        const typeLabel = PARTNER_HISTORY_TYPE_LABEL[r.transaction_type] || escapeHtml(r.transaction_type || '-');
+        const itemLabel = r.items
+          ? `${escapeHtml(r.items.item_name)} <span style="color:#94a3b8;">(${escapeHtml(r.items.color || 'SURTIDO')})</span>`
+          : '-';
+        const whLabel = r.transaction_type === 'MOVE'
+          ? `${escapeHtml(r.source_warehouse || '-')} → ${escapeHtml(r.target_warehouse || '-')}`
+          : escapeHtml(r.warehouse_code || '-');
+        const dateStr = r.created_at
+          ? new Date(r.created_at).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+          : '-';
+        return `
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:6px 10px; white-space:nowrap; color:#64748b;">${dateStr}</td>
+            <td style="padding:6px 10px; white-space:nowrap;">${typeLabel}</td>
+            <td style="padding:6px 10px;">${itemLabel}</td>
+            <td style="padding:6px 10px; text-align:right;">${Number(r.box_qty || 0).toLocaleString()}</td>
+            <td style="padding:6px 10px; text-align:right;">${Number(r.unit_qty || 0).toLocaleString()}</td>
+            <td style="padding:6px 10px; white-space:nowrap;">${whLabel}</td>
+            <td style="padding:6px 10px; white-space:nowrap;">${escapeHtml(r.handler_name || '-')}</td>
+            <td style="padding:6px 10px; white-space:nowrap; color:#94a3b8;">${escapeHtml(r.invoice_no || '-')}</td>
+          </tr>
+        `;
+      }).join('');
     }
 
     function savePolicySettings() {
