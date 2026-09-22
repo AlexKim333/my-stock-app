@@ -227,6 +227,58 @@ export const serverMethods = {
     return list
   },
 
+  /**
+   * 2a. 작업자 관리자용 전체 목록 (활성 + 비활성 모두 포함, 노드 관리 UI 전용)
+   */
+  async getMembersAdmin() {
+    const { data, error } = await supabase
+      .from('app_members_public')
+      .select('id, member_name, branch_name, access_level, preferred_language, is_active, created_at')
+      .order('member_name', { ascending: true })
+
+    if (error) throw error
+    return data || []
+  },
+
+  /**
+   * 2b. 작업자(관리자/직원) 신규 등록 (rpc_create_member, 항상 활성 상태로 생성됨)
+   */
+  async createMember(payload) {
+    const p = payload || {}
+    const memberName = String(p.memberName || '').trim()
+    const password = String(p.password || '')
+    if (!memberName) throw new Error('아이디를 입력해주세요.')
+    if (!password) throw new Error('비밀번호를 입력해주세요.')
+
+    const { data, error } = await supabase.rpc('rpc_create_member', {
+      p_member_name: memberName,
+      p_password: password,
+      p_access_level: p.accessLevel || 'staff',
+      p_branch_name: p.branchName || null
+    })
+    if (error) throw error
+    return data
+  },
+
+  /**
+   * 2c. 작업자 정보 수정 및 활성·비활성 토글 (rpc_update_member)
+   * 각 필드는 undefined면 '변경 없음'으로 처리된다 (branchName은 빈 문자열이면 명시적으로 비움).
+   */
+  async updateMember(payload) {
+    const p = payload || {}
+    if (!p.id) throw new Error('대상 작업자가 지정되지 않았습니다.')
+
+    const { data, error } = await supabase.rpc('rpc_update_member', {
+      p_id: p.id,
+      p_branch_name: p.branchName === undefined ? null : p.branchName,
+      p_access_level: p.accessLevel || null,
+      p_password: p.password || null,
+      p_is_active: p.isActive === undefined ? null : p.isActive
+    })
+    if (error) throw error
+    return data
+  },
+
   async login(memberName, password) {
     const rawName = String(memberName || '').trim()
     let res = await supabase.rpc('rpc_login', {
@@ -256,16 +308,52 @@ export const serverMethods = {
   },
 
   /**
-   * 3. 내부 창고 목록 (DB warehouses 마스터)
+   * 3. 내부 창고 목록 (DB warehouses 마스터, 활성 상태만)
    */
   async getWarehouses() {
     const { data, error } = await supabase
       .from('warehouses')
-      .select('code, name, is_hub, sort_order, truck_capacity_boxes')
+      .select('code, name, is_hub, sort_order, truck_capacity_boxes, is_active')
+      .eq('is_active', true)
       .order('sort_order', { ascending: true })
 
     if (error) throw error
     return data || []
+  },
+
+  /**
+   * 3a. 서브창고 관리자용 전체 목록 (활성 + 비활성, 메인허브 제외, 노드 관리 UI 전용)
+   */
+  async getWarehousesAdmin() {
+    const { data, error } = await supabase
+      .from('warehouses')
+      .select('code, name, is_hub, sort_order, truck_capacity_boxes, is_active')
+      .eq('is_hub', false)
+      .order('sort_order', { ascending: true })
+
+    if (error) throw error
+    return data || []
+  },
+
+  /**
+   * 3b. 서브창고 등록/수정 및 활성·비활성 토글 (관리자 전용, rpc_upsert_warehouse)
+   */
+  async upsertWarehouse(payload) {
+    const p = payload || {}
+    const code = String(p.code || '').trim()
+    const name = String(p.name || '').trim()
+    if (!code) throw new Error('창고 코드가 비어 있습니다.')
+    if (!name) throw new Error('창고 이름이 비어 있습니다.')
+
+    const { data, error } = await supabase.rpc('rpc_upsert_warehouse', {
+      p_code: code,
+      p_name: name,
+      p_truck_capacity_boxes: Number(p.truckCapacityBoxes) || 100,
+      p_sort_order: p.sortOrder === '' || p.sortOrder === undefined || p.sortOrder === null ? null : Number(p.sortOrder),
+      p_is_active: p.isActive !== false
+    })
+    if (error) throw error
+    return data
   },
 
   /**
@@ -280,6 +368,38 @@ export const serverMethods = {
 
     if (error) throw error
     return data || []
+  },
+
+  /**
+   * 3-1a. 거래처 관리자용 전체 목록 (활성 + 비활성 모두 포함, 노드 관리 UI 전용)
+   */
+  async getPartnersMasterAdmin() {
+    const { data, error } = await supabase
+      .from('partners')
+      .select('id, name, partner_type, is_supplier, is_customer, is_branch, warehouse_code, is_active, created_at')
+      .order('name', { ascending: true })
+
+    if (error) throw error
+    return data || []
+  },
+
+  /**
+   * 3-1b. 거래처 등록/수정 및 활성·비활성 토글 (관리자 전용, rpc_upsert_partner)
+   */
+  async upsertPartner(payload) {
+    const p = payload || {}
+    const name = String(p.name || '').trim()
+    if (!p.id && !name) throw new Error('거래처 이름이 비어 있습니다.')
+
+    const { data, error } = await supabase.rpc('rpc_upsert_partner', {
+      p_name: name,
+      p_role: p.role || 'OUTBOUND',
+      p_warehouse_code: p.warehouseCode || null,
+      p_id: p.id || null,
+      p_is_active: p.isActive !== false
+    })
+    if (error) throw error
+    return data
   },
 
   /**
@@ -1258,12 +1378,18 @@ export const serverMethods = {
   },
 
   /**
-   * 14. 8대 서브창고 주문 매트릭스 조회 (PANTACO, IKEA, LERMA, PINO, YARE, ALMINTER, TLANE, STAR)
+   * 14. 서브창고 주문 매트릭스 조회 (활성 서브창고 전체, DB warehouses 마스터 기준)
    * ⚡ In-Transit(이동 중 수량) 실시간 동적 집계 반영
    */
   async getSubWarehouseStockMatrix(forceRefresh) {
-    const settings = await this.getSystemSettings()
-    const whList = resolveActiveSubWarehouses(settings)
+    const { data: activeWhRows, error: whErr } = await supabase
+      .from('warehouses')
+      .select('code')
+      .eq('is_hub', false)
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true })
+    if (whErr) throw whErr
+    const whList = (activeWhRows || []).map(w => w.code)
 
     // 1. 전체 유효 재고, 8대 서브창고 재고 및 이동 중(PENDING) 주문 병렬 조회 (sub-50ms)
     const [allMainItems, subStocks, pendingOrders] = await Promise.all([
