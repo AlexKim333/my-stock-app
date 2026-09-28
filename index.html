@@ -5135,7 +5135,7 @@ function handleQtyInput(el) {
   }
 }
 
-function getReservedQty(itemName, color, boxContent) {
+function getReservedQty(itemName, color, boxContent, excludeIndex = -1) {
   let reservedBoxes = 0;
   let reservedIndividuals = 0;
 
@@ -5174,7 +5174,8 @@ function getReservedQty(itemName, color, boxContent) {
 
   // 2. 현재 작업 중인 장바구니(records)에 이미 담긴 동일 품목 수량 집계
   if (records && Array.isArray(records) && currentType === 'out') {
-    records.forEach(rec => {
+    records.forEach((rec, recIdx) => {
+      if (recIdx === excludeIndex) return; // 수정 중인 행은 자기 자신을 예약으로 이중 계산하지 않는다
       if (matchItem(rec)) {
         if (rec.unitType === 'box' || (rec.boxQty && rec.boxQty !== 0)) {
           reservedBoxes += Math.abs(rec.boxQty || 0);
@@ -5249,7 +5250,7 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
   let reservedIndividuals = 0;
 
   if (currentType === 'out') {
-    const reserved = getReservedQty(item.name, item.color, item.boxContent);
+    const reserved = getReservedQty(item.name, item.color, item.boxContent, editingRecordIndex);
     reservedBoxes = reserved.reservedBoxes;
     reservedIndividuals = reserved.reservedIndividuals;
     effectiveBoxStock = Math.max(0, item.stockBox - reservedBoxes);
@@ -6756,7 +6757,12 @@ function loadPending() {
   clonedRecords.forEach(r => {
     if (!r.location && pendingData.location) r.location = pendingData.location;
     if (!r.warehouse) r.warehouse = effectiveWh;
-    if (!r.targetWarehouse) r.targetWarehouse = r.warehouse;
+    if (!r.targetWarehouse) {
+      // 출고의 도착창고는 지점 거래처일 때만 의미가 있다. 출발창고로 채우지 않는다.
+      r.targetWarehouse = currentType === 'out'
+        ? ((typeof getBranchCodeFromLocation === 'function' ? getBranchCodeFromLocation(r.location) : null) || null)
+        : r.warehouse;
+    }
     if (pendingData.isSubWarehouseOrder || pendingData.sourceWarehouse) {
       r.sourceWarehouse = pendingData.sourceWarehouse || pendingData.location;
     }
@@ -6817,6 +6823,30 @@ function loadPending() {
   cancelPendingModal();
   saveMetadata();
   saveTableData();
+  if (currentType === 'out') {
+    let shortMsg = '';
+    if (effectiveWh === 'MAIN' && Array.isArray(stockDataCache)) {
+      const need = new Map();
+      records.forEach(r => {
+        const bc = Number(r.boxContent) || 1;
+        const key = `${String(r.itemName || '').trim()}__${String(r.color || 'SURTIDO').trim()}__${bc}`;
+        const cur = need.get(key) || { name: r.itemName, color: r.color || 'SURTIDO', bc, units: 0 };
+        cur.units += Math.abs(r.boxQty || 0) * bc + Math.abs(r.individualQty || 0);
+        need.set(key, cur);
+      });
+      const shorts = [];
+      need.forEach(n => {
+        const st = stockDataCache.find(it => (it.name || '').trim() === String(n.name || '').trim() &&
+          (it.color || 'SURTIDO').trim() === String(n.color).trim() && (Number(it.boxContent) || 1) === n.bc);
+        if (!st) return;
+        const have = (st.stockBox || 0) * n.bc + (st.stockIndividual || 0);
+        if (have < n.units) shorts.push(`• ${n.name} (${n.color}): 필요 ${Math.ceil(n.units / n.bc)}상자 상당 / 현재고 ${st.stockBox || 0}상자 ${st.stockIndividual || 0}개`);
+      });
+      if (shorts.length) shortMsg = `\n\n⚠️ 현재 재고가 부족한 품목이 있습니다 (제출 시 서버에서 차단됩니다):\n${shorts.join('\n')}`;
+    }
+    alert('보류 데이터가 로드되었습니다.\n\n수량을 확인/수정한 뒤 [🚀 제출] 버튼을 누르면 출고 처리가 최종 완료됩니다.' + shortMsg);
+    return;
+  }
   alert('보류 데이터가 로드되었습니다.\n\n수량을 확인/수정한 뒤 [🚀 제출] 버튼을 누르면 서브창고 재고 차감 및 본사(MAIN) 입고 처리가 최종 완료됩니다.');
 }
 
