@@ -6080,6 +6080,7 @@ function deleteRecord() {
     clearForm();
   }
   records = records.filter((_, idx) => !toDelete.includes(idx));
+  if (records.length === 0) clearPendingOrigin();
   saveTableData();
   updateTable();
   toggleScroll();
@@ -6312,6 +6313,7 @@ function confirmSubmit() {
         const metadataKey = typeConfig[type] ? typeConfig[type].metadataStorageKey : null;
         if (storageKey) localStorage.removeItem(storageKey);
         if (metadataKey) localStorage.removeItem(metadataKey);
+        clearPendingOrigin();
         const locationSelect = document.getElementById('location');
         if (locationSelect) locationSelect.value = '';
         clearForm();
@@ -6372,6 +6374,30 @@ function setPendingModalButtonsState(disabled, text = null) {
   }
 }
 
+// 보류에서 불러온 장바구니의 원본 정보(발주 일시/목록 위치). 재보류 시 그대로 복원하기 위해 보관한다.
+function getPendingOrigin() {
+  try {
+    const raw = localStorage.getItem('cartPendingOrigin_' + currentType);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function setPendingOrigin(origin) {
+  try {
+    localStorage.setItem('cartPendingOrigin_' + currentType, JSON.stringify(origin));
+  } catch (e) {
+  }
+}
+
+function clearPendingOrigin() {
+  try {
+    localStorage.removeItem('cartPendingOrigin_' + currentType);
+  } catch (e) {
+  }
+}
+
 function savePending() {
   if (isPendingOperating) return;
   if (!records.length) {
@@ -6413,13 +6439,22 @@ function savePending() {
     if (saved) pendingList = JSON.parse(saved);
   } catch (e) {
   }
-  pendingList.push(pendingData);
+  // 보류에서 불러왔던 장바구니라면 원래 발주 일시와 목록 위치를 유지한다.
+  const origin = getPendingOrigin();
+  let insertAt = pendingList.length;
+  if (origin && (origin.location || '') === (locationSelect.value || '')) {
+    if (origin.createdAt) pendingData.createdAt = origin.createdAt;
+    if (origin.date) pendingData.date = origin.date;
+    if (Number.isInteger(origin.index) && origin.index >= 0) insertAt = Math.min(origin.index, pendingList.length);
+  }
+  pendingList.splice(insertAt, 0, pendingData);
   try {
     localStorage.setItem(storageKey, JSON.stringify(pendingList));
   } catch (e) {
     alert('보류 데이터를 저장하는 데 실패했습니다.');
     return;
   }
+  clearPendingOrigin();
 
   if (editingRecordIndex !== -1) {
     exitEditMode();
@@ -6741,10 +6776,35 @@ function loadPending() {
 
   // 6. 장바구니에 반영
   const previousRecords = JSON.parse(JSON.stringify(records));
+  const hadOrigin = getPendingOrigin();
   if (modeChoice === 'append') {
-    records = records.concat(clonedRecords);
+    // 같은 품명/색상/박스당수량 행은 한 줄로 합산해 중복 행이 생기지 않게 한다.
+    const rowKey = r => `${String(r.itemName || '').trim().toUpperCase()}__${String(r.color || 'SURTIDO').trim().toUpperCase()}__${Number(r.boxContent || 1)}`;
+    const merged = records.slice();
+    clonedRecords.forEach(nr => {
+      const ex = merged.find(r => rowKey(r) === rowKey(nr));
+      if (ex) {
+        ex.boxQty = (ex.boxQty || 0) + (nr.boxQty || 0);
+        ex.individualQty = (ex.individualQty || 0) + (nr.individualQty || 0);
+        ex.matchRate = Math.min(ex.matchRate !== undefined ? ex.matchRate : 100, nr.matchRate !== undefined ? nr.matchRate : 100);
+        if (nr.rawModel && !(ex.rawModel || '').includes(nr.rawModel)) {
+          ex.rawModel = [ex.rawModel, nr.rawModel].filter(Boolean).join(', ');
+        }
+      } else {
+        merged.push(nr);
+      }
+    });
+    records = merged;
   } else {
     records = clonedRecords;
+  }
+  if (!(modeChoice === 'append' && hadOrigin)) {
+    setPendingOrigin({
+      createdAt: pendingData.createdAt,
+      date: pendingData.date,
+      location: pendingData.location || '',
+      index: targetIndex
+    });
   }
 
   isPendingOperating = false;
