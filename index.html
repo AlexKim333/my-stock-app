@@ -6384,6 +6384,18 @@ function savePending() {
     date: datetimeInput.value,
     createdAt: new Date().toLocaleString()
   };
+  // 재보류 시에도 창고/발주 메타데이터가 유실되지 않도록 records에서 복원해 함께 저장
+  const whSelectForHold = document.getElementById('warehouseSelect');
+  const holdWarehouse = (whSelectForHold && whSelectForHold.value) || (clonedRecords[0] && clonedRecords[0].warehouse) || 'MAIN';
+  pendingData.warehouse = holdWarehouse;
+  if (currentType === 'in') {
+    pendingData.targetWarehouse = holdWarehouse;
+    const subSrc = clonedRecords[0] && clonedRecords[0].sourceWarehouse;
+    if (subSrc && clonedRecords.every(r => r.sourceWarehouse === subSrc)) {
+      pendingData.sourceWarehouse = subSrc;
+      pendingData.isSubWarehouseOrder = true;
+    }
+  }
   const storageKey = typeConfig[currentType].pendingStorageKey;
   let pendingList = [];
   try {
@@ -6606,6 +6618,26 @@ function loadPending() {
     );
     if (!confirmProceed) return;
 
+    const firstPend = pendingData.records[0] || {};
+    const firstCart = records[0] || {};
+    const pendLoc = pendingData.location || firstPend.location || '';
+    const pendWh = pendingData.targetWarehouse || pendingData.warehouse || firstPend.warehouse || '';
+    if ((firstCart.location || '') !== pendLoc || (firstCart.warehouse || '') !== pendWh) {
+      alert(
+        `⚠️ 병합할 수 없습니다.
+
+` +
+        `현재 장바구니: ${firstCart.location || '-'} / ${firstCart.warehouse || '-'}
+` +
+        `보류 데이터: ${pendLoc || '-'} / ${pendWh || '-'}
+
+` +
+        `거래처 또는 입고창고가 다르면 한 전표로 합칠 수 없습니다.
+` +
+        `장바구니를 먼저 제출/보류하거나, 덮어쓰기로 불러오세요.`
+      );
+      return;
+    }
     const shouldAppend = confirm(
       `기존 장바구니 품목 뒤에 이어서 추가(병합)하시겠습니까?\n\n` +
       `[확인]: 기존 품목 유지 + 보류 품목 추가 (병합)\n` +
@@ -6631,6 +6663,11 @@ function loadPending() {
       warehouseSelect.value = pendingData.targetWarehouse;
     } else if (pendingData.isSubWarehouseOrder) {
       warehouseSelect.value = 'MAIN';
+    } else {
+      const holdWh = pendingData.warehouse || (clonedRecords[0] && clonedRecords[0].warehouse);
+      if (holdWh && Array.from(warehouseSelect.options).some(opt => opt.value === holdWh)) {
+        warehouseSelect.value = holdWh;
+      }
     }
   }
 
@@ -16321,4 +16358,4 @@ if (document.readyState === 'loading') {
   </script>
 
 </body>
-</html>
+</html>
