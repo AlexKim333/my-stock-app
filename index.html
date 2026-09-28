@@ -5451,6 +5451,16 @@ function addRecord() {
     }
     formData.matchRate = 100;
     formData.isManualEdited = true;
+    // 입고 수정 시 외부발주 출발창고 정보 유지
+    if (currentType === 'in' && origRec.sourceWarehouse) {
+      formData.sourceWarehouse = origRec.sourceWarehouse;
+    }
+    // 상자+낱개가 함께 있던 행은 수정 대상이 아닌 쪽 수량을 잃지 않도록 유지
+    if ((origRec.boxQty || 0) !== 0 && (origRec.individualQty || 0) !== 0) {
+      if (unitType === 'box') formData.individualQty = origRec.individualQty;
+      else formData.boxQty = origRec.boxQty;
+      showAppToast(`ℹ️ 상자+낱개 혼합 행입니다. 수정하지 않은 ${unitType === 'box' ? '낱개' : '상자'} 수량은 그대로 유지됩니다.`, 3500);
+    }
     records[editingRecordIndex] = formData;
     exitEditMode();
 
@@ -6390,8 +6400,8 @@ function savePending() {
   pendingData.warehouse = holdWarehouse;
   if (currentType === 'in') {
     pendingData.targetWarehouse = holdWarehouse;
-    const subSrc = clonedRecords[0] && clonedRecords[0].sourceWarehouse;
-    if (subSrc && clonedRecords.every(r => r.sourceWarehouse === subSrc)) {
+    const subSrc = (clonedRecords.find(r => r.sourceWarehouse) || {}).sourceWarehouse;
+    if (subSrc) {
       pendingData.sourceWarehouse = subSrc;
       pendingData.isSubWarehouseOrder = true;
     }
@@ -6411,6 +6421,10 @@ function savePending() {
     return;
   }
 
+  if (editingRecordIndex !== -1) {
+    exitEditMode();
+    clearForm();
+  }
   records = [];
   localStorage.removeItem(typeConfig[currentType].sessionStorageKey);
   localStorage.removeItem(typeConfig[currentType].metadataStorageKey);
@@ -6644,6 +6658,12 @@ function loadPending() {
       `[취소]: 기존 품목 비우기 + 보류 품목으로 새로 교체 (덮어쓰기)`
     );
     modeChoice = shouldAppend ? 'append' : 'replace';
+  }
+
+  // 수정 모드가 남아 있으면 이후 '추가'가 엉뚱한 행을 덮어쓰므로 해제
+  if (editingRecordIndex !== -1) {
+    exitEditMode();
+    clearForm();
   }
 
   // 2. 동시 클릭 방지 락 & UI 비활성화
