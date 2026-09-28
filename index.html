@@ -6408,7 +6408,8 @@ function savePending() {
   const locationSelect = document.getElementById('location');
   const adminSelect = document.getElementById('adminSelect');
   const datetimeInput = document.getElementById('datetime');
-  if (!locationSelect || !adminSelect || !datetimeInput) {
+  // 재고조정 화면에는 입출고처(#location)가 없다. 유형(치환/추가)은 각 행의 adjType/location에 들어 있다.
+  if ((!locationSelect && currentType !== 'adj') || !adminSelect || !datetimeInput) {
     alert('필수 요소를 찾을 수 없습니다.');
     return;
   }
@@ -6416,7 +6417,7 @@ function savePending() {
   const clonedRecords = JSON.parse(JSON.stringify(records));
   const pendingData = {
     records: clonedRecords,
-    location: locationSelect.value,
+    location: locationSelect ? locationSelect.value : '',
     admin: adminSelect.value,
     date: datetimeInput.value,
     createdAt: new Date().toLocaleString()
@@ -6425,6 +6426,10 @@ function savePending() {
   const whSelectForHold = document.getElementById('warehouseSelect');
   const holdWarehouse = (whSelectForHold && whSelectForHold.value) || (clonedRecords[0] && clonedRecords[0].warehouse) || 'MAIN';
   pendingData.warehouse = holdWarehouse;
+  if (currentType === 'adj') {
+    // 재고조정 제출은 조정창고 드롭다운 값으로 창고를 확정하므로 보류 행의 창고도 그 값으로 맞춘다.
+    clonedRecords.forEach(r => { r.warehouse = holdWarehouse; });
+  }
   if (currentType === 'in') {
     pendingData.targetWarehouse = holdWarehouse;
     const subSrc = (clonedRecords.find(r => r.sourceWarehouse) || {}).sourceWarehouse;
@@ -6443,7 +6448,7 @@ function savePending() {
   // 보류에서 불러왔던 장바구니라면 원래 발주 일시와 목록 위치를 유지한다.
   const origin = getPendingOrigin();
   let insertAt = pendingList.length;
-  if (origin && (origin.location || '') === (locationSelect.value || '')) {
+  if (origin && (origin.location || '') === ((locationSelect ? locationSelect.value : '') || '')) {
     if (origin.createdAt) pendingData.createdAt = origin.createdAt;
     if (origin.date) pendingData.date = origin.date;
     if (Number.isInteger(origin.index) && origin.index >= 0) insertAt = Math.min(origin.index, pendingList.length);
@@ -6464,12 +6469,16 @@ function savePending() {
   records = [];
   localStorage.removeItem(typeConfig[currentType].sessionStorageKey);
   localStorage.removeItem(typeConfig[currentType].metadataStorageKey);
-  locationSelect.value = '';
+  if (locationSelect) locationSelect.value = '';
   adminSelect.value = 'ADMIN';
   updateTable();
   toggleScroll();
   updateTotals();
   updatePendingCount();
+  if (currentType === 'adj') {
+    alert('재고조정 보류가 저장되었습니다.\n(보류 중인 조정은 재고에 반영되지 않습니다. 불러와서 제출해야 반영됩니다.)');
+    return;
+  }
   alert('보류가 저장되었습니다.\n(해당 수량은 가용재고(ATP)에서 자동 선점 예약되어 중복 출고가 차단됩니다.)');
 }
 
@@ -6562,7 +6571,7 @@ function showPendingModal() {
     const isSub = pending.isSubWarehouseOrder;
     const locBadge = isSub
       ? `<span style="background: #e0f2fe; color: #0284c7; padding: 2px 7px; border-radius: 4px; font-weight: 700;">🏢 ${escapeHtml(pending.location || '-')} (외부발주)</span>`
-      : escapeHtml(pending.location || '-');
+      : escapeHtml(currentType === 'adj' ? `🏢 ${pending.warehouse || 'MAIN'}` : (pending.location || '-'));
     summaryHtml += `
       <tr onclick="selectPending(${idx})" id="pendingRow${idx}">
         <td>${idx + 1}</td>
@@ -6602,6 +6611,21 @@ function selectPending(index) {
   if (!detailBody) return;
   let html = '';
   pendingList[index].records.forEach(rec => {
+    if (currentType === 'adj') {
+      const isInc = rec.adjType === 'increment';
+      html += `
+      <tr>
+        <td>${escapeHtml(rec.itemName || '')}</td>
+        <td>${escapeHtml(rec.color || '')}</td>
+        <td>${Math.abs(rec.boxQty || 0)}</td>
+        <td>${Math.abs(rec.individualQty || 0)}</td>
+        <td style="text-align: center; font-weight: 700; color: ${isInc ? '#047857' : '#1d4ed8'};">${isInc ? '➕ 재고추가' : '🔄 재고치환'}</td>
+        <td>${rec.boxContent || ''}</td>
+        <td style="text-align: center;">${(rec.matchRate !== undefined && rec.matchRate !== null) ? rec.matchRate + '%' : '100%'}</td>
+      </tr>
+    `;
+      return;
+    }
     html += `
       <tr>
         <td>${escapeHtml(rec.itemName || '')}</td>
@@ -6672,17 +6696,22 @@ function loadPending() {
     const firstCart = records[0] || {};
     const pendLoc = pendingData.location || firstPend.location || '';
     const pendWh = pendingData.targetWarehouse || pendingData.warehouse || firstPend.warehouse || '';
-    if ((firstCart.location || '') !== pendLoc || (firstCart.warehouse || '') !== pendWh) {
+    const isAdjMerge = currentType === 'adj';
+    const curCartWh = isAdjMerge ? getAdjWarehouse() : (firstCart.warehouse || '');
+    // 재고조정은 행마다 치환/추가 유형이 다를 수 있으므로 조정창고만 비교한다(유형이 다른 행은 합산하지 않음).
+    if ((!isAdjMerge && (firstCart.location || '') !== pendLoc) || curCartWh !== pendWh) {
+      const cartLabel = (isAdjMerge ? '' : `${firstCart.location || '-'} / `) + (curCartWh || '-');
+      const pendLabel = (isAdjMerge ? '' : `${pendLoc || '-'} / `) + (pendWh || '-');
       alert(
         `⚠️ 병합할 수 없습니다.
 
 ` +
-        `현재 장바구니: ${firstCart.location || '-'} / ${firstCart.warehouse || '-'}
+        `현재 장바구니: ${cartLabel}
 ` +
-        `보류 데이터: ${pendLoc || '-'} / ${pendWh || '-'}
+        `보류 데이터: ${pendLabel}
 
 ` +
-        `거래처 또는 입고창고가 다르면 한 전표로 합칠 수 없습니다.
+        `${isAdjMerge ? '조정창고가' : '거래처 또는 입고창고가'} 다르면 한 전표로 합칠 수 없습니다.
 ` +
         `장바구니를 먼저 제출/보류하거나, 덮어쓰기로 불러오세요.`
       );
@@ -6785,7 +6814,7 @@ function loadPending() {
   const hadOrigin = getPendingOrigin();
   if (modeChoice === 'append') {
     // 같은 품명/색상/박스당수량 행은 한 줄로 합산해 중복 행이 생기지 않게 한다.
-    const rowKey = r => `${String(r.itemName || '').trim().toUpperCase()}__${String(r.color || 'SURTIDO').trim().toUpperCase()}__${Number(r.boxContent || 1)}`;
+    const rowKey = r => `${String(r.itemName || '').trim().toUpperCase()}__${String(r.color || 'SURTIDO').trim().toUpperCase()}__${Number(r.boxContent || 1)}__${r.adjType || ''}`;
     const merged = records.slice();
     clonedRecords.forEach(nr => {
       const ex = merged.find(r => rowKey(r) === rowKey(nr));
@@ -6823,6 +6852,12 @@ function loadPending() {
   cancelPendingModal();
   saveMetadata();
   saveTableData();
+  if (currentType === 'adj') {
+    // 창고 드롭다운을 프로그램으로 바꿨으므로 재고 기준(현재고/예상)을 그 창고로 다시 불러온다.
+    if (typeof refreshAdjWarehouseStock === 'function') refreshAdjWarehouseStock(true);
+    alert('보류 데이터가 로드되었습니다.\n\n조정창고: ' + effectiveWh + '\n수량과 조정유형(치환/추가)을 확인한 뒤 [🚀 제출] 버튼을 누르면 재고조사가 최종 반영됩니다.');
+    return;
+  }
   if (currentType === 'out') {
     let shortMsg = '';
     if (effectiveWh === 'MAIN' && Array.isArray(stockDataCache)) {
@@ -6890,7 +6925,7 @@ function deletePending() {
       <tr onclick="selectPending(${idx})" id="pendingRow${idx}">
         <td>${idx + 1}</td>
         <td>${pending.createdAt}</td>
-        <td>${escapeHtml(pending.location || '-')}</td>
+        <td>${escapeHtml(currentType === 'adj' ? `🏢 ${pending.warehouse || 'MAIN'}` : (pending.location || '-'))}</td>
         <td>${escapeHtml(pending.admin || '-')}</td>
         <td>${itemCount}</td>
       </tr>
