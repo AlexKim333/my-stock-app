@@ -35,6 +35,34 @@ function assertNoError(error, context) {
   }
 }
 
+/**
+ * 🛡️ 오래 열려 있던 화면/장바구니가 "옛 포장수량"으로 제출하는 사고 방지.
+ * 캐시된 품목 id의 현재 포장수량이 행의 박스당수량과 다르면 제출을 막는다.
+ * (관리자가 포장수량을 바꾸면 같은 id가 새 포장수량으로 재해석되므로, 옛 값으로 낸 상자 수량은 의미가 달라진다.)
+ * rows: [{ itemId, name, color, boxContent }]
+ */
+async function assertPackQtyUnchanged(rows) {
+  const ids = [...new Set((rows || []).map(r => r.itemId).filter(Boolean))]
+  if (ids.length === 0) return
+  const { data, error } = await supabase
+    .from('items')
+    .select('id, box_packaging_qty')
+    .in('id', ids)
+  if (error) throw error
+  const packById = new Map((data || []).map(i => [i.id, Number(i.box_packaging_qty || 1)]))
+  const stale = rows.filter(r => r.itemId && packById.has(r.itemId) && packById.get(r.itemId) !== Number(r.boxContent || 1))
+  if (stale.length === 0) return
+  stale.forEach(r => {
+    for (const [k, v] of itemIdCache) {
+      if (v === r.itemId) itemIdCache.delete(k)
+    }
+  })
+  const detail = stale
+    .map(r => `${r.name} (${r.color || 'SURTIDO'}): 화면 ${Number(r.boxContent || 1)}개 → 현재 ${packById.get(r.itemId)}개`)
+    .join(', ')
+  throw new Error(`포장수량이 변경된 품목이 있어 제출을 중단했습니다. [${detail}] 화면을 새로고침한 뒤 장바구니의 박스당수량을 확인하세요.`)
+}
+
 export async function preloadItemIdCache() {
   try {
     const all = await fetchAllRows(() =>
@@ -277,6 +305,85 @@ export const serverMethods = {
     })
     if (error) throw error
     return data
+  },
+
+  /**
+   * 2d. 포장수량 변경 대상 품목 검색 (품명 부분일치, 창고별 재고 포함)
+   */
+  async searchItemsForPackChange(query) {
+    const q = String(query || '').trim()
+    if (q.length < 2) throw new Error('품명을 2글자 이상 입력하세요.')
+    const pattern = `%${q.replace(/[\\%_]/g, ch => '\\' + ch)}%`
+
+    const { data: items, error } = await supabase
+      .from('items')
+      .select('id, item_name, color, box_packaging_qty, is_active')
+      .ilike('item_name', pattern)
+      .order('item_name', { ascending: true })
+      .limit(30)
+    if (error) throw error
+    const list = items || []
+    if (list.length === 0) return []
+
+    const { data: stocks, error: stockErr } = await supabase
+      .from('inventory_stocks')
+      .select('item_id, warehouse_code, box_qty, unit_qty')
+      .in('item_id', list.map(i => i.id))
+    if (stockErr) throw stockErr
+    const byItem = new Map()
+    ;(stocks || []).forEach(s => {
+      if (!byItem.has(s.item_id)) byItem.set(s.item_id, [])
+      byItem.get(s.item_id).push({ warehouse: s.warehouse_code, box: Number(s.box_qty || 0), unit: Number(s.unit_qty || 0) })
+    })
+
+    return list.map(i => ({
+      id: i.id,
+      name: i.item_name,
+      color: i.color || 'SURTIDO',
+      pack: Number(i.box_packaging_qty || 1),
+      isActive: i.is_active !== false,
+      stocks: (byItem.get(i.id) || []).filter(s => s.box !== 0 || s.unit !== 0)
+    }))
+  },
+
+  /**
+   * 2e. 포장수량 변경 (관리자 전용, rpc_change_item_pack_qty)
+   *  - apply=false: 영향 검토만 수행 (아무것도 바꾸지 않음)
+   *  - apply=true : 차단 사유가 없을 때만 실제 변경, 변경 후 정합성 재검증 실패 시 서버가 전체 롤백
+   */
+  async changeItemPackQty(payload) {
+    const p = payload || {}
+    const newPack = Number(p.newPack)
+    if (!p.itemId) throw new Error('대상 품목이 지정되지 않았습니다.')
+    if (!Number.isInteger(newPack) || newPack < 1 || newPack > 100000) {
+      throw new Error('새 포장수량은 1 이상의 정수여야 합니다.')
+    }
+
+    const { data, error } = await supabase.rpc('rpc_change_item_pack_qty', {
+      p_item_id: p.itemId,
+      p_new_pack: newPack,
+      p_apply: p.apply === true,
+      p_confirm_boxes: p.confirmBoxes === true,
+      p_reason: p.reason || null
+    })
+    if (error) throw new Error(error.message || '포장수량 변경에 실패했습니다.')
+
+    if (data && data.applied) {
+      // 이 브라우저의 품목 id 캐시에서 옛 포장수량 키를 제거한다.
+      for (const [k, v] of itemIdCache) {
+        if (v === p.itemId) itemIdCache.delete(k)
+      }
+    }
+    return data
+  },
+
+  /**
+   * 2f. 최근 포장수량 변경 이력 (관리자 전용)
+   */
+  async listItemPackChanges(limit) {
+    const { data, error } = await supabase.rpc('rpc_list_item_pack_changes', { p_limit: Number(limit) || 20 })
+    if (error) throw new Error(error.message || '변경 이력을 불러오지 못했습니다.')
+    return data || []
   },
 
   async login(memberName, password) {
@@ -767,6 +874,10 @@ export const serverMethods = {
       }
     }
 
+    await assertPackQtyUnchanged(updatedItems.map((up, idx) => ({
+      itemId: itemsPayload[idx]?.item_id, name: up.name, color: up.color, boxContent: up.boxContent
+    })))
+
     const fingerprint = JSON.stringify({
       txType, sourceWh, partner, itemsPayload, effectiveTargetWarehouse, pendingFromWarehouse
     })
@@ -848,6 +959,7 @@ export const serverMethods = {
     if (!adjustments || adjustments.length === 0) return { success: true }
     const handler = String(admin || 'ADMIN').trim()
     const payload = []
+    const packCheckRows = []
 
     for (const adj of adjustments) {
       const name = String(adj.itemName || '').trim()
@@ -858,6 +970,7 @@ export const serverMethods = {
       if (!itemId) {
         throw new Error(`등록되지 않은 상품입니다: ${name} (${color})`)
       }
+      packCheckRows.push({ itemId, name, color, boxContent })
       const targetBox = Number(adj.targetBoxQty ?? adj.targetBox)
       const targetUnit = Number(adj.targetIndividualQty ?? adj.targetIndividual ?? 0)
       if (!Number.isFinite(targetBox) || targetBox < 0 || !Number.isFinite(targetUnit) || targetUnit < 0) {
@@ -871,6 +984,8 @@ export const serverMethods = {
         reason: adj.reason || '실사'
       })
     }
+
+    await assertPackQtyUnchanged(packCheckRows)
 
     const fingerprint = JSON.stringify({ handler, payload, kind: 'quick' })
     const idemKey = takeIdempotencyKey('adjust_stock', fingerprint)
@@ -1108,6 +1223,8 @@ export const serverMethods = {
       })
       updatedKeys.push({ key, name, color, boxContent, adjType, itemId })
     }
+
+    await assertPackQtyUnchanged(updatedKeys)
 
     const fingerprint = JSON.stringify({ handler, payload, warehouse, kind: 'audit' })
     const idemKey = takeIdempotencyKey('adjust_stock', fingerprint)

@@ -17,6 +17,7 @@ const htmlFiles = ['index.html', 'searchmodify.html', 'product-ledger.html'];
 const jsFiles = [
   'src/wms-entry.js',
   'src/features/nodeManagement.js',
+  'src/features/itemPackMaintenance.js',
   'src/lib/supabaseAdapter.js',
   'src/lib/supabase.js',
   'src/lib/stockSync.js',

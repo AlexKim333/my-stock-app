@@ -6,6 +6,7 @@
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <script type="module" src="/src/wms-entry.js"></script>
   <script type="module" src="/src/features/nodeManagement.js"></script>
+  <script type="module" src="/src/features/itemPackMaintenance.js"></script>
 
 <style id="mobileOptimizationStyle">
 /* 📱 2026 초고속 모바일 반응형 완벽 최적화 (Mobile First & Tablet UX) */
@@ -14575,6 +14576,7 @@ if (document.readyState === 'loading') {
         <button type="button" class="cfg-tab-btn" id="cfgTab_policy" onclick="switchSettingsTab('policy')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:600; color:#64748b; border-bottom:3px solid transparent; cursor:pointer;">📐 물류 정책</button>
         <button type="button" class="cfg-tab-btn" id="cfgTab_receipt" onclick="switchSettingsTab('receipt')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:600; color:#64748b; border-bottom:3px solid transparent; cursor:pointer;">🖨️ 영수증 서식</button>
         <button type="button" class="cfg-tab-btn" id="cfgTab_worker" onclick="switchSettingsTab('worker')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:600; color:#64748b; border-bottom:3px solid transparent; cursor:pointer;">🔐 작업자 관리</button>
+        <button type="button" class="cfg-tab-btn" id="cfgTab_items" onclick="switchSettingsTab('items')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:600; color:#64748b; border-bottom:3px solid transparent; cursor:pointer;">📦 품목 포장수량</button>
         <button type="button" class="cfg-tab-btn" id="cfgTab_ai" onclick="switchSettingsTab('ai')" style="padding:9px 14px; border:none; background:none; font-size:8.5pt; font-weight:700; color:#7c3aed; border-bottom:3px solid transparent; cursor:pointer;">🤖 AI 품명 마이그레이션</button>
       </div>
 
@@ -14699,6 +14701,43 @@ if (document.readyState === 'loading') {
             <div style="font-size:8pt; color:#15803d; line-height:1.5;">비밀번호는 서버에서 암호화(bcrypt)되어 저장됩니다. 수정 시 비밀번호 입력란을 비워두면 기존 비밀번호가 그대로 유지됩니다.</div>
           </div>
           <button type="button" onclick="handleWmsLogout()" style="padding:7px 16px; background:#dc2626; color:#ffffff; font-weight:700; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt;">🚪 현재 작업자 로그아웃</button>
+        </div>
+
+        <!-- 탭: 품목 포장수량 변경 (관리자) -->
+        <div id="cfgPanel_items" class="cfg-tab-panel" style="display:none;">
+          <h3 style="margin:0 0 4px 0; font-size:10.5pt; font-weight:800; color:#1e293b;">📦 품목 포장수량(박스당 개수) 변경</h3>
+          <p style="margin:0 0 10px 0; font-size:8.2pt; color:#64748b; line-height:1.5;">잘못 등록된 포장수량을 정합성을 지키며 바꿉니다. 재고·거래내역의 상자 수량은 그대로 두고 "상자 1개당 개수"만 바꾸므로, 낱개 수량이 남아 있거나 진행 중인 보류 주문이 있으면 서버가 변경을 막습니다. 변경 후 정합성 검사에 실패하면 자동으로 취소됩니다. (관리자 전용)</p>
+
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <input type="text" id="packSearchInput" placeholder="품명 검색 (2글자 이상, 예: SXY-2440)" autocomplete="off" onkeydown="if(event.key==='Enter'){ searchPackItems(); }" style="flex:1; padding:7px 10px; font-size:9pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+            <button type="button" onclick="searchPackItems()" style="padding:7px 16px; background:#2563eb; color:#fff; font-weight:700; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt;">🔍 검색</button>
+          </div>
+          <div id="packItemList" style="border:1px solid #e2e8f0; border-radius:8px; max-height:220px; overflow-y:auto; margin-bottom:12px;">
+            <div style="padding:16px; text-align:center; color:#94a3b8; font-size:8.5pt;">품명을 검색하세요.</div>
+          </div>
+
+          <div id="packChangeForm" style="display:none; border:1.5px solid #bfdbfe; background:#f8fafc; border-radius:8px; padding:12px 14px; margin-bottom:14px;">
+            <div id="packSelectedLabel" style="font-size:9.5pt; font-weight:800; color:#1e3a8a; margin-bottom:8px;"></div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
+              <label style="font-size:8.5pt; font-weight:700; color:#334155;">새 포장수량</label>
+              <input type="number" id="packNewValue" min="1" max="100000" step="1" oninput="resetPackPreview()" style="width:110px; padding:6px 8px; font-size:9.5pt; font-weight:700; border:1.5px solid #cbd5e1; border-radius:6px; text-align:right;">
+              <input type="text" id="packReason" placeholder="사유 (선택)" style="flex:1; min-width:160px; padding:6px 8px; font-size:8.8pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+              <button type="button" id="packPreviewBtn" onclick="previewPackChange()" style="padding:7px 14px; background:#475569; color:#fff; font-weight:700; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt;">🔍 영향 검토</button>
+            </div>
+            <div id="packReport"></div>
+            <label id="packConfirmRow" style="display:none; align-items:flex-start; gap:6px; margin-top:8px; font-size:8.3pt; color:#7c2d12; cursor:pointer; line-height:1.5;">
+              <input type="checkbox" id="packConfirmBoxes" style="margin-top:3px; cursor:pointer;">
+              <span>현재 재고와 거래내역의 수량은 <b>상자 단위</b>로 입력된 값이며, 새 포장수량 기준의 상자로 다시 해석되어도 맞음을 확인했습니다.</span>
+            </label>
+            <div style="margin-top:10px;">
+              <button type="button" id="packApplyBtn" onclick="applyPackChange()" disabled style="padding:8px 20px; background:#dc2626; color:#fff; font-weight:800; border:none; border-radius:6px; cursor:pointer; font-size:9pt;">✅ 변경 적용</button>
+            </div>
+          </div>
+
+          <div style="font-size:9pt; font-weight:800; color:#334155; margin-bottom:6px;">🕘 최근 변경 이력</div>
+          <div id="packHistoryList" style="border:1px solid #e2e8f0; border-radius:8px; max-height:180px; overflow-y:auto;">
+            <div style="padding:14px; text-align:center; color:#94a3b8; font-size:8.3pt;">탭을 열면 불러옵니다.</div>
+          </div>
         </div>
 
         <!-- 탭 5: AI 품명 마이그레이션 -->
@@ -15409,6 +15448,7 @@ if (document.readyState === 'loading') {
 
       const activePanel = document.getElementById(`cfgPanel_${tabKey}`);
       if (activePanel) activePanel.style.display = 'block';
+      if (tabKey === 'items' && typeof loadPackChangeHistory === 'function') loadPackChangeHistory();
     }
 
     function loadSettingsData() {
