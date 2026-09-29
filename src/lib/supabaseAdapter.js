@@ -1682,13 +1682,25 @@ export const serverMethods = {
 
     if (items.length === 0) return { success: true, cancelled_units: 0, unmatched: [] }
 
-    const { data, error } = await supabase.rpc('rpc_cancel_pending_inbound_orders', {
-      p_source_warehouse: wh,
-      p_items: items
-    })
-    if (error) {
-      console.error('[SupabaseAdapter] cancelPendingInboundOrders 실패:', error)
-      throw new Error(error.message || '발주 취소에 실패했습니다.')
+    // 응답만 유실돼 재시도해도 같은 취소가 두 번 반영되지 않도록 요청별 멱등 키를 보낸다(네트워크·타임아웃 오류일 때만 키 유지).
+    const fingerprint = JSON.stringify({ kind: 'cancel', wh, items })
+    const idemKey = takeIdempotencyKey('cancel_pending_inbound', fingerprint)
+    let data
+    try {
+      const res = await supabase.rpc('rpc_cancel_pending_inbound_orders', {
+        p_source_warehouse: wh,
+        p_items: items,
+        p_idempotency_key: idemKey
+      })
+      if (res.error) {
+        console.error('[SupabaseAdapter] cancelPendingInboundOrders 실패:', res.error)
+        throw new Error(res.error.message || '발주 취소에 실패했습니다.')
+      }
+      data = res.data
+      clearIdempotencyKey('cancel_pending_inbound')
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('cancel_pending_inbound')
+      throw err
     }
     return data || { success: true, cancelled_units: 0, unmatched: [] }
   },
@@ -1737,14 +1749,26 @@ export const serverMethods = {
 
     if (items.length === 0) return { success: true, cancelled_units: 0, added_units: 0, unmatched: [] }
 
-    const { data, error } = await supabase.rpc('rpc_adjust_pending_inbound_orders', {
-      p_source_warehouse: wh,
-      p_items: items,
-      p_admin: null
-    })
-    if (error) {
-      console.error('[SupabaseAdapter] adjustPendingInboundOrders 실패:', error)
-      throw new Error(error.message || '발주 조정에 실패했습니다.')
+    // 응답만 유실돼 재시도해도 같은 조정이 두 번 반영되지 않도록 요청별 멱등 키를 보낸다(네트워크·타임아웃 오류일 때만 키 유지).
+    const fingerprint = JSON.stringify({ kind: 'adjust', wh, items })
+    const idemKey = takeIdempotencyKey('adjust_pending_inbound', fingerprint)
+    let data
+    try {
+      const res = await supabase.rpc('rpc_adjust_pending_inbound_orders', {
+        p_source_warehouse: wh,
+        p_items: items,
+        p_admin: null,
+        p_idempotency_key: idemKey
+      })
+      if (res.error) {
+        console.error('[SupabaseAdapter] adjustPendingInboundOrders 실패:', res.error)
+        throw new Error(res.error.message || '발주 조정에 실패했습니다.')
+      }
+      data = res.data
+      clearIdempotencyKey('adjust_pending_inbound')
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('adjust_pending_inbound')
+      throw err
     }
     return data || { success: true, cancelled_units: 0, added_units: 0, unmatched: [] }
   },

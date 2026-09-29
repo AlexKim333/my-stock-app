@@ -6103,7 +6103,14 @@ function deleteRecord() {
     if (!ok) return;
     applyOrderPlan(plan,
       () => { finishDeleteRecords(toDelete); loadStockData(true); },
-      err => alert('DB 발주 취소에 실패하여 행을 삭제하지 않았습니다.\n' + (err && err.message ? err.message : err))
+      err => alert('DB 발주 취소에 실패하여 행을 삭제하지 않았습니다.\n' + (err && err.message ? err.message : err)),
+      () => {
+        // 서버 응답이 늦었지만 발주 취소는 반영됐다. 삭제를 확인받았으니 행도 삭제한다(그 사이 목록이 바뀌었을 수 있어 행 객체로 찾는다).
+        const idx = removedRows.map(r => records.indexOf(r)).filter(i => i >= 0);
+        if (idx.length) finishDeleteRecords(idx);
+        loadStockData(true);
+        alert('서버 응답이 늦었지만 발주 취소가 반영되어 행을 삭제했습니다.');
+      }
     );
     return;
   }
@@ -6257,14 +6264,20 @@ function confirmSubmit() {
     const plan = computeOrderPlan(records, records);
     if (plan && plan.deltas.length > 0) {
       if (!confirm(orderPlanMessage(plan, '제출'))) return;
+      const snap = snapshotOrderRows(records);
       applyOrderPlan(plan,
         () => {
-          // 이후 제출이 실패해 재시도하더라도 같은 변경이 두 번 반영되지 않도록 발주 원본을 현재 값으로 갱신한다.
-          stampOrderedRows(records, plan.src);
+          // 이후 제출이 실패해 재시도하더라도 같은 변경이 두 번 반영되지 않도록 발주 원본을 반영된 값으로 갱신한다.
+          stampFromSnapshot(snap, plan.src);
           saveTableData();
           confirmSubmitCore();
         },
-        err => alert('외부창고 발주 조정에 실패하여 제출하지 않았습니다.\n' + (err && err.message ? err.message : err))
+        err => alert('외부창고 발주 조정에 실패하여 제출하지 않았습니다.\n' + (err && err.message ? err.message : err)),
+        () => {
+          stampFromSnapshot(snap, plan.src);
+          saveTableData();
+          alert('서버 응답이 늦었지만 발주 조정은 반영되었습니다.\n제출 버튼을 다시 눌러 진행하세요. (같은 조정이 중복 반영되지 않습니다)');
+        }
       );
       return;
     }
@@ -6530,13 +6543,38 @@ function orderPlanMessage(plan, actionLabel) {
 }
 
 // 조정안을 서버에 반영한다. 조정할 것이 없으면 바로 onDone. (callServer가 동시 호출 차단 시 onError를 직접 호출한다.)
-function applyOrderPlan(plan, onDone, onFail) {
+// onLate(선택): 화면은 타임아웃으로 실패를 표시했지만 서버가 뒤늦게 성공한 경우. 서버는 요청별 멱등 키로 재시도 중복을 막지만,
+// 성공한 요청의 키는 폐기되므로 화면 상태(발주 원본)도 반영된 값으로 맞춰야 재시도가 같은 변경을 다시 계산하지 않는다.
+function applyOrderPlan(plan, onDone, onFail, onLate) {
   if (!plan || plan.deltas.length === 0) { onDone(); return; }
   const payload = plan.deltas.map(d => ({ itemName: d.item.itemName, color: d.item.color, boxContent: d.bc, deltaUnits: d.deltaUnits }));
   callServer('adjustPendingInboundOrders', [plan.src, payload], {
     key: 'adjustPendingInbound',
     onSuccess: res => onDone(res),
-    onError: err => onFail(err)
+    onError: err => onFail(err),
+    onLateSuccess: res => { if (onLate) onLate(res); }
+  });
+}
+
+// 조정을 요청한 시점의 행별 수량을 기록한다(응답을 기다리는 사이 사용자가 수량을 더 바꿔도 그 변경이 '반영된 것'으로 표시되지 않게).
+function snapshotOrderRows(rows) {
+  return (rows || []).map(r => ({
+    r,
+    box: Math.abs(r.boxQty || 0),
+    unit: Math.abs(r.individualQty || 0),
+    name: String(r.itemName || '').trim(),
+    color: r.color || 'SURTIDO',
+    bc: Number(r.boxContent) || 1
+  }));
+}
+
+function stampFromSnapshot(snap, src) {
+  (snap || []).forEach(s => {
+    if (s.box <= 0 && s.unit <= 0) return;
+    s.r.sourceWarehouse = src;
+    s.r.orderedItem = { itemName: s.name, color: s.color, boxContent: s.bc };
+    s.r.orderedBoxQty = s.box;
+    s.r.orderedUnitQty = s.unit;
   });
 }
 
@@ -6565,14 +6603,20 @@ function savePending() {
     const plan = computeOrderPlan(records, records);
     if (plan && plan.deltas.length > 0) {
       if (!confirm(orderPlanMessage(plan, '보류'))) return;
+      const snap = snapshotOrderRows(records);
       applyOrderPlan(plan,
         () => {
-          stampOrderedRows(records, plan.src);
+          stampFromSnapshot(snap, plan.src);
           savePendingCore();
           showAppToast('✅ 외부창고 발주가 보류 내용에 맞게 조정되었습니다.', 2500);
           loadStockData(true);
         },
-        err => alert('외부창고 발주 조정에 실패하여 보류를 저장하지 않았습니다.\n' + (err && err.message ? err.message : err))
+        err => alert('외부창고 발주 조정에 실패하여 보류를 저장하지 않았습니다.\n' + (err && err.message ? err.message : err)),
+        () => {
+          stampFromSnapshot(snap, plan.src);
+          saveTableData();
+          alert('서버 응답이 늦었지만 발주 조정은 반영되었습니다.\n[보류]를 다시 눌러 저장하세요. (같은 조정이 중복 반영되지 않습니다)');
+        }
       );
       return;
     }
@@ -7144,6 +7188,13 @@ function deletePending() {
         isPendingOperating = false;
         setPendingModalButtonsState(false);
         alert('DB 발주 취소에 실패하여 보류를 삭제하지 않았습니다.\n' + (err && err.message ? err.message : err));
+      },
+      // 화면은 타임아웃으로 실패를 표시했지만 서버가 뒤늦게 취소를 성공한 경우: 삭제를 확인받았으니 보류도 삭제한다
+      // (그대로 두면 재시도가 이미 취소된 발주를 다시 취소하려 한다).
+      onLateSuccess: function() {
+        isPendingOperating = false;
+        setPendingModalButtonsState(false);
+        finishDeletePending(storageKey, targetIndex, target, '\n\n(서버 응답이 늦었지만 발주 취소가 반영되어 보류를 삭제했습니다.)');
       }
     });
     if (!started) {
