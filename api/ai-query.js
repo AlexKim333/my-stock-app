@@ -6,6 +6,129 @@ const MODEL_TIMEOUT_MS = 15000
 const SESSION_CHECK_TIMEOUT_MS = 10000
 const DB_TIMEOUT_MS = 15000
 
+// ---------------------------------------------------------------------------
+// 주문서 초안 재고 판정 (DRAFT_ORDER)
+//  - 품목은 품명 + 색상으로 정확히 식별한다 (같은 품명의 다른 색상 재고로 판정하지 않는다).
+//  - 상자와 낱개는 같은 단위(개수)로 환산해 비교한다.
+//  - 재고를 조회하지 못하면 "충분"으로 처리하지 않고 UNVERIFIED(확인 불가)로 표시한다.
+//  stockStatus: OK 충분 | SHORT 재고부족 | NOT_FOUND 품목/색상 없음 | AMBIGUOUS 식별 불가 | UNVERIFIED 확인 불가
+// ---------------------------------------------------------------------------
+const MAX_DRAFT_ITEMS = 100
+const WAREHOUSE_CODE_RE = /^[A-Z0-9_]{1,30}$/
+
+const normText = v => String(v ?? '').trim().toUpperCase()
+const toCount = v => {
+  const n = Math.floor(Number(v))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+// SQL 문자열 리터럴: NUL 제거 + 작은따옴표 이중화
+const sqlString = v => `'${String(v ?? '').replace(/\u0000/g, '').replace(/'/g, "''")}'`
+
+export function isValidWarehouseCode(code) {
+  return WAREHOUSE_CODE_RE.test(String(code ?? ''))
+}
+
+/** 초안 품목의 재고를 한 번에 조회하는 SELECT. 창고 코드는 호출 전에 isValidWarehouseCode 로 검증해야 한다. */
+export function buildDraftStockSql(rawItems, warehouse) {
+  const models = [...new Set((rawItems || []).map(i => normText(i && i.model)).filter(Boolean))]
+  if (models.length === 0) return ''
+  return `
+    SELECT
+      i.id,
+      i.item_name,
+      i.color,
+      COALESCE(i.box_packaging_qty, 1) AS box_packaging_qty,
+      COALESCE(s.box_qty, 0) AS current_box_qty,
+      COALESCE(s.unit_qty, 0) AS current_unit_qty,
+      (w.code IS NOT NULL) AS wh_exists
+    FROM public.items i
+    LEFT JOIN public.warehouses w ON w.code = ${sqlString(warehouse)}
+    LEFT JOIN public.inventory_stocks s
+      ON s.item_id = i.id AND s.warehouse_code = ${sqlString(warehouse)}
+    WHERE COALESCE(i.is_active, TRUE)
+      AND UPPER(i.item_name) IN (${models.map(sqlString).join(',')})
+  `
+}
+
+/**
+ * @param rawItems AI가 만든 품목 [{ model, color, boxQty, unitQty }]
+ * @param dbRows   buildDraftStockSql 결과 행. null 이면 조회 실패(확인 불가).
+ */
+export function evaluateDraftStock(rawItems, dbRows, warehouse, dbNote = '') {
+  return (rawItems || []).map(it => {
+    const model = String(it?.model ?? '').trim()
+    const colorReq = String(it?.color ?? '').trim()
+    const boxQty = toCount(it?.boxQty)
+    const unitQty = toCount(it?.unitQty)
+    const base = {
+      model,
+      color: colorReq || 'SURTIDO',
+      boxQty,
+      unitQty,
+      boxContent: 1,
+      currentStock: 0,
+      currentUnitQty: 0,
+      currentUnits: 0,
+      requiredUnits: 0
+    }
+    const result = (status, note, extra = {}) => ({
+      ...base,
+      ...extra,
+      stockStatus: status,
+      statusNote: note,
+      isSufficient: status === 'OK',
+      isCatalogMatch: status === 'UNVERIFIED' ? null : status !== 'NOT_FOUND'
+    })
+
+    if (!model) return result('NOT_FOUND', '품명이 비어 있습니다.')
+    if (dbRows === null || dbRows === undefined) return result('UNVERIFIED', dbNote || '재고를 조회하지 못했습니다.')
+
+    const candidates = dbRows.filter(d => normText(d.item_name) === normText(model))
+    if (candidates.length === 0) return result('NOT_FOUND', '등록된 품목이 아닙니다.')
+    if (candidates.some(d => d.wh_exists === false)) {
+      return result('UNVERIFIED', `출발 창고를 찾을 수 없습니다: ${warehouse}`)
+    }
+
+    // 안내 문구가 너무 길어지지 않게 색상 목록은 8개까지만 보여준다.
+    const listColors = list => {
+      const colors = [...new Set(list.map(d => d.color || 'SURTIDO'))]
+      return colors.slice(0, 8).join(', ') + (colors.length > 8 ? ` 외 ${colors.length - 8}개` : '')
+    }
+
+    let pool = candidates
+    if (colorReq) {
+      pool = candidates.filter(d => normText(d.color || 'SURTIDO') === normText(colorReq))
+      if (pool.length === 0) {
+        return result('NOT_FOUND', `해당 색상이 없습니다: ${colorReq} (등록된 색상: ${listColors(candidates)})`)
+      }
+    }
+    if (pool.length > 1) {
+      return result('AMBIGUOUS', colorReq
+        ? '같은 품명·색상의 품목이 여러 개입니다 (포장수량 확인 필요).'
+        : `색상을 지정해야 합니다 (${listColors(pool)}).`)
+    }
+
+    const m = pool[0]
+    const pack = Math.max(1, Math.round(Number(m.box_packaging_qty) || 1))
+    const stockUnits = (Number(m.current_box_qty) || 0) * pack + (Number(m.current_unit_qty) || 0)
+    const requiredUnits = boxQty * pack + unitQty
+    const sufficient = requiredUnits <= stockUnits
+    return result(
+      sufficient ? 'OK' : 'SHORT',
+      sufficient ? '' : `필요 ${requiredUnits.toLocaleString('en-US')}개 / 재고 ${stockUnits.toLocaleString('en-US')}개`,
+      {
+        model: m.item_name,
+        color: m.color || 'SURTIDO',
+        boxContent: pack,
+        currentStock: Math.floor(stockUnits / pack),
+        currentUnitQty: stockUnits % pack,
+        currentUnits: stockUnits,
+        requiredUnits
+      }
+    )
+  })
+}
+
 // 세션 토큰 60초 메모리 캐시 (불필요한 Tokyo 왕복 지연 방지)
 const sessionCache = new Map()
 const SESSION_CACHE_TTL_MS = 60 * 1000
@@ -220,32 +343,21 @@ export default async function handler(req, res) {
     // CASE A: 주문서 자동 초안 작성 (DRAFT_ORDER)
     // =========================================================================
     if (aiParsed.intent === 'DRAFT_ORDER') {
-      const rawItems = Array.isArray(aiParsed.items) ? aiParsed.items : []
-      const sourceWarehouse = aiParsed.sourceWarehouse || 'MAIN'
-      let enrichedItems = []
+      const rawItems = (Array.isArray(aiParsed.items) ? aiParsed.items : []).slice(0, MAX_DRAFT_ITEMS)
 
+      // AI가 반환한 창고 코드는 SQL에 들어가므로 형식을 엄격히 검증한다 (그렇지 않으면 조건이 바뀔 수 있다).
+      const sourceWarehouse = normText(aiParsed.sourceWarehouse) || 'MAIN'
+      if (!isValidWarehouseCode(sourceWarehouse)) {
+        return res.status(400).json({
+          error: `AI가 만든 출발 창고 코드가 올바르지 않습니다: ${String(aiParsed.sourceWarehouse).slice(0, 40)}. 질문을 다시 작성해주세요.`
+        })
+      }
+
+      let dbRows = null // null = 재고 조회를 하지 못함(확인 불가)
+      let dbNote = ''
       if (rawItems.length > 0) {
-        // 품목 마스터 및 출발창고 실재고 즉시 조회
-        const escapedModels = rawItems
-          .map(i => `'${String(i.model || '').replace(/'/g, "''").trim().toUpperCase()}'`)
-          .filter(Boolean)
-          .join(',')
-
-        if (escapedModels) {
-          const checkSql = `
-            SELECT 
-              i.id,
-              i.item_name,
-              i.color,
-              COALESCE(i.box_packaging_qty, 1) AS box_packaging_qty,
-              COALESCE(s.box_qty, 0) AS current_box_qty,
-              COALESCE(s.unit_qty, 0) AS current_unit_qty
-            FROM public.items i
-            LEFT JOIN public.inventory_stocks s 
-              ON s.item_id = i.id AND s.warehouse_code = '${sourceWarehouse}'
-            WHERE UPPER(i.item_name) IN (${escapedModels})
-          `
-
+        const checkSql = buildDraftStockSql(rawItems, sourceWarehouse)
+        if (checkSql) {
           try {
             const rpcUrl = `${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/rpc_exec_readonly_query`
             const rpcResp = await fetchWithTimeout(rpcUrl, {
@@ -262,47 +374,23 @@ export default async function handler(req, res) {
 
             if (rpcResp.ok) {
               const qRes = await rpcResp.json()
-              const dbRows = qRes?.data || []
-
-              enrichedItems = rawItems.map(it => {
-                const match = dbRows.find(d => d.item_name.toUpperCase() === String(it.model).trim().toUpperCase())
-                const boxContent = match ? Number(match.box_packaging_qty) : 1
-                const currentStock = match ? Number(match.current_box_qty) : 0
-                const boxQty = Number(it.boxQty) || 0
-                const unitQty = Number(it.unitQty) || 0
-                const isSufficient = (currentStock >= boxQty)
-
-                return {
-                  model: match?.item_name || it.model,
-                  color: it.color || match?.color || 'SURTIDO',
-                  boxQty,
-                  unitQty,
-                  boxContent,
-                  currentStock,
-                  isSufficient,
-                  isCatalogMatch: Boolean(match)
-                }
-              })
+              if (qRes?.success === true && Array.isArray(qRes.data)) {
+                dbRows = qRes.data
+              } else {
+                dbNote = `재고 조회 실패: ${qRes?.error || '알 수 없는 응답'}`
+              }
+            } else {
+              dbNote = `재고 조회 실패 (HTTP ${rpcResp.status})`
             }
           } catch (enrichErr) {
+            dbNote = `재고 조회 실패: ${enrichErr.message}`
             console.warn('Draft stock check warning:', enrichErr)
           }
         }
       }
 
-      // 폴백: DB 조회가 안 되었더라도 기본 아이템 목록 유지
-      if (enrichedItems.length === 0) {
-        enrichedItems = rawItems.map(it => ({
-          model: it.model,
-          color: it.color || 'SURTIDO',
-          boxQty: Number(it.boxQty) || 0,
-          unitQty: Number(it.unitQty) || 0,
-          boxContent: 1,
-          currentStock: 0,
-          isSufficient: true,
-          isCatalogMatch: true
-        }))
-      }
+      // 조회에 실패하면 "재고 충분"으로 처리하지 않고 확인 불가(UNVERIFIED)로 표시한다.
+      const enrichedItems = evaluateDraftStock(rawItems, dbRows, sourceWarehouse, dbNote)
 
       const totalTimeMs = Date.now() - startTime
       return res.status(200).json({

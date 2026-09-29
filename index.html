@@ -16504,9 +16504,7 @@ if (document.readyState === 'loading') {
 
         if (itemsBody) {
           itemsBody.innerHTML = (currentAiDraft.items || []).map((it, idx) => {
-            const badge = it.isSufficient
-              ? '<span style="background:#dcfce7; color:#15803d; font-weight:800; padding:2px 7px; border-radius:10px; font-size:7.5pt;">✅ 충분</span>'
-              : '<span style="background:#fee2e2; color:#b91c1c; font-weight:800; padding:2px 7px; border-radius:10px; font-size:7.5pt;">⚠️ 재고부족</span>';
+            const badge = aiDraftStockBadge(it);
             return `
               <tr style="border-bottom:1px solid #f1f5f9;">
                 <td style="padding:6px 10px; text-align:center; color:#94a3b8; font-size:7.8pt;">${idx + 1}</td>
@@ -16566,10 +16564,35 @@ if (document.readyState === 'loading') {
     }
   }
 
+  // 초안 품목의 재고 판정 배지. stockStatus: OK / SHORT / NOT_FOUND / AMBIGUOUS / UNVERIFIED (이전 응답은 isSufficient만 있음)
+  function aiDraftStockBadge(it) {
+    const status = it.stockStatus || (it.isSufficient ? 'OK' : 'SHORT');
+    const map = {
+      OK: ['#dcfce7', '#15803d', '✅ 충분'],
+      SHORT: ['#fee2e2', '#b91c1c', '⚠️ 재고부족'],
+      NOT_FOUND: ['#fef3c7', '#b45309', '❓ 품목/색상 없음'],
+      AMBIGUOUS: ['#fef3c7', '#b45309', '❓ 품목 확인 필요'],
+      UNVERIFIED: ['#e2e8f0', '#475569', '⛔ 확인 불가']
+    };
+    const [bg, fg, label] = map[status] || map.UNVERIFIED;
+    const note = it.statusNote ? ` title="${escapeHtml(it.statusNote)}"` : '';
+    return `<span${note} style="background:${bg}; color:${fg}; font-weight:800; padding:2px 7px; border-radius:10px; font-size:7.5pt; white-space:nowrap;">${label}</span>`;
+  }
+
   function applyCurrentAiDraft() {
     if (!currentAiDraft || !currentAiDraft.items || currentAiDraft.items.length === 0) {
       alert('담을 수 있는 초안 품목이 없습니다.');
       return;
+    }
+
+    // 출고 초안은 재고가 확인되지 않은 품목이 있으면 담기 전에 알린다 (최종 제출 때는 서버가 다시 검증한다).
+    if ((currentAiDraft.orderType || 'out') === 'out') {
+      const unchecked = currentAiDraft.items.filter(it => it.stockStatus && it.stockStatus !== 'OK');
+      if (unchecked.length > 0) {
+        const lines = unchecked.slice(0, 8).map(it => `• ${it.model} (${it.color || 'SURTIDO'}): ${it.statusNote || it.stockStatus}`);
+        const more = unchecked.length > 8 ? `\n… 외 ${unchecked.length - 8}건` : '';
+        if (!confirm(`⚠️ 재고 확인이 필요한 품목이 ${unchecked.length}건 있습니다.\n\n${lines.join('\n')}${more}\n\n그래도 [출고입력] 탭에 담으시겠습니까?\n(제출할 때 서버가 재고를 다시 검증하며, 부족하면 거부됩니다.)`)) return;
+      }
     }
 
     // 1. 기존 작성 중인 전표 확인
