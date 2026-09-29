@@ -253,7 +253,9 @@ export default async function handler(req, res) {
               headers: {
                 'Content-Type': 'application/json',
                 apikey: anonKey,
-                Authorization: `Bearer ${anonKey}`
+                Authorization: `Bearer ${anonKey}`,
+                // rpc_exec_readonly_query 는 로그인 세션이 있어야만 실행된다
+                'x-wms-session': token
               },
               body: JSON.stringify({ p_sql: checkSql })
             }, DB_TIMEOUT_MS)
@@ -342,7 +344,9 @@ export default async function handler(req, res) {
       headers: {
         'Content-Type': 'application/json',
         apikey: anonKey,
-        Authorization: `Bearer ${anonKey}`
+        Authorization: `Bearer ${anonKey}`,
+        // rpc_exec_readonly_query 는 로그인 세션이 있어야만 실행된다
+        'x-wms-session': token
       },
       body: JSON.stringify({ p_sql: generatedSql })
     }, DB_TIMEOUT_MS)
