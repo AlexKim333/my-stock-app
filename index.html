@@ -4296,7 +4296,7 @@ const typeConfig = {
       <div class="input-row"><label for="boxContent">박스당수량:</label><input type="number" id="boxContent" name="boxContent" tabindex="3"></div>
       <div class="input-row"><label for="safeStock">안전재고(상자):</label><input type="number" id="safeStock" name="safeStock" placeholder="상자 단위 (예: 2)" tabindex="4"></div>
       <div class="input-row"><label for="initialStock">기초재고:</label><input type="number" id="initialStock" name="initialStock" tabindex="5"></div>
-      <div class="input-row"><label for="manufacturer">제조사:</label><select id="manufacturer" name="manufacturer" tabindex="6"><option value="">선택</option></select></div>
+      <div class="input-row"><label for="manufacturer">제조사:</label><select id="manufacturer" name="manufacturer" tabindex="6" onchange="rememberManufacturer(this.value)"><option value="">선택</option></select></div>
     `
   },
   'adj': {
@@ -4424,6 +4424,22 @@ function loadStockData(silent = false) {
   });
 }
 
+// 상품등록 화면에서 사용자가 마지막으로 고른 제조사. [추가]로 폼이 초기화되거나 목록을 다시 불러와도,
+// 화면을 나갔다 돌아와도 사용자가 직접 바꾸기 전까지 유지한다. (수정 모드에서 행 값을 채우는 것은 사용자가 고른 것이
+// 아니라 프로그램이 넣는 값이라 change 이벤트가 없어 여기에 기록되지 않는다.)
+let preferredManufacturer = '';
+
+function rememberManufacturer(value) {
+  preferredManufacturer = String(value || '');
+}
+
+function applyPreferredManufacturer() {
+  const select = document.getElementById('manufacturer');
+  if (!select) return;
+  const exists = preferredManufacturer && Array.from(select.options).some(o => o.value === preferredManufacturer);
+  select.value = exists ? preferredManufacturer : '';
+}
+
 function loadManufacturers() {
   callServer('getManufacturers', [], {
     key: 'manufacturers',
@@ -4431,8 +4447,11 @@ function loadManufacturers() {
     onSuccess: manufacturers => {
       const select = document.getElementById('manufacturer');
       if (select) {
+        // 목록을 다시 만들면 선택이 "선택"으로 돌아가므로, 현재 선택(없으면 마지막으로 고른 제조사)을 복원한다.
+        const current = select.value || preferredManufacturer;
         select.innerHTML = '<option value="">선택</option>' +
           manufacturers.map(m => `<option value="${m}">${m}</option>`).join('');
+        select.value = Array.from(select.options).some(o => o.value === current) ? current : '';
       }
     },
     onError: () => {
@@ -6062,7 +6081,8 @@ function clearForm() {
   if (currentType === 'product') {
     if (safeStockInput) safeStockInput.value = '';
     if (initialStockInput) initialStockInput.value = '';
-    if (manufacturerInput) manufacturerInput.value = '';
+    // 제조사는 연속 등록 때 매번 다시 고르지 않도록 사용자가 마지막으로 고른 값을 유지한다.
+    if (manufacturerInput) applyPreferredManufacturer();
   } else {
     if (qtyInput) qtyInput.value = currentType === 'out' ? '1' : '0';
     const boxRadio = document.querySelector('input[name="unitType"][value="box"]');
