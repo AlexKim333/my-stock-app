@@ -6086,14 +6086,10 @@ function deleteRecord() {
   // 보류에서 불러온 외부창고 발주 행을 지우면 DB 발주(입고 예정)도 함께 취소한다.
   // (되돌릴 화면이 없는 채로 발주만 남는 일이 없도록, 삭제 = 발주 취소로 통일한다.
   //  나중에 쓸 품목은 삭제하지 말고 [보류]로 두면 된다.)
-  const orderedRows = currentType === 'in'
-    ? toDelete.map(i => records[i]).map(r => ({ r, o: getOrderedInfo(r) })).filter(x => x.o)
-    : [];
-  if (orderedRows.length > 0) {
-    const lines = orderedRows.map(({ r, o }) => {
-      const bc = Number(o.item.boxContent) || 1;
-      return `• ${o.item.itemName} (${o.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(o.box * bc + o.unit, bc)}`;
-    });
+  const removedRows = toDelete.map(i => records[i]).filter(Boolean);
+  const plan = computeOrderPlan(removedRows, []);
+  if (plan && plan.deltas.length > 0) {
+    const lines = plan.deltas.map(d => `• ${d.item.itemName} (${d.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(d.base, d.bc)}`);
     const ok = confirm(
       `🗑️ 삭제하는 행 중 외부창고 발주에서 불러온 품목이 있습니다.\n\n${lines.join('\n')}\n\n` +
       `삭제하면 외부창고 발주(입고 예정)도 함께 취소됩니다.\n` +
@@ -6101,11 +6097,7 @@ function deleteRecord() {
       `삭제하고 발주도 취소하시겠습니까?`
     );
     if (!ok) return;
-    const list = orderedRows.map(({ r, o }) => {
-      const bc = Number(o.item.boxContent) || 1;
-      return { src: o.src, item: o.item, bc, shortUnits: o.box * bc + o.unit };
-    });
-    cancelOrderedShortfalls(list,
+    applyOrderPlan(plan,
       () => { finishDeleteRecords(toDelete); loadStockData(true); },
       err => alert('DB 발주 취소에 실패하여 행을 삭제하지 않았습니다.\n' + (err && err.message ? err.message : err))
     );
@@ -6247,6 +6239,9 @@ function applyBackendAuthoritativeStock(updatedItems) {
   if (typeof updateUnitType === 'function') updateUnitType();
 }
 
+// 입고 제출: 외부창고 발주에서 불러온 장바구니라면, 수량을 줄이거나 늘린 만큼·추가/삭제한 행을 먼저 DB 발주에 반영한다.
+// 줄이면 남는 발주는 취소되고, 늘리면 가용재고를 검증해 발주에 추가된다(다른 발주의 예약을 소진하지 않게).
+// 반영에 실패하면 제출하지 않고 장바구니를 그대로 둔다.
 function confirmSubmit() {
   if (!records.length) {
     alert('제출할 데이터가 없습니다.');
@@ -6254,19 +6249,31 @@ function confirmSubmit() {
     if (confirmModalDiv) confirmModalDiv.style.display = 'none';
     return;
   }
-  // 외부창고 발주보다 적게 입고하면 남는 수량의 발주는 제출과 함께 취소된다. 제출 전에 한 번 확인받는다.
-  const preShortfalls = currentType === 'in' ? computeOrderShortfalls(records) : [];
-  if (preShortfalls.length > 0) {
-    const lines = preShortfalls.map(s =>
-      `• ${s.item.itemName} (${s.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(s.orderedUnits, s.bc)} / 입고 ${formatUnitsAsBoxes(s.submittedUnits, s.bc)} → 남은 ${formatUnitsAsBoxes(s.shortUnits, s.bc)}`
-    );
-    const proceed = confirm(
-      `📦 발주 수량보다 적게 입고합니다.\n\n${lines.join('\n')}\n\n` +
-      `제출하면 남은 수량의 외부창고 발주(입고 예정)는 취소됩니다.\n` +
-      `수량을 다시 확인하려면 [취소]를 누르세요.\n\n` +
-      `이대로 제출하시겠습니까?`
-    );
-    if (!proceed) return;
+  if (currentType === 'in') {
+    const plan = computeOrderPlan(records, records);
+    if (plan && plan.deltas.length > 0) {
+      if (!confirm(orderPlanMessage(plan, '제출'))) return;
+      applyOrderPlan(plan,
+        () => {
+          // 이후 제출이 실패해 재시도하더라도 같은 변경이 두 번 반영되지 않도록 발주 원본을 현재 값으로 갱신한다.
+          stampOrderedRows(records, plan.src);
+          saveTableData();
+          confirmSubmitCore();
+        },
+        err => alert('외부창고 발주 조정에 실패하여 제출하지 않았습니다.\n' + (err && err.message ? err.message : err))
+      );
+      return;
+    }
+  }
+  confirmSubmitCore();
+}
+
+function confirmSubmitCore() {
+  if (!records.length) {
+    alert('제출할 데이터가 없습니다.');
+    const confirmModalDiv = document.getElementById('confirmModal');
+    if (confirmModalDiv) confirmModalDiv.style.display = 'none';
+    return;
   }
   const buttonContainer = document.querySelector('#modalButtons .button-container:first-child');
   if (!buttonContainer) return;
@@ -6294,8 +6301,6 @@ function confirmSubmit() {
     records.forEach(r => { r.warehouse = adjWh; });
   }
   const recordsToPrint = [...records];
-  // 제출 성공 후 남는 DB 발주를 취소하기 위해 제출 전 장바구니 기준으로 미리 계산해 둔다.
-  const orderShortfalls = type === 'in' ? computeOrderShortfalls(records) : [];
   callServer(typeConfig[type].processFunction, [records, adminValue], {
     key: 'submitForm',
     timeout: 90000, // 다건 전표는 시트 일괄 쓰기가 길어질 수 있다
@@ -6392,10 +6397,6 @@ function confirmSubmit() {
         } catch (printErr) {
           console.warn('영수증 인쇄 중 예외 발생 (데이터는 정상 반영됨):', printErr);
         }
-        // 전표는 이미 확정됐다. 제출 전에 안내한 대로 남은 발주(DB)를 취소한다.
-        if (orderShortfalls.length > 0) {
-          setTimeout(() => cancelRemainingOrders(orderShortfalls), 300);
-        }
       }
     },
     onError: handleError,
@@ -6459,11 +6460,13 @@ function clearPendingOrigin() {
 }
 
 /**
- * 🔗 [외부창고 발주 원본 추적]
- * 외부창고 발주는 DB(pending_orders)에도 PENDING으로 잡혀 유효재고(pending_in)에 반영된다.
- * 보류를 장바구니로 불러올 때 행마다 발주 원본(품목/수량)을 orderedItem/orderedBoxQty/orderedUnitQty로 기록해 두고,
- * 행 수정·재보류에도 유지한다. 행 삭제나 발주보다 적은 수량 제출로 DB 발주가 남게 될 때 취소 여부를 묻는 데 쓴다.
- * (자동 취소하지 않는 이유: 나중에 마저 받을 예정일 수 있으므로 사용자가 선택한다.)
+ * 🔗 [외부창고 발주 ↔ DB 발주 일치]
+ * 외부창고 발주는 DB(pending_orders)에도 PENDING으로 잡혀 매트릭스의 이동중/발주중과 유효재고(pending_in)에 반영된다.
+ * 보류를 수정(수량 변경·행 추가/삭제)하는 동안 화면과 DB가 어긋나지 않도록, 각 행에 "DB에 반영돼 있는 발주 원본"
+ * (orderedItem / orderedBoxQty / orderedUnitQty, 출발창고는 sourceWarehouse)을 기록해 두고
+ * 재보류·제출·행 삭제 때 "현재 수량 - 발주 원본"만큼을 서버(adjustPendingInboundOrders)에 반영한다.
+ *  - 줄어든 수량은 발주에서 취소, 늘어나거나 새로 추가한 수량은 가용재고를 검증해 발주에 추가한다.
+ *  - 같은 창고·품목의 열린 발주는 합계만 의미가 있으므로(입고확정도 합계 기준으로 소진) 보류별 소유 관계는 필요 없다.
  */
 function getOrderedInfo(r) {
   if (!r || !r.sourceWarehouse || !r.orderedItem) return null;
@@ -6477,76 +6480,104 @@ function orderedKey(name, color, boxContent) {
   return `${String(name || '').trim().toUpperCase()}__${String(color || 'SURTIDO').trim().toUpperCase()}__${Number(boxContent) || 1}`;
 }
 
-// 제출하려는 장바구니에서 발주 수량보다 적게 입고되는 품목(남는 DB 발주)을 계산한다.
-function computeOrderShortfalls(rows) {
-  if (currentType !== 'in') return [];
-  const ordered = new Map();
-  const submitted = new Map();
-  (rows || []).forEach(r => {
-    const bc = Number(r.boxContent) || 1;
-    const k = orderedKey(r.itemName, r.color, bc);
-    submitted.set(k, (submitted.get(k) || 0) + Math.abs(r.boxQty || 0) * bc + Math.abs(r.individualQty || 0));
-    const o = getOrderedInfo(r);
-    if (!o) return;
-    const obc = Number(o.item.boxContent) || 1;
-    const ok = orderedKey(o.item.itemName, o.item.color, obc);
-    const cur = ordered.get(ok) || { src: o.src, item: o.item, bc: obc, orderedUnits: 0 };
-    cur.orderedUnits += o.box * obc + o.unit;
-    ordered.set(ok, cur);
-  });
-  const result = [];
-  ordered.forEach((o, k) => {
-    const got = submitted.get(k) || 0;
-    const short = o.orderedUnits - got;
-    if (short > 0) result.push({ src: o.src, item: o.item, bc: o.bc, orderedUnits: o.orderedUnits, submittedUnits: got, shortUnits: short });
-  });
-  return result;
-}
-
 function formatUnitsAsBoxes(units, bc) {
   const b = Math.floor(units / bc);
   const u = units % bc;
   return u > 0 ? `${b}상자 ${u}개` : `${b}상자`;
 }
 
-// 취소할 발주 수량 목록(shortUnits)을 어댑터가 받는 레코드로 변환해 창고별로 취소를 호출한다.
-function cancelOrderedShortfalls(list, onDone, onFail) {
-  const byWh = new Map();
-  list.forEach(s => {
-    const rec = {
-      orderedItem: s.item,
-      itemName: s.item.itemName, color: s.item.color, boxContent: s.bc,
-      orderedBoxQty: Math.floor(s.shortUnits / s.bc),
-      orderedUnitQty: s.shortUnits % s.bc
-    };
-    if (!byWh.has(s.src)) byWh.set(s.src, []);
-    byWh.get(s.src).push(rec);
-  });
-  const whs = [...byWh.keys()];
-  let idx = 0;
-  const next = () => {
-    if (idx >= whs.length) { if (onDone) onDone(); return; }
-    const wh = whs[idx++];
-    const started = callServer('cancelPendingInboundOrders', [wh, byWh.get(wh)], {
-      key: 'cancelOrderedShortfall',
-      onSuccess: next,
-      onError: err => { if (onFail) onFail(err); }
-    });
-    if (!started && onFail) onFail(new Error('이전 요청이 아직 처리 중입니다.'));
+// baseRows: DB에 반영돼 있는 발주(발주 원본)를 가진 행들, targetRows: 최종 수량이 될 행들.
+// 발주에서 불러온 행이 하나도 없으면(일반 입고) null — DB 발주를 조정할 대상이 아니다.
+function computeOrderPlan(baseRows, targetRows) {
+  if (currentType !== 'in') return null;
+  const first = (baseRows || []).map(getOrderedInfo).find(Boolean);
+  if (!first) return null;
+  const slots = new Map();
+  const slot = (name, color, bc) => {
+    const k = orderedKey(name, color, bc);
+    if (!slots.has(k)) slots.set(k, { item: { itemName: String(name || '').trim(), color: color || 'SURTIDO', boxContent: bc }, bc, base: 0, target: 0 });
+    return slots.get(k);
   };
-  next();
+  (baseRows || []).forEach(r => {
+    const o = getOrderedInfo(r);
+    if (!o) return;
+    const bc = Number(o.item.boxContent) || 1;
+    slot(o.item.itemName, o.item.color, bc).base += o.box * bc + o.unit;
+  });
+  (targetRows || []).forEach(r => {
+    const bc = Number(r.boxContent) || 1;
+    slot(r.itemName, r.color, bc).target += Math.abs(r.boxQty || 0) * bc + Math.abs(r.individualQty || 0);
+  });
+  const deltas = [];
+  slots.forEach(sl => {
+    const d = sl.target - sl.base;
+    if (d !== 0) deltas.push({ item: sl.item, bc: sl.bc, base: sl.base, target: sl.target, deltaUnits: d });
+  });
+  return { src: first.src, deltas };
 }
 
-// 제출 성공 후: 발주보다 적게 입고한 만큼 남은 DB 발주를 취소한다(제출 전에 이미 안내·확인받음).
-function cancelRemainingOrders(list) {
-  if (!list || list.length === 0) return;
-  cancelOrderedShortfalls(list,
-    () => { showAppToast('✅ 남은 발주가 취소되었습니다.', 2500); loadStockData(true); },
-    err => alert('입고 전표는 정상 처리되었지만, 남은 발주 취소에 실패했습니다.\n남은 발주(입고 예정)가 그대로 남아 있으니 관리자에게 알려 주세요.\n' + (err && err.message ? err.message : err))
-  );
+function orderPlanMessage(plan, actionLabel) {
+  const lines = plan.deltas.map(d => {
+    const tag = d.deltaUnits < 0 ? `감소 ${formatUnitsAsBoxes(-d.deltaUnits, d.bc)}` : `추가 ${formatUnitsAsBoxes(d.deltaUnits, d.bc)}`;
+    return `• ${d.item.itemName} (${d.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(d.base, d.bc)} → ${formatUnitsAsBoxes(d.target, d.bc)} (${tag})`;
+  });
+  return `📦 ${actionLabel}하면 [${plan.src}] 외부창고 발주(입고 예정)가 다음과 같이 조정됩니다.\n\n${lines.join('\n')}\n\n` +
+    `줄어든 수량은 발주에서 취소되고, 늘어나거나 새로 추가한 수량은 가용재고를 확인해 발주에 추가됩니다.\n\n${actionLabel}하시겠습니까?`;
 }
 
+// 조정안을 서버에 반영한다. 조정할 것이 없으면 바로 onDone. (callServer가 동시 호출 차단 시 onError를 직접 호출한다.)
+function applyOrderPlan(plan, onDone, onFail) {
+  if (!plan || plan.deltas.length === 0) { onDone(); return; }
+  const payload = plan.deltas.map(d => ({ itemName: d.item.itemName, color: d.item.color, boxContent: d.bc, deltaUnits: d.deltaUnits }));
+  callServer('adjustPendingInboundOrders', [plan.src, payload], {
+    key: 'adjustPendingInbound',
+    onSuccess: res => onDone(res),
+    onError: err => onFail(err)
+  });
+}
+
+// 서버 반영이 끝난 행들의 발주 원본을 현재 값으로 갱신한다(이후 재시도·재보류에서 같은 변경이 두 번 반영되지 않도록).
+function stampOrderedRows(rows, src) {
+  (rows || []).forEach(r => {
+    const box = Math.abs(r.boxQty || 0);
+    const unit = Math.abs(r.individualQty || 0);
+    if (box <= 0 && unit <= 0) return;
+    r.sourceWarehouse = src;
+    r.orderedItem = { itemName: String(r.itemName || '').trim(), color: r.color || 'SURTIDO', boxContent: Number(r.boxContent) || 1 };
+    r.orderedBoxQty = box;
+    r.orderedUnitQty = unit;
+  });
+}
+
+// 재보류: 외부창고 발주에서 불러온 장바구니라면, 수정한 수량·추가한 행·삭제한 행을 먼저 DB 발주에 반영한 뒤 저장한다.
+// (반영에 실패하면 — 예: 늘린 수량이 가용재고를 넘음 — 보류를 저장하지 않고 장바구니를 그대로 둔다.)
 function savePending() {
+  if (isPendingOperating) return;
+  if (!records.length) {
+    alert('보류할 레코드가 없습니다.');
+    return;
+  }
+  if (currentType === 'in') {
+    const plan = computeOrderPlan(records, records);
+    if (plan && plan.deltas.length > 0) {
+      if (!confirm(orderPlanMessage(plan, '보류'))) return;
+      applyOrderPlan(plan,
+        () => {
+          stampOrderedRows(records, plan.src);
+          savePendingCore();
+          showAppToast('✅ 외부창고 발주가 보류 내용에 맞게 조정되었습니다.', 2500);
+          loadStockData(true);
+        },
+        err => alert('외부창고 발주 조정에 실패하여 보류를 저장하지 않았습니다.\n' + (err && err.message ? err.message : err))
+      );
+      return;
+    }
+    if (plan) stampOrderedRows(records, plan.src);
+  }
+  savePendingCore();
+}
+
+function savePendingCore() {
   if (isPendingOperating) return;
   if (!records.length) {
     alert('보류할 레코드가 없습니다.');
@@ -6938,6 +6969,7 @@ function loadPending() {
   }
 
   // 레코드 필드 무결성 보장
+  const holdHasOrderInfo = clonedRecords.some(r => r && r.orderedItem);
   const effectiveWh = (warehouseSelect ? warehouseSelect.value : 'MAIN') || 'MAIN';
   clonedRecords.forEach(r => {
     if (!r.location && pendingData.location) r.location = pendingData.location;
@@ -6950,8 +6982,9 @@ function loadPending() {
     }
     if (pendingData.isSubWarehouseOrder || pendingData.sourceWarehouse) {
       r.sourceWarehouse = pendingData.sourceWarehouse || pendingData.location;
-      // 발주 원본을 기록한다(이미 기록돼 있으면 재보류 이력이므로 원본을 유지).
-      if (currentType === 'in' && !r.orderedItem) {
+      // 발주 원본은 발주 등록/보류 저장 시점에 이미 기록돼 있다. 기록이 아예 없는 옛 보류(전 행이 발주였던 시절)만
+      // 현재 수량을 발주 원본으로 본다. 원본이 있는 보류에서 원본이 없는 행은 수동으로 추가한 행이므로 발주로 간주하지 않는다.
+      if (currentType === 'in' && !r.orderedItem && !holdHasOrderInfo) {
         r.orderedItem = { itemName: r.itemName, color: r.color || 'SURTIDO', boxContent: Number(r.boxContent) || 1 };
         r.orderedBoxQty = Math.abs(r.boxQty || 0);
         r.orderedUnitQty = Math.abs(r.individualQty || 0);
@@ -7090,7 +7123,11 @@ function deletePending() {
   if (cancelSrc && cancelSrc !== 'MAIN') {
     isPendingOperating = true;
     setPendingModalButtonsState(true, '⏳ 삭제중...');
-    const started = callServer('cancelPendingInboundOrders', [cancelSrc, target.records || []], {
+    // 발주 원본이 기록된 보류는 그 행만 취소한다(수동으로 추가한 행은 발주가 아니므로 다른 보류의 발주를 건드리지 않게).
+    // 기록이 전혀 없는 옛 보류는 전 행이 발주였으므로 모두 취소 대상으로 본다.
+    const allRows = target.records || [];
+    const cancelRows = allRows.some(r => r && r.orderedItem) ? allRows.filter(r => r && r.orderedItem) : allRows;
+    const started = callServer('cancelPendingInboundOrders', [cancelSrc, cancelRows], {
       key: 'cancelPendingInbound',
       onSuccess: function(res) {
         isPendingOperating = false;
@@ -11889,6 +11926,65 @@ function clearAllOrderDraftItems() {
   filterSubWarehouseTable();
 }
 
+// 발주 등록용 보류 객체. 행마다 "DB에 반영되는 발주 원본"(orderedItem/orderedBoxQty)을 함께 기록한다.
+function buildOrderHold(wh, items, admin, dateStr) {
+  return {
+    records: items.map(item => ({
+      itemName: item.itemName,
+      color: item.color || 'SURTIDO',
+      boxQty: item.boxQty,
+      individualQty: 0,
+      boxContent: item.boxContent || 0,
+      location: wh,
+      warehouse: 'MAIN',
+      sourceWarehouse: wh,
+      targetWarehouse: 'MAIN',
+      unitType: 'box',
+      matchRate: 100,
+      orderedItem: { itemName: String(item.itemName || '').trim(), color: item.color || 'SURTIDO', boxContent: Number(item.boxContent) || 1 },
+      orderedBoxQty: Math.abs(Number(item.boxQty) || 0),
+      orderedUnitQty: 0
+    })),
+    location: wh,
+    warehouse: 'MAIN',
+    targetWarehouse: 'MAIN',
+    sourceWarehouse: wh,
+    admin: admin,
+    date: dateStr,
+    createdAt: new Date().toLocaleString(),
+    isSubWarehouseOrder: true
+  };
+}
+
+// 서버에 발주가 등록된 뒤에만 호출한다(서버가 거절하면 보류를 만들지 않는다 — 보류와 DB 발주가 어긋나지 않게).
+function saveOrderHolds(holds) {
+  migrateLegacyPendingIn();
+  const storageKey = (typeConfig && typeConfig.in && typeConfig.in.pendingStorageKey) || 'pendingInRecordsList';
+  let pendingInList = [];
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) pendingInList = JSON.parse(saved);
+  } catch (e) {}
+  if (!Array.isArray(pendingInList)) pendingInList = [];
+  holds.forEach(h => pendingInList.push(h));
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(pendingInList));
+    return true;
+  } catch (e) {
+    console.error('pending storage save error: ' + e.message);
+    alert('서버에는 발주가 등록되었지만 입고 보류를 브라우저에 저장하지 못했습니다.\n[발주 매트릭스]에서 발주 상태를 확인하고 관리자에게 알려 주세요.');
+    return false;
+  }
+}
+
+function orderRegisterErrorMessage(err) {
+  const msg = (err && err.message) ? err.message : String(err);
+  if (/시간 초과/.test(msg)) {
+    return `⚠️ 서버 응답이 없어 발주 등록 여부를 확인하지 못했습니다.\n\n${msg}\n\n다시 시도하기 전에 [발주 매트릭스]에서 발주가 등록되었는지 먼저 확인하세요. (발주서 목록은 그대로 유지됩니다.)`;
+  }
+  return `⚠️ 발주 등록에 실패했습니다.\n\n${msg}\n\n서버에 발주가 등록되지 않았고 입고 보류도 만들지 않았습니다.\n발주서 목록은 그대로 유지되니 수량을 조정한 뒤 다시 시도하세요.`;
+}
+
 /**
  * 🚀 외부창고 주문서 작성 목록을 WMS [입고 보류]로 일괄 등록 및 외부창고 시트 PENDIENTE 전송
  */
@@ -11919,50 +12015,8 @@ function submitOrderDraftToPending() {
   const dateStr = datetimeInput ? datetimeInput.value : new Date().toLocaleString();
   const admin = adminSelect ? adminSelect.value : 'ADMIN';
 
-  // 1. WMS 입고 보류 목록(pendingInRecordsList)에 창고별로 등록
-  migrateLegacyPendingIn();
-  const storageKey = (typeConfig && typeConfig.in && typeConfig.in.pendingStorageKey) || 'pendingInRecordsList';
-  let pendingInList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingInList = JSON.parse(saved);
-  } catch (e) {}
-  if (!Array.isArray(pendingInList)) pendingInList = [];
-
-  whNames.forEach(wh => {
-    const whItems = byWarehouse[wh];
-    const recs = whItems.map(item => ({
-      itemName: item.itemName,
-      color: item.color || 'SURTIDO',
-      boxQty: item.boxQty,
-      individualQty: 0,
-      boxContent: item.boxContent || 0,
-      location: wh,
-      warehouse: 'MAIN',
-      sourceWarehouse: wh,
-      targetWarehouse: 'MAIN',
-      unitType: 'box',
-      matchRate: 100
-    }));
-
-    pendingInList.push({
-      records: recs,
-      location: wh,
-      warehouse: 'MAIN',
-      targetWarehouse: 'MAIN',
-      sourceWarehouse: wh,
-      admin: admin,
-      date: dateStr,
-      createdAt: new Date().toLocaleString(),
-      isSubWarehouseOrder: true
-    });
-  });
-
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(pendingInList));
-  } catch (e) {
-    console.error('pending storage save error: ' + e.message);
-  }
+  // 1. 보류로 등록할 내용을 준비한다. 서버에 발주가 등록된 뒤에만 실제로 저장한다.
+  const newHolds = whNames.map(wh => buildOrderHold(wh, byWarehouse[wh], admin, dateStr));
 
   const btn = document.getElementById('btnSubmitDraftToPending');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 전송 중...'; }
@@ -11971,7 +12025,15 @@ function submitOrderDraftToPending() {
   callServer('submitSubWarehouseOrderDrafts', [byWarehouse, admin], {
     key: 'submitOrderDraft',
     timeout: 90000,
+    onLateSuccess: function() {
+      // 응답이 늦었지만 서버에는 발주가 등록됐다. 보류를 저장하고 알린다.
+      saveOrderHolds(newHolds);
+      saveOrderDraftItems([]);
+      updatePendingCount();
+      alert('서버 응답이 늦었지만 발주가 정상 등록되어 입고 보류를 저장했습니다. 다시 등록하지 마세요.');
+    },
     onSuccess: function(res) {
+      saveOrderHolds(newHolds);
       saveOrderDraftItems([]);
       renderOrderDraftTable();
       updateTruckGauges();
@@ -11980,7 +12042,7 @@ function submitOrderDraftToPending() {
       closeSubWarehouseMatrixModal();
 
       // 🔥 1. 즉시 입고입력('in') 화면으로 자동 전환 및 뱃지 카운트 갱신
-      setPage('in');
+      setPage('입고입력');
       updatePendingCount();
       loadSubWarehouseMatrix(true); // 🔄 발주 즉시 매트릭스 가용재고(ATP) 실시간 재집계
 
@@ -11993,12 +12055,7 @@ function submitOrderDraftToPending() {
       }, 100);
     },
     onError: function(err) {
-      setPage('in');
-      updatePendingCount();
-      alert(`⚠️ 외부 시트 전송 중 경고: ${err.message || err}\n(WMS 로컬 입고 보류에는 안전하게 등록되었습니다.)`);
-      setTimeout(() => {
-        showPendingModal();
-      }, 100);
+      alert(orderRegisterErrorMessage(err));
     },
     onSettled: function() {
       if (btn) { btn.disabled = false; btn.innerHTML = '<span>🚀 입고 보류로 발주 등록 (외부창고 전송)</span>'; }
@@ -12575,47 +12632,8 @@ function submitSingleSubWhOrderToPending() {
   const dateStr = datetimeInput ? datetimeInput.value : new Date().toLocaleString();
   const admin = adminSelect ? adminSelect.value : 'ADMIN';
 
-  // 1. WMS pendingInRecordsList에 등록
-  migrateLegacyPendingIn();
-  const storageKey = (typeConfig && typeConfig.in && typeConfig.in.pendingStorageKey) || 'pendingInRecordsList';
-  let pendingInList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingInList = JSON.parse(saved);
-  } catch (e) {}
-  if (!Array.isArray(pendingInList)) pendingInList = [];
-
-  const recs = whItems.map(item => ({
-    itemName: item.itemName,
-    color: item.color || 'SURTIDO',
-    boxQty: item.boxQty,
-    individualQty: 0,
-    boxContent: item.boxContent || 0,
-    location: whName,
-    warehouse: 'MAIN',
-    sourceWarehouse: whName,
-    targetWarehouse: 'MAIN',
-    unitType: 'box',
-    matchRate: 100
-  }));
-
-  pendingInList.push({
-    records: recs,
-    location: whName,
-    warehouse: 'MAIN',
-    targetWarehouse: 'MAIN',
-    sourceWarehouse: whName,
-    admin: admin,
-    date: dateStr,
-    createdAt: new Date().toLocaleString(),
-    isSubWarehouseOrder: true
-  });
-
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(pendingInList));
-  } catch (e) {
-    console.error('pending storage save error: ' + e.message);
-  }
+  // 1. 보류로 등록할 내용을 준비한다. 서버에 발주가 등록된 뒤에만 실제로 저장한다.
+  const newHold = buildOrderHold(whName, whItems, admin, dateStr);
 
   // 2. 외부창고 전송
   const btn = document.getElementById('btnSubmitSingleWhToPending');
@@ -12625,7 +12643,15 @@ function submitSingleSubWhOrderToPending() {
   callServer('submitSubWarehouseOrderDrafts', [byWhPayload, admin], {
     key: 'submitSingleWhOrderDraft',
     timeout: 90000,
+    onLateSuccess: function() {
+      // 응답이 늦었지만 서버에는 발주가 등록됐다. 보류를 저장하고 알린다.
+      saveOrderHolds([newHold]);
+      saveOrderDraftItems(allDrafts.filter(it => (it.warehouse || '').toUpperCase().trim() !== whName.toUpperCase().trim()));
+      updatePendingCount();
+      alert('서버 응답이 늦었지만 발주가 정상 등록되어 입고 보류를 저장했습니다. 다시 등록하지 마세요.');
+    },
     onSuccess: function(res) {
+      saveOrderHolds([newHold]);
       const remainingItems = allDrafts.filter(it => (it.warehouse || '').toUpperCase().trim() !== whName.toUpperCase().trim());
       saveOrderDraftItems(remainingItems);
       renderOrderDraftTable();
@@ -12635,7 +12661,7 @@ function submitSingleSubWhOrderToPending() {
       closeSubWhCardDetailModal();
       closeSubWarehouseMatrixModal();
 
-      setPage('in');
+      setPage('입고입력');
       updatePendingCount();
       loadSubWarehouseMatrix(true);
 
@@ -12646,14 +12672,10 @@ function submitSingleSubWhOrderToPending() {
       }, 100);
     },
     onError: function(err) {
-      setPage('in');
-      updatePendingCount();
-      alert(`⚠️ 외부 시트 전송 중 경고: ${err.message || err}\n(WMS 로컬 입고 보류에는 안전하게 등록되었습니다.)`);
-      setTimeout(() => {
-        showPendingModal();
-      }, 100);
+      alert(orderRegisterErrorMessage(err));
     },
-    onComplete: function() {
+    // (callServer가 지원하는 옵션은 onSettled — 이전의 onComplete는 호출되지 않아 실패 시 버튼이 복구되지 않았다)
+    onSettled: function() {
       if (btn) {
         btn.disabled = false;
         btn.innerHTML = `<span>🚀 [${escapeHtml(whName)}] 발주 등록 (${totalBoxes}상자 입고대기 전송)</span>`;

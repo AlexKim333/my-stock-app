@@ -1694,6 +1694,62 @@ export const serverMethods = {
   },
 
   /**
+   * 15-2. 보류/장바구니 수정 내용을 DB 발주(pending_orders)에 반영 (adjustPendingInboundOrders)
+   * deltas: [{ itemName, color, boxContent, deltaUnits }]  deltaUnits < 0 이면 발주 감소·취소, > 0 이면 발주 추가(가용재고 검증)
+   * 재보류·제출·행 삭제 때 호출해 보류 목록과 매트릭스/유효재고를 항상 일치시킨다.
+   */
+  async adjustPendingInboundOrders(sourceWarehouse, deltas) {
+    const wh = String(sourceWarehouse || '').trim().toUpperCase()
+    if (!wh || wh === 'MAIN') throw new Error('조정할 발주의 출발(외부)창고를 알 수 없습니다.')
+
+    const items = []
+    for (const d of (deltas || [])) {
+      const name = String(d.itemName || '').trim()
+      const color = String(d.color || 'SURTIDO').trim()
+      const boxContent = Number(d.boxContent || 1)
+      const deltaUnits = Math.trunc(Number(d.deltaUnits) || 0)
+      if (!name || deltaUnits === 0) continue
+
+      const key = `${name}_${color}_${boxContent}`
+      let itemId = itemIdCache.get(key) || null
+      if (!itemId) {
+        const { data: found, error: findErr } = await supabase
+          .from('items')
+          .select('id')
+          .eq('item_name', name)
+          .eq('color', color)
+          .eq('box_packaging_qty', boxContent)
+          .eq('is_active', true)
+          .limit(1)
+        if (findErr) throw findErr
+        itemId = found && found[0] ? found[0].id : null
+        if (itemId) itemIdCache.set(key, itemId)
+      }
+      if (!itemId) {
+        // 마스터에 없는 품목: 줄이는 쪽은 DB 발주가 없으니 건너뛰고, 늘리는 쪽은 발주할 수 없다.
+        if (deltaUnits > 0) throw new Error(`등록되지 않은 상품은 발주에 추가할 수 없습니다: ${name} (${color})`)
+        continue
+      }
+      // 총 개수 변경량을 상자/낱개 부호 있는 쌍으로 나눈다 (서버가 현재 포장수량으로 환산)
+      const deltaBox = Math.trunc(deltaUnits / boxContent)
+      items.push({ item_id: itemId, delta_box: deltaBox, delta_unit: deltaUnits - deltaBox * boxContent })
+    }
+
+    if (items.length === 0) return { success: true, cancelled_units: 0, added_units: 0, unmatched: [] }
+
+    const { data, error } = await supabase.rpc('rpc_adjust_pending_inbound_orders', {
+      p_source_warehouse: wh,
+      p_items: items,
+      p_admin: null
+    })
+    if (error) {
+      console.error('[SupabaseAdapter] adjustPendingInboundOrders 실패:', error)
+      throw new Error(error.message || '발주 조정에 실패했습니다.')
+    }
+    return data || { success: true, cancelled_units: 0, added_units: 0, unmatched: [] }
+  },
+
+  /**
    * 16. 과거 피크 출고량 분석 및 과학적 안전재고(Safe Stock) 산출 엔진
    */
   async analyzeWinterPeakDemandAndSafeStock() {

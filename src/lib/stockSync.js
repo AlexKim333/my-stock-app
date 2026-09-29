@@ -23,6 +23,7 @@ const WRITE_METHODS = {
   updatePendingRecords: () => ['*'],
   submitSubWarehouseOrderDrafts: () => ['*'],
   cancelPendingInboundOrders: () => ['*'],
+  adjustPendingInboundOrders: () => ['*'],
   registerProduct: () => ['MAIN'],
   executeStockNormalization: () => ['*'],
   executeColorNormalization: () => ['*'],
