@@ -1651,11 +1651,15 @@ export const serverMethods = {
 
     const items = []
     for (const rec of (records || [])) {
-      const name = String(rec.itemName || '').trim()
-      const color = String(rec.color || 'SURTIDO').trim()
-      const boxContent = Number(rec.boxContent || 1)
-      const boxQty = Math.abs(Number(rec.boxQty || 0))
-      const unitQty = Math.abs(Number(rec.individualQty || 0))
+      // 보류에서 불러왔던 행은 발주 원본(품목/수량)이 기록돼 있다. 수정·재보류로 현재 수량이 달라졌어도
+      // DB 발주는 원본 기준이므로 원본을 우선 사용한다.
+      const src = rec.orderedItem || rec
+      const name = String(src.itemName || '').trim()
+      const color = String(src.color || 'SURTIDO').trim()
+      const boxContent = Number(src.boxContent || 1)
+      const hasOrdered = rec.orderedBoxQty !== undefined || rec.orderedUnitQty !== undefined
+      const boxQty = Math.abs(Number(hasOrdered ? rec.orderedBoxQty : rec.boxQty) || 0)
+      const unitQty = Math.abs(Number(hasOrdered ? rec.orderedUnitQty : rec.individualQty) || 0)
       if (!name || (boxQty <= 0 && unitQty <= 0)) continue
 
       const key = `${name}_${color}_${boxContent}`

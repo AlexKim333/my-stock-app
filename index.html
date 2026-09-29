@@ -5456,6 +5456,12 @@ function addRecord() {
     // 입고 수정 시 외부발주 출발창고 정보 유지
     if (currentType === 'in' && origRec.sourceWarehouse) {
       formData.sourceWarehouse = origRec.sourceWarehouse;
+      // 발주 원본(품목/수량)도 유지해야 수정 후 삭제·부분 제출 시 남는 DB 발주를 추적할 수 있다.
+      if (origRec.orderedItem) {
+        formData.orderedItem = origRec.orderedItem;
+        formData.orderedBoxQty = origRec.orderedBoxQty;
+        formData.orderedUnitQty = origRec.orderedUnitQty;
+      }
     }
     // 상자+낱개가 함께 있던 행은 수정 대상이 아닌 쪽 수량을 잃지 않도록 유지
     if ((origRec.boxQty || 0) !== 0 && (origRec.individualQty || 0) !== 0) {
@@ -6077,6 +6083,37 @@ function deleteRecord() {
     alert('삭제할 항목을 왼쪽 체크박스(☑️)로 선택해주세요.');
     return;
   }
+  // 보류에서 불러온 외부창고 발주 행을 지우면 DB 발주(입고 예정)가 유령으로 남는다. 취소할지 묻는다.
+  const orderedRows = currentType === 'in'
+    ? toDelete.map(i => records[i]).map(r => ({ r, o: getOrderedInfo(r) })).filter(x => x.o)
+    : [];
+  if (orderedRows.length > 0) {
+    const lines = orderedRows.map(({ r, o }) => {
+      const bc = Number(o.item.boxContent) || 1;
+      return `• ${o.item.itemName} (${o.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(o.box * bc + o.unit, bc)}`;
+    });
+    const cancelDb = confirm(
+      `🗑️ 삭제하는 행 중 외부창고 발주에서 불러온 품목이 있습니다.\n\n${lines.join('\n')}\n\n` +
+      `이 발주는 DB에 '입고 예정'으로 남아 유효재고에 잡혀 있습니다. 행은 어느 쪽이든 삭제됩니다.\n\n` +
+      `[확인] 행 삭제 + 발주도 취소합니다 (유효재고에서 제외)\n` +
+      `[취소] 행만 삭제하고 발주는 유지합니다`
+    );
+    if (cancelDb) {
+      const list = orderedRows.map(({ r, o }) => {
+        const bc = Number(o.item.boxContent) || 1;
+        return { src: o.src, item: o.item, bc, shortUnits: o.box * bc + o.unit };
+      });
+      cancelOrderedShortfalls(list,
+        () => { finishDeleteRecords(toDelete); loadStockData(true); },
+        err => alert('DB 발주 취소에 실패하여 행을 삭제하지 않았습니다.\n' + (err && err.message ? err.message : err))
+      );
+      return;
+    }
+  }
+  finishDeleteRecords(toDelete);
+}
+
+function finishDeleteRecords(toDelete) {
   if (editingRecordIndex !== -1) {
     exitEditMode();
     clearForm();
@@ -6242,6 +6279,8 @@ function confirmSubmit() {
     records.forEach(r => { r.warehouse = adjWh; });
   }
   const recordsToPrint = [...records];
+  // 외부창고 발주보다 적게 입고하는 경우, 성공 후 남는 DB 발주를 취소할지 물어보기 위해 미리 계산해 둔다.
+  const orderShortfalls = type === 'in' ? computeOrderShortfalls(records) : [];
   callServer(typeConfig[type].processFunction, [records, adminValue], {
     key: 'submitForm',
     timeout: 90000, // 다건 전표는 시트 일괄 쓰기가 길어질 수 있다
@@ -6338,6 +6377,10 @@ function confirmSubmit() {
         } catch (printErr) {
           console.warn('영수증 인쇄 중 예외 발생 (데이터는 정상 반영됨):', printErr);
         }
+        // 전표는 이미 확정됐다. 남은 발주(DB)를 취소할지 별도로 묻는다.
+        if (orderShortfalls.length > 0) {
+          setTimeout(() => promptCancelOrderShortfalls(orderShortfalls), 300);
+        }
       }
     },
     onError: handleError,
@@ -6398,6 +6441,104 @@ function clearPendingOrigin() {
     localStorage.removeItem('cartPendingOrigin_' + currentType);
   } catch (e) {
   }
+}
+
+/**
+ * 🔗 [외부창고 발주 원본 추적]
+ * 외부창고 발주는 DB(pending_orders)에도 PENDING으로 잡혀 유효재고(pending_in)에 반영된다.
+ * 보류를 장바구니로 불러올 때 행마다 발주 원본(품목/수량)을 orderedItem/orderedBoxQty/orderedUnitQty로 기록해 두고,
+ * 행 수정·재보류에도 유지한다. 행 삭제나 발주보다 적은 수량 제출로 DB 발주가 남게 될 때 취소 여부를 묻는 데 쓴다.
+ * (자동 취소하지 않는 이유: 나중에 마저 받을 예정일 수 있으므로 사용자가 선택한다.)
+ */
+function getOrderedInfo(r) {
+  if (!r || !r.sourceWarehouse || !r.orderedItem) return null;
+  const box = Math.abs(Number(r.orderedBoxQty) || 0);
+  const unit = Math.abs(Number(r.orderedUnitQty) || 0);
+  if (box <= 0 && unit <= 0) return null;
+  return { src: String(r.sourceWarehouse).trim().toUpperCase(), item: r.orderedItem, box, unit };
+}
+
+function orderedKey(name, color, boxContent) {
+  return `${String(name || '').trim().toUpperCase()}__${String(color || 'SURTIDO').trim().toUpperCase()}__${Number(boxContent) || 1}`;
+}
+
+// 제출하려는 장바구니에서 발주 수량보다 적게 입고되는 품목(남는 DB 발주)을 계산한다.
+function computeOrderShortfalls(rows) {
+  if (currentType !== 'in') return [];
+  const ordered = new Map();
+  const submitted = new Map();
+  (rows || []).forEach(r => {
+    const bc = Number(r.boxContent) || 1;
+    const k = orderedKey(r.itemName, r.color, bc);
+    submitted.set(k, (submitted.get(k) || 0) + Math.abs(r.boxQty || 0) * bc + Math.abs(r.individualQty || 0));
+    const o = getOrderedInfo(r);
+    if (!o) return;
+    const obc = Number(o.item.boxContent) || 1;
+    const ok = orderedKey(o.item.itemName, o.item.color, obc);
+    const cur = ordered.get(ok) || { src: o.src, item: o.item, bc: obc, orderedUnits: 0 };
+    cur.orderedUnits += o.box * obc + o.unit;
+    ordered.set(ok, cur);
+  });
+  const result = [];
+  ordered.forEach((o, k) => {
+    const got = submitted.get(k) || 0;
+    const short = o.orderedUnits - got;
+    if (short > 0) result.push({ src: o.src, item: o.item, bc: o.bc, orderedUnits: o.orderedUnits, submittedUnits: got, shortUnits: short });
+  });
+  return result;
+}
+
+function formatUnitsAsBoxes(units, bc) {
+  const b = Math.floor(units / bc);
+  const u = units % bc;
+  return u > 0 ? `${b}상자 ${u}개` : `${b}상자`;
+}
+
+// 취소할 발주 수량 목록(shortUnits)을 어댑터가 받는 레코드로 변환해 창고별로 취소를 호출한다.
+function cancelOrderedShortfalls(list, onDone, onFail) {
+  const byWh = new Map();
+  list.forEach(s => {
+    const rec = {
+      orderedItem: s.item,
+      itemName: s.item.itemName, color: s.item.color, boxContent: s.bc,
+      orderedBoxQty: Math.floor(s.shortUnits / s.bc),
+      orderedUnitQty: s.shortUnits % s.bc
+    };
+    if (!byWh.has(s.src)) byWh.set(s.src, []);
+    byWh.get(s.src).push(rec);
+  });
+  const whs = [...byWh.keys()];
+  let idx = 0;
+  const next = () => {
+    if (idx >= whs.length) { if (onDone) onDone(); return; }
+    const wh = whs[idx++];
+    const started = callServer('cancelPendingInboundOrders', [wh, byWh.get(wh)], {
+      key: 'cancelOrderedShortfall',
+      onSuccess: next,
+      onError: err => { if (onFail) onFail(err); }
+    });
+    if (!started && onFail) onFail(new Error('이전 요청이 아직 처리 중입니다.'));
+  };
+  next();
+}
+
+// 제출 성공 후: 남은 발주를 취소할지 묻는다.
+function promptCancelOrderShortfalls(list) {
+  if (!list || list.length === 0) return;
+  const lines = list.map(s =>
+    `• ${s.item.itemName} (${s.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(s.orderedUnits, s.bc)} / 입고 ${formatUnitsAsBoxes(s.submittedUnits, s.bc)} → 남은 ${formatUnitsAsBoxes(s.shortUnits, s.bc)}`
+  );
+  const ok = confirm(
+    `📦 발주 수량보다 적게 입고되었습니다.\n\n${lines.join('\n')}\n\n` +
+    `남은 수량이 외부창고 발주(DB)에 '입고 예정'으로 계속 남아 유효재고에 잡혀 있습니다.\n\n` +
+    `[확인] 남은 수량의 발주를 취소합니다 (유효재고에서 제외)\n` +
+    `[취소] 발주를 유지합니다 (다음 입고 때 자동으로 소진)`
+  );
+  if (!ok) return;
+  cancelOrderedShortfalls(list,
+    () => { showAppToast('✅ 남은 발주가 취소되었습니다.', 2500); loadStockData(true); },
+    err => alert('남은 발주 취소에 실패했습니다. 발주는 그대로 유지됩니다.\n' + (err && err.message ? err.message : err))
+  );
 }
 
 function savePending() {
@@ -6724,6 +6865,15 @@ function loadPending() {
       `[취소]: 기존 품목 비우기 + 보류 품목으로 새로 교체 (덮어쓰기)`
     );
     modeChoice = shouldAppend ? 'append' : 'replace';
+    // 덮어쓰기는 장바구니의 발주 행을 통째로 버리므로, DB 발주가 유령으로 남지 않게 먼저 정리하도록 안내한다.
+    if (modeChoice === 'replace' && currentType === 'in' && records.some(r => getOrderedInfo(r))) {
+      alert(
+        '⚠️ 덮어쓸 수 없습니다.\n\n' +
+        '현재 장바구니에 외부창고 발주에서 불러온 품목이 있습니다. 덮어쓰면 해당 DB 발주(입고 예정)가 그대로 남게 됩니다.\n\n' +
+        '장바구니를 먼저 제출하거나, 다시 [보류]하거나, 행을 [삭제]한 뒤(삭제 시 발주 취소 여부를 묻습니다) 불러오세요.'
+      );
+      return;
+    }
   }
 
   // 수정 모드가 남아 있으면 이후 '추가'가 엉뚱한 행을 덮어쓰므로 해제
@@ -6795,6 +6945,12 @@ function loadPending() {
     }
     if (pendingData.isSubWarehouseOrder || pendingData.sourceWarehouse) {
       r.sourceWarehouse = pendingData.sourceWarehouse || pendingData.location;
+      // 발주 원본을 기록한다(이미 기록돼 있으면 재보류 이력이므로 원본을 유지).
+      if (currentType === 'in' && !r.orderedItem) {
+        r.orderedItem = { itemName: r.itemName, color: r.color || 'SURTIDO', boxContent: Number(r.boxContent) || 1 };
+        r.orderedBoxQty = Math.abs(r.boxQty || 0);
+        r.orderedUnitQty = Math.abs(r.individualQty || 0);
+      }
     }
     if (r.matchRate === undefined) r.matchRate = 100;
   });
@@ -6822,6 +6978,17 @@ function loadPending() {
       if (ex) {
         ex.boxQty = (ex.boxQty || 0) + (nr.boxQty || 0);
         ex.individualQty = (ex.individualQty || 0) + (nr.individualQty || 0);
+        // 발주 원본도 합산한다(직접 입력한 행에 합쳐지는 경우 발주분만 발주 수량으로 잡힌다).
+        if (nr.orderedItem) {
+          if (!ex.orderedItem) {
+            ex.orderedItem = nr.orderedItem;
+            ex.orderedBoxQty = 0;
+            ex.orderedUnitQty = 0;
+          }
+          ex.orderedBoxQty = (ex.orderedBoxQty || 0) + (nr.orderedBoxQty || 0);
+          ex.orderedUnitQty = (ex.orderedUnitQty || 0) + (nr.orderedUnitQty || 0);
+          if (!ex.sourceWarehouse) ex.sourceWarehouse = nr.sourceWarehouse;
+        }
         ex.matchRate = Math.min(ex.matchRate !== undefined ? ex.matchRate : 100, nr.matchRate !== undefined ? nr.matchRate : 100);
         if (nr.rawModel && !(ex.rawModel || '').includes(nr.rawModel)) {
           ex.rawModel = [ex.rawModel, nr.rawModel].filter(Boolean).join(', ');
