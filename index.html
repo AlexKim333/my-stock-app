@@ -6083,7 +6083,9 @@ function deleteRecord() {
     alert('삭제할 항목을 왼쪽 체크박스(☑️)로 선택해주세요.');
     return;
   }
-  // 보류에서 불러온 외부창고 발주 행을 지우면 DB 발주(입고 예정)가 유령으로 남는다. 취소할지 묻는다.
+  // 보류에서 불러온 외부창고 발주 행을 지우면 DB 발주(입고 예정)도 함께 취소한다.
+  // (되돌릴 화면이 없는 채로 발주만 남는 일이 없도록, 삭제 = 발주 취소로 통일한다.
+  //  나중에 쓸 품목은 삭제하지 말고 [보류]로 두면 된다.)
   const orderedRows = currentType === 'in'
     ? toDelete.map(i => records[i]).map(r => ({ r, o: getOrderedInfo(r) })).filter(x => x.o)
     : [];
@@ -6092,23 +6094,22 @@ function deleteRecord() {
       const bc = Number(o.item.boxContent) || 1;
       return `• ${o.item.itemName} (${o.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(o.box * bc + o.unit, bc)}`;
     });
-    const cancelDb = confirm(
+    const ok = confirm(
       `🗑️ 삭제하는 행 중 외부창고 발주에서 불러온 품목이 있습니다.\n\n${lines.join('\n')}\n\n` +
-      `이 발주는 DB에 '입고 예정'으로 남아 유효재고에 잡혀 있습니다. 행은 어느 쪽이든 삭제됩니다.\n\n` +
-      `[확인] 행 삭제 + 발주도 취소합니다 (유효재고에서 제외)\n` +
-      `[취소] 행만 삭제하고 발주는 유지합니다`
+      `삭제하면 외부창고 발주(입고 예정)도 함께 취소됩니다.\n` +
+      `나중에 사용할 품목이면 삭제하지 말고 [보류]를 누르세요.\n\n` +
+      `삭제하고 발주도 취소하시겠습니까?`
     );
-    if (cancelDb) {
-      const list = orderedRows.map(({ r, o }) => {
-        const bc = Number(o.item.boxContent) || 1;
-        return { src: o.src, item: o.item, bc, shortUnits: o.box * bc + o.unit };
-      });
-      cancelOrderedShortfalls(list,
-        () => { finishDeleteRecords(toDelete); loadStockData(true); },
-        err => alert('DB 발주 취소에 실패하여 행을 삭제하지 않았습니다.\n' + (err && err.message ? err.message : err))
-      );
-      return;
-    }
+    if (!ok) return;
+    const list = orderedRows.map(({ r, o }) => {
+      const bc = Number(o.item.boxContent) || 1;
+      return { src: o.src, item: o.item, bc, shortUnits: o.box * bc + o.unit };
+    });
+    cancelOrderedShortfalls(list,
+      () => { finishDeleteRecords(toDelete); loadStockData(true); },
+      err => alert('DB 발주 취소에 실패하여 행을 삭제하지 않았습니다.\n' + (err && err.message ? err.message : err))
+    );
+    return;
   }
   finishDeleteRecords(toDelete);
 }
@@ -6253,6 +6254,20 @@ function confirmSubmit() {
     if (confirmModalDiv) confirmModalDiv.style.display = 'none';
     return;
   }
+  // 외부창고 발주보다 적게 입고하면 남는 수량의 발주는 제출과 함께 취소된다. 제출 전에 한 번 확인받는다.
+  const preShortfalls = currentType === 'in' ? computeOrderShortfalls(records) : [];
+  if (preShortfalls.length > 0) {
+    const lines = preShortfalls.map(s =>
+      `• ${s.item.itemName} (${s.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(s.orderedUnits, s.bc)} / 입고 ${formatUnitsAsBoxes(s.submittedUnits, s.bc)} → 남은 ${formatUnitsAsBoxes(s.shortUnits, s.bc)}`
+    );
+    const proceed = confirm(
+      `📦 발주 수량보다 적게 입고합니다.\n\n${lines.join('\n')}\n\n` +
+      `제출하면 남은 수량의 외부창고 발주(입고 예정)는 취소됩니다.\n` +
+      `수량을 다시 확인하려면 [취소]를 누르세요.\n\n` +
+      `이대로 제출하시겠습니까?`
+    );
+    if (!proceed) return;
+  }
   const buttonContainer = document.querySelector('#modalButtons .button-container:first-child');
   if (!buttonContainer) return;
   const originalButton = buttonContainer.querySelector('button');
@@ -6279,7 +6294,7 @@ function confirmSubmit() {
     records.forEach(r => { r.warehouse = adjWh; });
   }
   const recordsToPrint = [...records];
-  // 외부창고 발주보다 적게 입고하는 경우, 성공 후 남는 DB 발주를 취소할지 물어보기 위해 미리 계산해 둔다.
+  // 제출 성공 후 남는 DB 발주를 취소하기 위해 제출 전 장바구니 기준으로 미리 계산해 둔다.
   const orderShortfalls = type === 'in' ? computeOrderShortfalls(records) : [];
   callServer(typeConfig[type].processFunction, [records, adminValue], {
     key: 'submitForm',
@@ -6377,9 +6392,9 @@ function confirmSubmit() {
         } catch (printErr) {
           console.warn('영수증 인쇄 중 예외 발생 (데이터는 정상 반영됨):', printErr);
         }
-        // 전표는 이미 확정됐다. 남은 발주(DB)를 취소할지 별도로 묻는다.
+        // 전표는 이미 확정됐다. 제출 전에 안내한 대로 남은 발주(DB)를 취소한다.
         if (orderShortfalls.length > 0) {
-          setTimeout(() => promptCancelOrderShortfalls(orderShortfalls), 300);
+          setTimeout(() => cancelRemainingOrders(orderShortfalls), 300);
         }
       }
     },
@@ -6522,22 +6537,12 @@ function cancelOrderedShortfalls(list, onDone, onFail) {
   next();
 }
 
-// 제출 성공 후: 남은 발주를 취소할지 묻는다.
-function promptCancelOrderShortfalls(list) {
+// 제출 성공 후: 발주보다 적게 입고한 만큼 남은 DB 발주를 취소한다(제출 전에 이미 안내·확인받음).
+function cancelRemainingOrders(list) {
   if (!list || list.length === 0) return;
-  const lines = list.map(s =>
-    `• ${s.item.itemName} (${s.item.color || 'SURTIDO'}): 발주 ${formatUnitsAsBoxes(s.orderedUnits, s.bc)} / 입고 ${formatUnitsAsBoxes(s.submittedUnits, s.bc)} → 남은 ${formatUnitsAsBoxes(s.shortUnits, s.bc)}`
-  );
-  const ok = confirm(
-    `📦 발주 수량보다 적게 입고되었습니다.\n\n${lines.join('\n')}\n\n` +
-    `남은 수량이 외부창고 발주(DB)에 '입고 예정'으로 계속 남아 유효재고에 잡혀 있습니다.\n\n` +
-    `[확인] 남은 수량의 발주를 취소합니다 (유효재고에서 제외)\n` +
-    `[취소] 발주를 유지합니다 (다음 입고 때 자동으로 소진)`
-  );
-  if (!ok) return;
   cancelOrderedShortfalls(list,
     () => { showAppToast('✅ 남은 발주가 취소되었습니다.', 2500); loadStockData(true); },
-    err => alert('남은 발주 취소에 실패했습니다. 발주는 그대로 유지됩니다.\n' + (err && err.message ? err.message : err))
+    err => alert('입고 전표는 정상 처리되었지만, 남은 발주 취소에 실패했습니다.\n남은 발주(입고 예정)가 그대로 남아 있으니 관리자에게 알려 주세요.\n' + (err && err.message ? err.message : err))
   );
 }
 
@@ -6870,7 +6875,7 @@ function loadPending() {
       alert(
         '⚠️ 덮어쓸 수 없습니다.\n\n' +
         '현재 장바구니에 외부창고 발주에서 불러온 품목이 있습니다. 덮어쓰면 해당 DB 발주(입고 예정)가 그대로 남게 됩니다.\n\n' +
-        '장바구니를 먼저 제출하거나, 다시 [보류]하거나, 행을 [삭제]한 뒤(삭제 시 발주 취소 여부를 묻습니다) 불러오세요.'
+        '장바구니를 먼저 제출하거나, 다시 [보류]하거나, 행을 [삭제]한 뒤(삭제하면 발주도 취소됩니다) 불러오세요.'
       );
       return;
     }
@@ -7069,12 +7074,14 @@ function deletePending() {
   }
   if (selectedPendingIndex >= pendingList.length) return;
 
-  if (!confirm('선택된 보류 데이터를 정말 삭제하시겠습니까?')) {
-    return;
-  }
-
   const targetIndex = selectedPendingIndex;
   const target = pendingList[targetIndex];
+  const isSubOrderHold = currentType === 'in' && target && (target.isSubWarehouseOrder || target.sourceWarehouse);
+  if (!confirm(isSubOrderHold
+    ? '선택된 보류를 삭제하면 외부창고 발주(입고 예정)도 함께 취소됩니다.\n정말 삭제하시겠습니까?'
+    : '선택된 보류 데이터를 정말 삭제하시겠습니까?')) {
+    return;
+  }
   // 외부창고 발주 보류는 DB(pending_orders)에도 PENDING으로 등록되어 유효재고(pending_in)에 잡힌다.
   // 목록만 지우면 유령 예약이 남으므로 DB 발주를 먼저 취소하고, 실패하면 삭제하지 않는다.
   const cancelSrc = currentType === 'in' && target && (target.isSubWarehouseOrder || target.sourceWarehouse)
