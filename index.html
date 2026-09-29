@@ -974,9 +974,9 @@
       border: 1px solid #ddd;
       box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
       z-index: 1000;
-      width: 80%;
-      max-width: 900px;
-      max-height: 80%;
+      width: 94vw;
+      max-width: 1400px;
+      max-height: 90vh;
       overflow: hidden;
     }
     #pendingModal .modal-content {
@@ -1000,14 +1000,21 @@
       overflow: hidden;
     }
     #pendingModal .summary-grid {
-      flex: 1;
-      overflow-y: auto;
+      /* 좌측 목록은 열 내용(보류 번호·날짜·위치·관리자·품목 수)이 모두 보이는 폭으로, 남는 폭은 우측 상세가 쓴다 */
+      flex: 0 0 auto;
+      max-width: 60%;
+      overflow: auto;
       border: 1px solid #ddd;
-      max-height: 300px
-      
+      max-height: calc(90vh - 170px);
+    }
+    #pendingModal .summary-grid table th,
+    #pendingModal .summary-grid table td {
+      white-space: nowrap;
+      padding: 6px 12px;
     }
     #pendingModal .detail-grid {
-      flex: 2;
+      flex: 1;
+      min-width: 0;
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -1021,15 +1028,12 @@
       flex: 1;
       overflow-y: auto;
       border: 1px solid #ddd;
-      max-height: 300px
-      /* Added to limit height and trigger scrollbar */
-      
+      max-height: calc(90vh - 200px);
     }
     /* Ensure tables fill their containers properly */
 #pendingModal .summary-grid table,
 #pendingModal .detail-table table {
   width: 100%;
-  min-height: 100%; /* Ensure table takes full container height */
 }
 
 /* Optional: Style the scrollbar for better visibility */
