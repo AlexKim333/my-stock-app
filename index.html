@@ -6907,7 +6907,56 @@ function deletePending() {
   }
 
   const targetIndex = selectedPendingIndex;
-  pendingList.splice(targetIndex, 1);
+  const target = pendingList[targetIndex];
+  // 외부창고 발주 보류는 DB(pending_orders)에도 PENDING으로 등록되어 유효재고(pending_in)에 잡힌다.
+  // 목록만 지우면 유령 예약이 남으므로 DB 발주를 먼저 취소하고, 실패하면 삭제하지 않는다.
+  const cancelSrc = currentType === 'in' && target && (target.isSubWarehouseOrder || target.sourceWarehouse)
+    ? String(target.sourceWarehouse || target.location || '').trim().toUpperCase()
+    : '';
+  if (cancelSrc && cancelSrc !== 'MAIN') {
+    isPendingOperating = true;
+    setPendingModalButtonsState(true, '⏳ 삭제중...');
+    const started = callServer('cancelPendingInboundOrders', [cancelSrc, target.records || []], {
+      key: 'cancelPendingInbound',
+      onSuccess: function(res) {
+        isPendingOperating = false;
+        setPendingModalButtonsState(false);
+        const unmatched = (res && res.unmatched) || [];
+        finishDeletePending(storageKey, targetIndex, target,
+          unmatched.length ? `\n\n(참고: ${unmatched.length}개 품목은 DB에 열린 발주가 부족해 일부만 취소되었습니다.)` : '');
+      },
+      onError: function(err) {
+        isPendingOperating = false;
+        setPendingModalButtonsState(false);
+        alert('DB 발주 취소에 실패하여 보류를 삭제하지 않았습니다.\n' + (err && err.message ? err.message : err));
+      }
+    });
+    if (!started) {
+      isPendingOperating = false;
+      setPendingModalButtonsState(false);
+    }
+    return;
+  }
+  finishDeletePending(storageKey, targetIndex, target, '');
+}
+
+function finishDeletePending(storageKey, targetIndex, target, extraMsg) {
+  // 서버 응답을 기다리는 사이 목록이 바뀌었을 수 있으니 다시 읽어 같은 항목인지 확인한다.
+  let pendingList = [];
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) pendingList = JSON.parse(saved);
+  } catch (e) {
+    return;
+  }
+  const same = p => p && target && p.createdAt === target.createdAt && (p.location || '') === (target.location || '');
+  let idx = targetIndex;
+  if (!same(pendingList[idx])) idx = pendingList.findIndex(same);
+  if (idx < 0) {
+    alert('보류 목록이 이미 변경되어 삭제할 항목을 찾지 못했습니다. 목록을 다시 열어 확인하세요.' + extraMsg);
+    return;
+  }
+  pendingList.splice(idx, 1);
   try {
     localStorage.setItem(storageKey, JSON.stringify(pendingList));
   } catch (e) {
@@ -6941,7 +6990,7 @@ function deletePending() {
     cancelPendingModal();
   }
   updatePendingCount();
-  alert('보류 데이터가 삭제되었습니다.');
+  alert('보류 데이터가 삭제되었습니다.' + extraMsg);
 }
 
 function cancelPendingModal() {

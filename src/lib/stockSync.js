@@ -22,6 +22,7 @@ const WRITE_METHODS = {
   processStockAdjustmentForm: (args, result) => [String(result?.warehouse || 'MAIN').toUpperCase()],
   updatePendingRecords: () => ['*'],
   submitSubWarehouseOrderDrafts: () => ['*'],
+  cancelPendingInboundOrders: () => ['*'],
   registerProduct: () => ['MAIN'],
   executeStockNormalization: () => ['*'],
   executeColorNormalization: () => ['*'],

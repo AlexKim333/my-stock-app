@@ -1642,6 +1642,54 @@ export const serverMethods = {
   },
 
   /**
+   * 15-1. 입고 보류 삭제 시 DB 발주(pending_orders) 취소 (cancelPendingInboundOrders)
+   * 보류 목록(localStorage)만 지우면 pending_orders(PENDING)가 남아 유효재고 pending_in 이 부풀려진다.
+   */
+  async cancelPendingInboundOrders(sourceWarehouse, records) {
+    const wh = String(sourceWarehouse || '').trim().toUpperCase()
+    if (!wh || wh === 'MAIN') throw new Error('취소할 발주의 출발(외부)창고를 알 수 없습니다.')
+
+    const items = []
+    for (const rec of (records || [])) {
+      const name = String(rec.itemName || '').trim()
+      const color = String(rec.color || 'SURTIDO').trim()
+      const boxContent = Number(rec.boxContent || 1)
+      const boxQty = Math.abs(Number(rec.boxQty || 0))
+      const unitQty = Math.abs(Number(rec.individualQty || 0))
+      if (!name || (boxQty <= 0 && unitQty <= 0)) continue
+
+      const key = `${name}_${color}_${boxContent}`
+      let itemId = itemIdCache.get(key) || null
+      if (!itemId) {
+        const { data: found, error: findErr } = await supabase
+          .from('items')
+          .select('id')
+          .eq('item_name', name)
+          .eq('color', color)
+          .eq('box_packaging_qty', boxContent)
+          .limit(1)
+        if (findErr) throw findErr
+        itemId = found && found[0] ? found[0].id : null
+        if (itemId) itemIdCache.set(key, itemId)
+      }
+      // 마스터에 없는 품목이면 DB 발주도 없다. 건너뛴다.
+      if (itemId) items.push({ item_id: itemId, box_qty: boxQty, unit_qty: unitQty })
+    }
+
+    if (items.length === 0) return { success: true, cancelled_units: 0, unmatched: [] }
+
+    const { data, error } = await supabase.rpc('rpc_cancel_pending_inbound_orders', {
+      p_source_warehouse: wh,
+      p_items: items
+    })
+    if (error) {
+      console.error('[SupabaseAdapter] cancelPendingInboundOrders 실패:', error)
+      throw new Error(error.message || '발주 취소에 실패했습니다.')
+    }
+    return data || { success: true, cancelled_units: 0, unmatched: [] }
+  },
+
+  /**
    * 16. 과거 피크 출고량 분석 및 과학적 안전재고(Safe Stock) 산출 엔진
    */
   async analyzeWinterPeakDemandAndSafeStock() {
