@@ -4997,7 +4997,7 @@ function loadDropdowns() {
       restoreMetadata();
       initLocationHotkeys();
     },
-    onError: handleError
+    onError: err => console.warn('[loadDropdowns] 거래처 목록 로딩 실패 (캐시 유지):', err)
   });
 }
 
@@ -5010,7 +5010,7 @@ function getInitialInvoice() {
       const invoiceSpan = document.getElementById('invoiceNumber');
       if (invoiceSpan) invoiceSpan.textContent = num; // +1 하지 않음
     },
-    onError: handleError
+    onError: err => console.warn('[getInitialInvoice] 전표번호 로딩 실패:', err)
   });
 }
 
