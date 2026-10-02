@@ -2659,7 +2659,9 @@ export function createGoogleScriptRunBridge() {
         try {
           result = await fn.apply(serverMethods, args)
         } catch (err) {
-          console.error(`[SupabaseAdapter] ${fnName} 오류:`, err)
+          // 일시적인 연결 끊김은 경고로만 남기고, 그 외 오류는 빨간 줄로 남긴다.
+          const log = shouldKeepIdempotencyKey(err) ? console.warn : console.error
+          log(`[SupabaseAdapter] ${fnName} 오류:`, err)
           if (typeof failureCb === 'function') {
             try { failureCb(err) } catch (cbErr) { console.error(`[SupabaseAdapter] ${fnName} 실패 핸들러 오류:`, cbErr) }
           }
