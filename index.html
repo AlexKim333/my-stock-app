@@ -7945,16 +7945,10 @@ function updateAiTokenPill(usageMetadata, usedModel) {
   if (divider) divider.style.display = 'inline';
 }
 
+// 버튼 복구는 각 호출부의 onSettled가 맡는다 (processingButton은 제출 함수의 지역 변수라 여기서 접근 불가).
 function handleError(error) {
-  alert('오류 발생: ' + error.message);
-  const buttonContainer = document.querySelector('#modalButtons .button-container:first-child');
-  if (buttonContainer) {
-    const originalButton = document.querySelector('.processing-button');
-    if (originalButton) originalButton.style.visibility = 'visible';
-    if (processingButton && buttonContainer.contains(processingButton)) {
-      buttonContainer.removeChild(processingButton);
-    }
-  }
+  console.error('[handleError]', error);
+  alert('오류 발생: ' + ((error && error.message) || error));
 }
 
 // printReceipt는 Shared.html로 이동했다 (SearchModify와 공유).
