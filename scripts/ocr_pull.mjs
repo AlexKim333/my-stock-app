@@ -38,13 +38,21 @@ function query(sql) {
     const r = spawnSync('npx', ['supabase', 'db', 'query', '--linked', '--output-format', 'json', '-f', tmp], {
       cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 256 * 1024 * 1024
     })
-    // CLI는 성공·실패 모두 stdout에 JSON을 낸다(실패: {"_tag":"Error","error":{"message":...}}).
-    const out = r.stdout || ''
+    // CLI는 성공·실패 모두 stdout에 JSON을 낸다. 성공 형태는 실행 환경에 따라 다르다:
+    //  - 일반 터미널: 행 배열 그대로 `[...]`
+    //  - AI 에이전트 안(AI_AGENT 등 환경변수): `{"boundary": ..., "rows": [...], "warning": ...}`
+    //  - 실패: `{"_tag":"Error","error":{"message":...}}`
+    const out = (r.stdout || '').trim()
+    const starts = [out.indexOf('['), out.indexOf('{')].filter(i => i >= 0)
     let json = null
-    try { json = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch { /* 아래에서 처리 */ }
-    if (r.status !== 0 || !json || json._tag === 'Error') {
-      const msg = json?.error?.message || (r.stderr || out).trim().split('\n').slice(-3).join('\n')
-      throw new Error(msg)
+    try { json = starts.length ? JSON.parse(out.slice(Math.min(...starts))) : null } catch { /* 아래에서 처리 */ }
+    if (Array.isArray(json) && r.status === 0) return json
+    if (r.status !== 0 || !json || json._tag === 'Error' || !Array.isArray(json.rows)) {
+      // 업데이트 안내·진행 메시지는 빼고, stdout과 stderr를 모두 보여준다(실제 원인이 어느 쪽에 있을지 모름).
+      const noise = /Initialising login role|new version of Supabase CLI|recommend updating|updating-the-supabase-cli/i
+      const detail = [out, r.stderr || '', r.error ? String(r.error) : '']
+        .join('\n').split('\n').map(l => l.trim()).filter(l => l && !noise.test(l)).join('\n')
+      throw new Error(json?.error?.message || detail || `supabase CLI 종료코드 ${r.status}`)
     }
     return json.rows || []
   } finally {
