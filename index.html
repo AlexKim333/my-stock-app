@@ -4202,6 +4202,8 @@ function loadServerAliases() {
  */
 function checkAndPromptRegisterAlias(rawAlias, targetModel) {
   if (!rawAlias || !targetModel) return;
+  // 여러 OCR 행이 합쳐진 행은 원문이 'A, B'처럼 이어져 있어 별명으로 쓸 수 없다.
+  if (rawAlias.includes(',')) return;
   const cleanRaw = normalizeAliasCleanKey(rawAlias);
   const cleanTarget = normalizeAliasCleanKey(targetModel);
   if (!cleanRaw || !cleanTarget || cleanRaw === cleanTarget) return;
@@ -5665,7 +5667,10 @@ function addRecord() {
     exitEditMode();
 
     // 🏷️ [자가학습 인터셉터] OCR 원문과 수정된 품명이 다르고 미등록 별명인 경우 룰북 영구 등록 제안
-    if (rawModelVal && typeof checkAndPromptRegisterAlias === 'function') {
+    // 품목 자체를 바꾼 수정일 때만 묻는다. 'OCR 원문'은 적힌 그대로(modelo_raw)라 품명과 다른 경우가 많아서,
+    // 수량만 고쳐도 묻게 되면 매번 등록 제안이 뜬다.
+    const itemChanged = normalizeAliasCleanKey(origRec.itemName) !== normalizeAliasCleanKey(formData.itemName);
+    if (rawModelVal && itemChanged && typeof checkAndPromptRegisterAlias === 'function') {
       checkAndPromptRegisterAlias(rawModelVal, formData.itemName);
     }
   } else {
