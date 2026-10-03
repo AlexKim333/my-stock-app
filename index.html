@@ -3823,13 +3823,27 @@ const WmsSearchEngine = (() => {
       const rawResults = _itemDocIndex.search(q, { limit: limit * 4 });
       const seen = new Set();
 
+      // 인덱스(_itemMap)는 색인 시점의 재고 객체를 붙잡고 있다. 재고 캐시가 제자리 갱신(출고 직후 등)되거나
+      // 통째로 교체돼도 인덱스는 재구성되지 않으므로, 결과는 항상 현재 캐시(options.items)의 객체로 바꿔 돌려준다.
+      let liveMap = null;
+      if (options.items) {
+        liveMap = new Map();
+        for (let i = 0; i < sourceItems.length; i++) {
+          const it = sourceItems[i];
+          if (!it) continue;
+          const rawName = it.name || it.codigo || it.itemName || '';
+          if (!rawName) continue;
+          liveMap.set(it.key || `${rawName}___${it.color || 'SURTIDO'}___${it.boxContent || 0}`, it);
+        }
+      }
+
       for (let f = 0; f < rawResults.length; f++) {
         const idList = rawResults[f].result || [];
         for (let i = 0; i < idList.length; i++) {
           const id = idList[i];
           if (!seen.has(id)) {
             seen.add(id);
-            const item = _itemMap.get(id);
+            const item = (liveMap && liveMap.get(id)) || _itemMap.get(id);
             if (item) candidateItems.push(item);
           }
         }
