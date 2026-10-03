@@ -106,6 +106,21 @@ Extract the following:
 9. "total_boxes": Total boxes number.
 
 Directly extract visible text without excessive deliberation. Return ONLY valid JSON.`
+    } else if (isAudit) {
+      promptText = `Analyze this warehouse stock count sheet ("Inventario" / physical inventory count, often handwritten).
+Each written row is one counted product.
+Extract:
+1. "date": Count date if visible (e.g. "2026-09-09"), else "".
+2. "warehouse": Warehouse/location name if written, else "".
+3. "items": Array of { "modelo": string, "color": string, "boxes": number, "piezas": number, "uncertain": boolean }.
+   - "modelo": Product code (clean uppercase code, e.g. "CK928K", "CCAK999C", "YE5015"). Mexican handwritten '5' may resemble 'S' and '0' may resemble 'O'; letter 'O' may look like 'A'.
+   - "color": Color word if written (Negro, Blanco, Azul, Surtido, etc.), else "".
+   - "boxes": Counted full boxes (integer, 0 if none).
+   - "piezas": Counted loose pieces (integer, 0 if none). If the sheet has a single count column, treat it as boxes unless it is labeled as pieces (pz, pzas, piezas).
+   - "uncertain": true if the code or any count is hard to read, else false. Never invent a count; give your best reading and mark it uncertain.
+   - One item per written row. Do NOT split or merge rows. Skip header rows, total rows, and crossed-out rows.
+
+Directly extract visible text without excessive deliberation. Return ONLY valid JSON.`
     } else {
       promptText = `Extract all handwritten order rows from the image.
 Rules:

@@ -9756,16 +9756,29 @@ function findBestCatalogMatch(query, catalog, threshold = 0.55) {
   }
 
   // 1-1단계: 접두사 일치 (query가 [품명 + 색상] 복합 쿼리인 경우)
+  // 품명 뒤에 남은 부분이 색상 단어뿐일 때만 품명이 정확히 같은 것이므로 100%로 확정한다.
+  // 그 외(예: 'ck928knegro'에 'CK928'이 걸리거나 'ck928x'처럼 오인식 글자가 붙은 경우)는
+  // 품명 자체가 다를 수 있으므로 확정하지 않고 2단계 유사도와 경쟁하는 후보로만 남긴다.
   let bestPrefixMatch = null;
   let maxPrefixLen = 0;
+  let fuzzyPrefixMatch = null;
+  let fuzzyPrefixLen = 0;
   for (let i = 0; i < catalog.length; i++) {
     const item = catalog[i];
     const nameClean = (item.name || '').replace(/[\s_\-\/]/g, '').toLowerCase();
     if (qClean.startsWith(nameClean) && nameClean.length >= 3) {
       const remainder = qClean.slice(nameClean.length);
-      const colorClean = (item.color || 'SURTIDO').replace(/[\s_\-\/]/g, '').toLowerCase();
+      const remainderColor = COLOR_SYNONYMS[remainder] || remainder.toUpperCase();
+      if (!KNOWN_COLORS.includes(remainderColor)) {
+        if (nameClean.length > fuzzyPrefixLen) {
+          fuzzyPrefixLen = nameClean.length;
+          fuzzyPrefixMatch = item;
+        }
+        continue;
+      }
+      const colorClean = (item.color || 'SURTIDO').replace(/[\s_\-\/]/g, '').toUpperCase();
       // 색상까지 일치하는 접두사 항목이 있으면 최우선 반환
-      if (remainder && (colorClean === remainder || remainder.includes(colorClean))) {
+      if (remainderColor === colorClean) {
         return { item: item, score: 1.0 };
       }
       if (nameClean.length > maxPrefixLen) {
@@ -9775,7 +9788,7 @@ function findBestCatalogMatch(query, catalog, threshold = 0.55) {
     }
   }
 
-  if (bestPrefixMatch && maxPrefixLen >= 3) {
+  if (bestPrefixMatch) {
     return { item: bestPrefixMatch, score: 1.0 };
   }
 
@@ -9787,6 +9800,16 @@ function findBestCatalogMatch(query, catalog, threshold = 0.55) {
     if (score > maxScore) {
       maxScore = score;
       best = item;
+    }
+  }
+
+  // 색상 외 글자가 붙은 접두사 후보: 품명을 그대로 포함하므로 유력하지만 100%는 아니다(최대 90%).
+  if (fuzzyPrefixMatch) {
+    const nameClean = (fuzzyPrefixMatch.name || '').replace(/[\s_\-\/]/g, '').toLowerCase();
+    const prefixScore = Math.min(0.9, sequenceMatcher(qClean, nameClean));
+    if (prefixScore > maxScore) {
+      maxScore = prefixScore;
+      best = fuzzyPrefixMatch;
     }
   }
 
@@ -10291,8 +10314,9 @@ function processHandwrittenImageFile(fileOrBlob) {
 
     showOcrLoadingModal(true, base64Data, `📷 압축 완료: ${compressLog}`);
 
-    // 입고/재고조사=서브창고 송장 및 재고조사표, 출고=고객 손글씨 주문서
-    callServer((isInbound || isAdj) ? 'analyzeCartaDePorte' : 'analyzeHandwrittenOrder', [base64Data], {
+    // 입고=서브창고 송장, 재고조사=재고조사표, 출고=고객 손글씨 주문서
+    const ocrMethod = isAdj ? 'analyzeStockAuditSheet' : (isInbound ? 'analyzeCartaDePorte' : 'analyzeHandwrittenOrder');
+    callServer(ocrMethod, [base64Data], {
       key: 'ocr',
       timeout: 180000,
       onSuccess: res => {
@@ -10380,7 +10404,9 @@ function onStockAuditSheetExtracted(res) {
     const itemName = matchMaster ? matchMaster.item.name : inv.modelo;
     const boxContent = matchMaster ? matchMaster.item.boxContent : 0;
     const color = inv.color || (matchMaster ? matchMaster.item.color : 'SURTIDO');
-    const matchScore = matchMaster ? Math.round((matchMaster.score || 0.9) * 100) : 70;
+    let matchScore = matchMaster ? Math.round((matchMaster.score || 0.9) * 100) : 70;
+    // 판독이 불확실한 행은 품명이 맞아도 낮은 일치율로 표시해 제출 전 눈으로 확인하게 한다.
+    if (inv.uncertain) matchScore = Math.min(matchScore, 50);
 
     records.push({
       itemName: itemName,
