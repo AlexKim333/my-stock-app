@@ -1,0 +1,35 @@
+{
+  "type": "handwritten",
+  "note": "합성 샘플. 카탈로그 힌트: 헷갈리는 글자(S/5, B/8, l/1)는 실제 품번으로, 카탈로그에 없는 새 품번(YE5017, CK928Z)은 적힌 그대로",
+  "header": {
+    "branch": "Carmen"
+  },
+  "items": [
+    {
+      "modelo": "YE5016",
+      "modelo_raw": "YES016",
+      "color": "NEGRO",
+      "boxes": 2
+    },
+    {
+      "modelo": "CK928J",
+      "modelo_raw": "CK92B J",
+      "boxes": 1
+    },
+    {
+      "modelo": "P-160",
+      "color": "BLANCO",
+      "boxes": 3
+    },
+    {
+      "modelo": "YE5017",
+      "modelo_raw": "YE5017",
+      "boxes": 4
+    },
+    {
+      "modelo": "CK928Z",
+      "modelo_raw": "CK928 Z",
+      "boxes": 1
+    }
+  ]
+}

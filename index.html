@@ -4079,7 +4079,21 @@ let PRODUCT_ALIAS_MAP = {
   'S077': 'YE5077',
   'SO77': 'YE5077',
   '5077': 'YE5077',
-  '5O77': 'YE5077'
+  '5O77': 'YE5077',
+
+  // CECIK999A~K: 손글씨 'CECIK'가 'CCAK'로 읽히는 경우 (사용자 확인)
+  // 별명은 접두사로도 매칭되므로 'CCAK999' 하나로 묶지 않고 변형별로 등록한다
+  // (묶으면 모든 변형이 존재하지 않는 품목 'CECIK999'로 매칭됨).
+  'CCAK999A': 'CECIK999A',
+  'CCAK999B': 'CECIK999B',
+  'CCAK999C': 'CECIK999C',
+  'CCAK999D': 'CECIK999D',
+  'CCAK999E': 'CECIK999E',
+  'CCAK999F': 'CECIK999F',
+  'CCAK999G': 'CECIK999G',
+  'CCAK999H': 'CECIK999H',
+  'CCAK999J': 'CECIK999J',
+  'CCAK999K': 'CECIK999K'
 };
 
 function normalizeAliasCleanKey(str) {
@@ -4118,6 +4132,9 @@ function resolveModelAlias(rawQuery) {
   }
 
   // 3. 별명 맵 전수 비교 (완전 일치, O/0 혼동 무시 일치, 접두사 일치)
+  // 접두사 일치 중 확정할 수 없는 것은 partial로 표시한다. 검색창 추천에는 쓰지만(예: 'FAJ' → P-160),
+  // OCR 자동 매칭은 resolveModelAliasExact로 이를 제외한다(예: OCR이 'C'만 읽었는데 'CECI-D'로 100% 확정되는 문제).
+  let partialMatch = null;
   for (const [aliasClean, target] of Object.entries(PRODUCT_ALIAS_MAP)) {
     const normA = normalizeAliasCleanKey(aliasClean);
     if (!normA) continue;
@@ -4128,17 +4145,32 @@ function resolveModelAlias(rawQuery) {
       return { targetModel: target, rawAlias: rawQuery.trim() };
     }
 
-    // 3-2. 접두사 일치 (예: query가 'SO15 SURTIDO' 처럼 색상/수량이 뒤에 붙은 경우)
-    if (normA.length >= 3) {
-      if (clean.startsWith(normA) || clean0.startsWith(normA0)) {
+    if (normA.length < 3) continue;
+
+    // 3-2. 별명 뒤에 글자가 더 붙은 경우: 숫자 없는 2글자 이상(색상·설명, 예: 'SO15 SURTIDO', 'FAJA NEGRA')이면 확정.
+    // 숫자나 한 글자가 붙으면(예: 'P1605', 'CCAK999CX') 다른 품번일 수 있어 확정하지 않는다.
+    const remainder = clean.startsWith(normA) ? clean.slice(normA.length)
+      : (clean0.startsWith(normA0) ? clean0.slice(normA0.length) : null);
+    if (remainder !== null) {
+      if (/^[A-Z]{2,}$/.test(remainder)) {
         return { targetModel: target, rawAlias: rawQuery.trim() };
       }
-      if (normA.startsWith(clean) || normA0.startsWith(clean0)) {
-        return { targetModel: target, rawAlias: rawQuery.trim() };
-      }
+      if (!partialMatch) partialMatch = { targetModel: target, rawAlias: rawQuery.trim(), partial: true };
+      continue;
+    }
+
+    // 3-3. 입력이 별명의 앞부분뿐인 경우 (예: 검색창에 'FAJ' 입력 중)
+    if (!partialMatch && (normA.startsWith(clean) || normA0.startsWith(clean0))) {
+      partialMatch = { targetModel: target, rawAlias: rawQuery.trim(), partial: true };
     }
   }
-  return null;
+  return partialMatch;
+}
+
+/** OCR 자동 매칭용: 확정 가능한 별명만 돌려준다(접두사만 걸친 partial 결과는 제외). */
+function resolveModelAliasExact(rawQuery) {
+  const r = resolveModelAlias(rawQuery);
+  return r && !r.partial ? r : null;
 }
 
 /**
@@ -4175,7 +4207,7 @@ function checkAndPromptRegisterAlias(rawAlias, targetModel) {
   if (!cleanRaw || !cleanTarget || cleanRaw === cleanTarget) return;
 
   // 이미 해당 품목으로 등록된 별명인지 검사
-  const existing = resolveModelAlias(rawAlias);
+  const existing = resolveModelAliasExact(rawAlias);
   if (existing && normalizeAliasCleanKey(existing.targetModel) === cleanTarget) {
     return; // 이미 등록된 별명
   }
@@ -5606,6 +5638,11 @@ function addRecord() {
     if (origRec.isDelta !== undefined) {
       formData.isDelta = origRec.isDelta;
     }
+    // 수정은 사람이 OCR 결과를 바로잡은 것이므로 정답 세트 표본 id를 그대로 유지한다.
+    if (origRec.ocrSampleIds) {
+      formData.ocrSampleIds = origRec.ocrSampleIds;
+      formData.ocrSampleMixed = origRec.ocrSampleMixed;
+    }
     formData.matchRate = 100;
     formData.isManualEdited = true;
     // 입고 수정 시 외부발주 출발창고 정보 유지
@@ -6517,6 +6554,7 @@ function confirmSubmitCore() {
     key: 'submitForm',
     timeout: 90000, // 다건 전표는 시트 일괄 쓰기가 길어질 수 있다
     onSuccess: result => {
+      if (type !== 'product') confirmOcrSamplesFromRecords(recordsToPrint);
       if (type === 'product') {
         const duplicates = result.filter(r => !r.success);
         if (duplicates.length > 0) {
@@ -7275,6 +7313,7 @@ function loadPending() {
         if (nr.rawModel && !(ex.rawModel || '').includes(nr.rawModel)) {
           ex.rawModel = [ex.rawModel, nr.rawModel].filter(Boolean).join(', ');
         }
+        mergeOcrSampleTag(ex, nr);
       } else {
         merged.push(nr);
       }
@@ -9707,7 +9746,7 @@ function sequenceMatcher(a, b) {
   return Math.min(1.0, Math.max(0.0, composite));
 }
 
-function findBestCatalogMatch(query, catalog, threshold = 0.55) {
+function findBestCatalogMatch(query, catalog, threshold = 0.55, options = {}) {
   if (!catalog || catalog.length === 0) return null;
   const q = (query || '').toLowerCase().trim();
   let best = null;
@@ -9715,9 +9754,9 @@ function findBestCatalogMatch(query, catalog, threshold = 0.55) {
   const qClean = q.replace(/[\s_\-\/]/g, '').toLowerCase();
 
   // -1단계: 🏷️ 사장님 별명(Alias) 룰북 최우선 매칭 (100% 일치율 보장)
-  let aliasMatch = resolveModelAlias(query);
-  if (!aliasMatch && query !== qClean) {
-    aliasMatch = resolveModelAlias(qClean);
+  let aliasMatch = options.skipAlias ? null : resolveModelAliasExact(query);
+  if (!aliasMatch && !options.skipAlias && query !== qClean) {
+    aliasMatch = resolveModelAliasExact(qClean);
   }
   if (aliasMatch) {
     const targetClean = aliasMatch.targetModel.replace(/[\s_\-\/]/g, '').toLowerCase();
@@ -9728,13 +9767,12 @@ function findBestCatalogMatch(query, catalog, threshold = 0.55) {
     if (matchedItem) {
       return { item: matchedItem, score: 1.0, isAlias: true, rawAlias: aliasMatch.rawAlias };
     }
-    // 룰북에 명시된 품목이면 카탈로그에 일시 미로딩되었더라도 지정된 타겟 모델명으로 100% 확정 반환
-    return {
-      item: { name: aliasMatch.targetModel, color: 'SURTIDO', boxContent: 0 },
-      score: 1.0,
-      isAlias: true,
-      rawAlias: aliasMatch.rawAlias
-    };
+    // 별명 대상이 카탈로그에 없음(비활성화·이름 변경·잘못된 등록). 존재하지 않는 품목을 100%로 만들지 않고
+    // 별명이 가리키는 품명으로 일반 매칭해 90% 이하로 표시한다(카탈로그는 위에서 비어 있지 않음을 확인함).
+    console.warn(`[별명사전] '${aliasMatch.rawAlias}' → '${aliasMatch.targetModel}' 대상 품목이 카탈로그에 없습니다.`);
+    const viaTarget = findBestCatalogMatch(aliasMatch.targetModel, catalog, threshold, { skipAlias: true });
+    if (viaTarget) viaTarget.score = Math.min(viaTarget.score, 0.9);
+    return viaTarget;
   }
 
   // 0단계: 품명 + 색상 동시 완전 일치 최우선 (예: "pd60blanco" === "pd60blanco")
@@ -10418,7 +10456,8 @@ function onStockAuditSheetExtracted(res) {
       adjType: currentAdjType,
       unitType: (inv.boxes > 0 ? 'box' : 'individual'),
       matchRate: matchScore,
-      rawModel: inv.modelo || '',
+      rawModel: inv.modelo_raw || inv.modelo || '', // 'OCR 원문'은 카탈로그 보정 전 원문
+      ...ocrSampleTag(res.ocrSampleId),
       rawColor: inv.color || ''
     });
     addedCount++;
@@ -10462,6 +10501,8 @@ function applyCartaDePorteDelta(res) {
 
     if (foundIdx !== -1) {
       matchedInvoiceIndexes.add(foundIdx);
+      // 송장 수량으로 덮어쓰는(합산이 아닌) 행이라 수량이 섞이지 않는다. 송장 판독의 확정 결과로 태그만 단다.
+      if (res.ocrSampleId) rec.ocrSampleIds = Array.from(new Set([...(rec.ocrSampleIds || []), res.ocrSampleId]));
       const matchedInv = invoiceItems[foundIdx];
       const oldQty = Math.abs(rec.boxQty);
       const newQty = matchedInv.boxes;
@@ -10500,7 +10541,8 @@ function applyCartaDePorteDelta(res) {
         unitType: 'box',
         _isNewAdded: true,
         matchRate: matchScore,
-        rawModel: inv.modelo || '',
+        rawModel: inv.modelo_raw || inv.modelo || '', // 'OCR 원문'은 카탈로그 보정 전 원문
+      ...ocrSampleTag(res.ocrSampleId),
         rawColor: inv.color || ''
       });
       newAddedCount++;
@@ -10566,7 +10608,8 @@ function loadCartaDePorteDirectly(res) {
       location: originWh,
       unitType: 'box',
       matchRate: matchScore,
-      rawModel: inv.modelo || '',
+      rawModel: inv.modelo_raw || inv.modelo || '', // 'OCR 원문'은 카탈로그 보정 전 원문
+      ...ocrSampleTag(res.ocrSampleId),
       rawColor: inv.color || ''
     });
   });
@@ -10609,6 +10652,52 @@ function showOcrLoadingModal(show, previewSrc, compressInfo) {
 function onHandwrittenError(err) {
   showOcrLoadingModal(false);
   alert('❌ 손글씨 분석 중 오류가 발생했습니다:\n' + (err.message || err));
+}
+
+// -------------------------------------------------------------------
+// 🧪 OCR 정답 세트 수집 (ocr_samples)
+// 서버가 스캔마다 사진·판독 결과를 저장하고 ocrSampleId를 돌려준다. 그 스캔에서 나온 행에 id를 달아 두었다가
+// 제출에 성공하면 사람이 확정한 행을 스캔별로 서버에 붙인다(npm run ocr:pull로 내려받아 정답 세트로 사용).
+// -------------------------------------------------------------------
+function ocrSampleTag(sampleId) {
+  return sampleId ? { ocrSampleIds: [sampleId] } : {};
+}
+
+/** 행을 합칠 때 표본 id도 합친다. 다른 스캔이나 직접 입력한 행과 합쳐지면 수량이 섞이므로 mixed로 표시한다. */
+function mergeOcrSampleTag(target, source) {
+  const t = target.ocrSampleIds || [];
+  const s = source.ocrSampleIds || [];
+  if (!t.length && !s.length) return;
+  const ids = Array.from(new Set([...t, ...s]));
+  target.ocrSampleMixed = !!(target.ocrSampleMixed || source.ocrSampleMixed || ids.length > 1 || !t.length || !s.length);
+  target.ocrSampleIds = ids;
+}
+
+function confirmOcrSamplesFromRecords(submitted) {
+  const bySample = new Map();
+  (submitted || []).forEach(r => {
+    (r.ocrSampleIds || []).forEach(id => {
+      if (!bySample.has(id)) bySample.set(id, { id, items: [], note: null });
+      const sample = bySample.get(id);
+      if (r.ocrSampleMixed) sample.note = 'mixed';
+      sample.items.push({
+        itemName: r.itemName,
+        color: r.color || 'SURTIDO',
+        boxQty: Math.abs(r.boxQty || 0),
+        individualQty: Math.abs(r.individualQty || 0),
+        boxContent: r.boxContent || 0,
+        rawModel: r.rawModel || ''
+      });
+    });
+  });
+  if (bySample.size === 0) return;
+  // 정답 세트 수집은 부가 기능이라 실패해도 사용자에게 알리지 않는다.
+  callServer('confirmOcrSamples', [Array.from(bySample.values())], {
+    key: 'ocrSampleConfirm',
+    timeout: 15000,
+    onSuccess: () => {},
+    onError: err => console.warn('[정답 세트] 확정 결과 저장 실패:', err && err.message)
+  });
 }
 
 // -------------------------------------------------------------------
@@ -11008,6 +11097,7 @@ function selectDisambiguatedLocation(selectedLoc) {
         if (newRec.rawModel && !existingRec.rawModel?.includes(newRec.rawModel)) {
           existingRec.rawModel = [existingRec.rawModel, newRec.rawModel].filter(Boolean).join(', ');
         }
+        mergeOcrSampleTag(existingRec, newRec);
         mergedIntoExistingCount++;
       } else {
         records.push(newRec);
@@ -11337,18 +11427,25 @@ function onHandwrittenExtracted(data) {
       const combinedQuery = queryBase ? `${queryBase} ${color}`.trim() : color;
 
       // 0순위: 모델 코드(queryBase) 또는 복합 쿼리(combinedQuery)의 별명사전 룰북 우선 검사
-      const aliasDirect = resolveModelAlias(queryBase) || resolveModelAlias(combinedQuery);
-      if (aliasDirect) {
-        const targetClean = aliasDirect.targetModel.replace(/[\s_\-\/]/g, '').toLowerCase();
-        const matchedItem = (stockDataCache || []).find(it => 
-          (it.name || '').replace(/[\s_\-\/]/g, '').toLowerCase() === targetClean
-        );
+      const aliasDirect = resolveModelAliasExact(queryBase) || resolveModelAliasExact(combinedQuery);
+      const catalogLoaded = stockDataCache && stockDataCache.length > 0;
+      const aliasItem = aliasDirect && (stockDataCache || []).find(it =>
+        (it.name || '').replace(/[\s_\-\/]/g, '').toLowerCase() === aliasDirect.targetModel.replace(/[\s_\-\/]/g, '').toLowerCase()
+      );
+      if (aliasDirect && (aliasItem || !catalogLoaded)) {
+        // 카탈로그가 아직 없을 때만 별명 품명을 그대로 쓴다(제출 단계에서 다시 검증됨).
         matchRes = {
-          item: matchedItem || { name: aliasDirect.targetModel, color: color || 'SURTIDO', boxContent: 0 },
+          item: aliasItem || { name: aliasDirect.targetModel, color: color || 'SURTIDO', boxContent: 0 },
           score: 1.0,
           isAlias: true,
           rawAlias: aliasDirect.rawAlias
         };
+      } else if (aliasDirect) {
+        // 별명 대상이 카탈로그에 없음(비활성화·이름 변경·잘못된 등록). 존재하지 않는 품목을 100%로 확정하지 않고
+        // 별명이 가리키는 품명으로 일반 매칭해 90% 이하로 표시한다.
+        console.warn(`[별명사전] '${aliasDirect.rawAlias}' → '${aliasDirect.targetModel}' 대상 품목이 카탈로그에 없습니다.`);
+        matchRes = findBestCatalogMatch(`${aliasDirect.targetModel} ${color}`, stockDataCache, 0.55, { skipAlias: true });
+        if (matchRes) matchRes.score = Math.min(matchRes.score, 0.9);
       } else {
         matchRes = findBestCatalogMatch(combinedQuery, stockDataCache, 0.55);
       }
@@ -11475,7 +11572,8 @@ function onHandwrittenExtracted(data) {
     group.boxQty += rowBoxQty;
     group.individualQty += rowIndivQty;
     group.rawSources.push({
-      rawModel,
+      // 매칭에는 카탈로그로 보정된 modelo를 쓰고, 'OCR 원문' 표시·별명 학습에는 적힌 그대로인 modelo_raw를 쓴다.
+      rawModel: String(r.modelo_raw || '').trim() || rawModel,
       rawColor,
       rawQty: rawQtyExpr,
       boxes: rowBoxQty,
@@ -11506,7 +11604,8 @@ function onHandwrittenExtracted(data) {
       rawModel: group.rawSources.map(s => s.rawModel).filter(Boolean).join(', '),
       rawColor: group.rawSources.map(s => s.rawColor).filter(Boolean).join(', '),
       isAlias: group.rawSources.some(s => s.isAlias),
-      aliasName: group.rawSources.map(s => s.rawAlias).filter(Boolean).join(', ')
+      aliasName: group.rawSources.map(s => s.rawAlias).filter(Boolean).join(', '),
+      ...ocrSampleTag(data.ocrSampleId)
     });
     addedCount++;
   });
@@ -11564,6 +11663,7 @@ function onHandwrittenExtracted(data) {
           if (newRec.rawModel && !existingRec.rawModel?.includes(newRec.rawModel)) {
             existingRec.rawModel = [existingRec.rawModel, newRec.rawModel].filter(Boolean).join(', ');
           }
+          mergeOcrSampleTag(existingRec, newRec);
           mergedIntoExistingCount++;
         } else {
           records.push(newRec);

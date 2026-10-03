@@ -2050,6 +2050,16 @@ export const serverMethods = {
   },
 
   /**
+   * 17-1. OCR 정답 세트: 제출된 행을 스캔 표본별 확정 결과로 저장 (ocr_samples)
+   */
+  async confirmOcrSamples(samples) {
+    if (!Array.isArray(samples) || samples.length === 0) return { success: true, count: 0 }
+    const { data, error } = await supabase.rpc('rpc_ocr_sample_confirm', { p_samples: samples })
+    if (error) throw error
+    return data
+  },
+
+  /**
    * 18. 통합 관제 대시보드 지표 실시간 집계 (getDashboardMetrics)
    */
   async getDashboardMetrics() {

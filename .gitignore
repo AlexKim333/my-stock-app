@@ -40,3 +40,7 @@ scratch/
 *.sw?
 
 .vercel
+
+# OCR 정답 세트: 실제 고객 사진과 로컬 기준선은 커밋하지 않는다
+tests/ocr/private/
+tests/ocr/.baseline.json

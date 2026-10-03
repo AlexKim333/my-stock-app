@@ -30,6 +30,22 @@ npm run verify
 npm run test:ai
 ```
 
+`api/ocr.js`(손글씨 주문서·송장·재고조사표 OCR의 프롬프트·스키마·모델)를 수정했다면 수정 **전에**
+기준선을 저장하고, 수정 후 다시 돌려 케이스별 점수를 비교하세요. 실제 Gemini를 호출하므로(장당 소액 과금,
+`.env.local`의 `GEMINI_API_KEY` 필요) `npm run verify`처럼 매번 자동으로 돌리지는 않습니다:
+
+```bash
+npm run test:ocr -- --update-baseline
+```
+
+- 정답 세트는 `tests/ocr/cases/`(커밋되는 합성 샘플)와 `tests/ocr/private/`(실제 고객 사진, 커밋 안 됨)에 있습니다.
+  케이스 추가 방법은 `tests/ocr/README.md`를 보세요.
+- 결과가 매번 조금씩 다를 수 있으니, 점수가 떨어지면 `--runs=3`으로 재현되는지 먼저 확인하세요.
+- 실제 사진 정답 세트는 앱에서 자동 수집되어(`ocr_samples` 테이블) `npm run ocr:pull`로 `tests/ocr/private`에
+  내려받습니다. 이 테이블에는 고객 이름이 담긴 사진이 있으므로 anon 읽기 정책·RPC를 추가하지 마세요(CLI로만 읽음).
+- 모델 대체(fallback)·시간 예산·오류 응답 로직은 네트워크 없이 도는 `npm run test:ocr:fallback`으로 검사합니다
+  (`npm test`에 포함). `api/ocr.js`를 고쳤다면 이것도 통과시키세요.
+
 ### 2. 입고 / 출고 / 이동 / 재고조정 로직(RPC, 재고 계산)을 건드렸다면 — 추가로
 
 이 프로젝트는 로컬/스테이징 Supabase가 없고 프로덕션 DB 하나만 존재합니다. 아래 스크립트로

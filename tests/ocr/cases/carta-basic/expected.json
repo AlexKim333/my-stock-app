@@ -1,0 +1,11 @@
+{
+  "type": "cartadeporte",
+  "note": "합성 샘플. 인쇄 헤더(날짜·출발 창고)와 손글씨 품목 행",
+  "header": { "date": "2026-09-09", "origin_warehouse": "LERMA" },
+  "items": [
+    { "modelo": "CK928K", "boxes": 1 },
+    { "modelo": "CK928J", "boxes": 1 },
+    { "modelo": "P-160", "boxes": 4 },
+    { "modelo": "YE5015", "boxes": 3 }
+  ]
+}
