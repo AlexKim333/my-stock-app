@@ -2050,6 +2050,22 @@ export const serverMethods = {
   },
 
   /**
+   * 17-0. OCR 정답 세트: 스캔 사진과 AI 판독 결과를 저장하고 표본 id를 돌려준다 (ocr_samples)
+   * 스캔 결과를 받은 뒤 화면이 백그라운드로 호출한다(사진 저장을 기다리느라 스캔이 늦어지지 않게).
+   */
+  async saveOcrSample(scanType, imageBase64, ocrResult, usedModel) {
+    const b64 = String(imageBase64 || '').replace(/^data:[^,]*,/, '')
+    const { data, error } = await supabase.rpc('rpc_ocr_sample_create', {
+      p_scan_type: scanType,
+      p_image_b64: b64,
+      p_ocr_result: ocrResult || {},
+      p_used_model: usedModel || null
+    })
+    if (error) throw error
+    return data
+  },
+
+  /**
    * 17-1. OCR 정답 세트: 제출된 행을 스캔 표본별 확정 결과로 저장 (ocr_samples)
    */
   async confirmOcrSamples(samples) {

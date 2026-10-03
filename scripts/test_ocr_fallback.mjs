@@ -151,23 +151,18 @@ const goodAudit = { date: '', warehouse: '', items: [{ modelo: 'CK928K', color: 
 }
 
 {
+  // 정답 세트 사진 저장은 화면이 결과를 받은 뒤 백그라운드로 한다. 서버는 스캔 응답을 늦추지 않도록
+  // 저장하지 않고, 수집을 켤지만 알려준다.
   process.env.OCR_SAMPLE_COLLECT = 'on'
   scenario(['k1'], { k1: () => okBody(goodOrder) })
   sampleCalls = []
   const r = await run()
-  const saved = sampleCalls[0] || {}
-  check('정답 세트 수집: 성공한 스캔은 표본 id를 함께 돌려줌', r.status === 200 && r.body.ocrSampleId === '11111111-2222-3333-4444-555555555555', JSON.stringify(r.body))
-  check('정답 세트 수집: 사진·판독 결과·모델을 저장하고 토큰 사용량은 빼고 저장', saved.p_scan_type === 'handwritten' && saved.p_image_b64 === 'AAAA' &&
-    saved.p_used_model === 'k1' && Array.isArray(saved.p_ocr_result?.results) && saved.p_ocr_result.usageMetadata === undefined, JSON.stringify(saved))
-
-  sampleSave = () => new Response('{"message":"세션이 만료되었습니다."}', { status: 400 })
-  const failed = await run()
-  check('정답 세트 저장이 실패해도 OCR 결과는 정상 반환', failed.status === 200 && failed.body.ocrSampleId === null && failed.body.results?.length === 1, JSON.stringify(failed.body))
+  check('정답 세트: 서버는 사진을 저장하지 않음(응답 지연 방지)', r.status === 200 && sampleCalls.length === 0, JSON.stringify(sampleCalls))
+  check('정답 세트: 수집이 켜져 있음을 화면에 알림', r.body.collectSample === true, JSON.stringify(r.body))
 
   process.env.OCR_SAMPLE_COLLECT = 'off'
-  sampleCalls = []
   const off = await run()
-  check('OCR_SAMPLE_COLLECT=off면 저장하지 않음', off.status === 200 && sampleCalls.length === 0 && off.body.ocrSampleId === null, JSON.stringify(sampleCalls))
+  check('OCR_SAMPLE_COLLECT=off면 수집 꺼짐으로 알림', off.status === 200 && off.body.collectSample === false, JSON.stringify(off.body))
 }
 
 console.log(`\n${fail ? '❌' : '🎉'} OCR 대체 모델 전략: ${pass}개 통과, ${fail}개 실패`)

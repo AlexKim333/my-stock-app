@@ -10418,6 +10418,14 @@ function processHandwrittenImageFile(fileOrBlob) {
           showOcrLoadingModal(false);
           return;
         }
+        // 정답 세트: 임시 id로 행에 먼저 태그를 달고, 사진은 결과를 보여준 뒤 백그라운드로 저장한다.
+        // 저장은 결과 처리보다 먼저 시작한다(결과 처리의 완료 알림창이 닫힐 때까지 기다리지 않게).
+        // 저장 완료 콜백은 비동기라 아래 결과 처리가 행에 태그를 단 뒤에야 실행된다.
+        const localSampleId = (res && res.collectSample) ? newLocalOcrSampleId() : null;
+        if (localSampleId) {
+          res.ocrSampleId = localSampleId;
+          saveOcrSampleInBackground(localSampleId, isAdj ? 'audit' : (isInbound ? 'cartadeporte' : 'handwritten'), base64Data, res);
+        }
         if (isAdj) onStockAuditSheetExtracted(res);
         else if (isInbound) onCartaDePorteExtracted(res);
         else onHandwrittenExtracted(res);
@@ -10721,6 +10729,45 @@ function needsMatchReview(rec) {
     rec.matchRate !== undefined && rec.matchRate !== null && rec.matchRate < REVIEW_MATCH_RATE;
 }
 
+// 사진 저장은 스캔 결과를 받은 뒤 백그라운드로 한다. 그동안 행에는 임시 id('local-…')를 달고,
+// 저장이 끝나면 진짜 id로 바꾼다. 출고처 선택 대기 중인 행처럼 아직 장바구니에 없는 행도 있으므로
+// 제출 때도 이 표로 한 번 더 바꾼다(저장이 끝나기 전에 제출된 표본은 건너뜀).
+const _ocrSampleIdMap = new Map();
+let _localOcrSampleSeq = 0;
+
+function newLocalOcrSampleId() {
+  return `local-${Date.now()}-${++_localOcrSampleSeq}`;
+}
+
+function resolveOcrSampleId(id) {
+  if (!id || !String(id).startsWith('local-')) return id || null;
+  return _ocrSampleIdMap.get(id) || null;
+}
+
+function saveOcrSampleInBackground(localId, scanType, imageBase64, res) {
+  const { usageMetadata, attempts, usedModel, catalogHintSize, collectSample, ocrSampleId, ...ocrResult } = res || {};
+  const apply = realId => {
+    if (typeof realId !== 'string' || !realId) return;
+    _ocrSampleIdMap.set(localId, realId);
+    let changed = false;
+    (records || []).forEach(r => {
+      if (Array.isArray(r.ocrSampleIds) && r.ocrSampleIds.includes(localId)) {
+        r.ocrSampleIds = r.ocrSampleIds.map(id => (id === localId ? realId : id));
+        changed = true;
+      }
+    });
+    if (changed) saveTableData();
+  };
+  // 저장마다 키를 따로 둔다(같은 키면 연속 스캔의 저장이 '중복 요청'으로 무시됨). 실패해도 스캔에는 영향 없음.
+  callServer('saveOcrSample', [scanType, imageBase64, ocrResult, usedModel || null], {
+    key: `ocrSampleSave:${localId}`,
+    timeout: 30000,
+    onSuccess: apply,
+    onLateSuccess: apply,
+    onError: err => console.warn('[정답 세트] 사진 저장 실패:', err && err.message)
+  });
+}
+
 function ocrSampleTag(sampleId) {
   return sampleId ? { ocrSampleIds: [sampleId] } : {};
 }
@@ -10738,7 +10785,9 @@ function mergeOcrSampleTag(target, source) {
 function confirmOcrSamplesFromRecords(submitted) {
   const bySample = new Map();
   (submitted || []).forEach(r => {
-    (r.ocrSampleIds || []).forEach(id => {
+    (r.ocrSampleIds || []).forEach(rawId => {
+      const id = resolveOcrSampleId(rawId);
+      if (!id) return; // 사진 저장이 아직 안 끝났거나 실패한 표본
       if (!bySample.has(id)) bySample.set(id, { id, items: [], note: null });
       const sample = bySample.get(id);
       if (r.ocrSampleMixed) sample.note = 'mixed';

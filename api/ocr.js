@@ -8,8 +8,8 @@ const MAX_IMAGE_BASE64_CHARS = 6 * 1024 * 1024
 const MODEL_TIMEOUT_MS = 25000
 const SESSION_CHECK_TIMEOUT_MS = 5000
 const CATALOG_TIMEOUT_MS = 5000
-const CATALOG_TTL_MS = 10 * 60 * 1000
-const SAMPLE_SAVE_TIMEOUT_MS = 4000
+// 최근 품번 목록은 자주 바뀌지 않으므로 1시간 캐시한다(목록에 없는 품번도 화면 매칭은 전체 카탈로그로 함).
+const CATALOG_TTL_MS = 60 * 60 * 1000
 
 // Gemini response_schema(OpenAPI 부분집합). 필드 누락·형식 깨짐을 막고 상자 수를 정수로 강제한다.
 // propertyOrdering을 주지 않으면 모델이 알파벳 순으로 생성하므로, 품번을 수량보다 먼저 읽도록 순서를 고정한다.
@@ -306,39 +306,6 @@ function failureResponse(attempts) {
   return { status: 502, error: `AI 분석에 실패했습니다. 잠시 뒤 다시 시도하세요. (${summary})` }
 }
 
-/**
- * OCR 정답 세트 자동 수집(ocr_samples). 실패해도 OCR 결과는 그대로 돌려준다.
- * OCR_SAMPLE_COLLECT=off로 끌 수 있다. 저장 정책은 supabase/migrations/20261003120000_ocr_samples.sql 참고.
- */
-async function saveOcrSample({ token, scanType, imageB64, ocrResult, usedModel, deadline }) {
-  if (process.env.OCR_SAMPLE_COLLECT === 'off') return null
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
-  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
-  const remaining = Math.min(SAMPLE_SAVE_TIMEOUT_MS, deadline - Date.now())
-  if (!supabaseUrl || !anonKey || remaining < 500) return null
-  try {
-    const resp = await fetchWithTimeout(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/rpc_ocr_sample_create`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: anonKey,
-        Authorization: `Bearer ${anonKey}`,
-        'x-wms-session': token
-      },
-      body: JSON.stringify({ p_scan_type: scanType, p_image_b64: imageB64, p_ocr_result: ocrResult, p_used_model: usedModel })
-    }, remaining)
-    if (!resp.ok) {
-      console.warn('OCR sample save skipped:', resp.status, (await resp.text().catch(() => '')).slice(0, 200))
-      return null
-    }
-    const id = await resp.json().catch(() => null)
-    return typeof id === 'string' ? id : null
-  } catch (e) {
-    console.warn('OCR sample save skipped:', e.message)
-    return null
-  }
-}
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' })
@@ -348,8 +315,7 @@ export default async function handler(req, res) {
   try {
     // 카탈로그는 공개 읽기 데이터라 세션 확인과 동시에 불러와 대기 시간을 줄인다.
     const catalogPromise = loadCatalogCodes()
-    const sessionToken = headerValue(req, 'x-wms-session').trim()
-    const session = await verifyWmsSession(sessionToken)
+    const session = await verifyWmsSession(headerValue(req, 'x-wms-session').trim())
     if (!session.ok) {
       return res.status(session.status).json({ error: session.error })
     }
@@ -483,16 +449,9 @@ Rules:
     parsed.usageMetadata = result.usageMetadata
     parsed.catalogHintSize = catalogCodes ? catalogCodes.length : 0
     parsed.attempts = result.attempts
-    // 정답 세트 수집: 사진과 판독 결과를 저장하고 id를 화면에 넘긴다(제출 때 확정 품목을 붙임).
-    const { usageMetadata, attempts, ...ocrResult } = parsed
-    parsed.ocrSampleId = await saveOcrSample({
-      token: sessionToken,
-      scanType: isCarta ? 'cartadeporte' : (isAudit ? 'audit' : 'handwritten'),
-      imageB64: cleanB64,
-      ocrResult,
-      usedModel: result.model,
-      deadline: startedAt + envInt('OCR_DEADLINE_MS', 50000) + 5000
-    })
+    // 정답 세트 수집(ocr_samples)은 화면이 결과를 받은 뒤 백그라운드로 저장한다(사진 저장을 기다리느라
+    // 스캔 결과가 늦어지지 않게). 서버는 수집을 켤지만 알려준다(OCR_SAMPLE_COLLECT=off로 끔).
+    parsed.collectSample = process.env.OCR_SAMPLE_COLLECT !== 'off'
     return res.status(200).json(parsed)
   } catch (err) {
     console.error('OCR API Handler error:', err)
