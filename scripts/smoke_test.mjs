@@ -18,6 +18,9 @@
  * npm run verify처럼 항상 자동으로 도는 게 아니라, 입출고/이동/조정 로직을
  * 건드린 뒤 수동으로 `npm run smoke`로 실행하는 것을 전제로 한다(네트워크 +
  * 실 DB 쓰기가 있어 빠르지도, 오프라인이지도 않다).
+ *
+ * 통과하면 `npm run smoke`가 이어서 scripts/cleanup_smoke.mjs --soft로 이번 실행이 남긴
+ * 테스트 전표를 정리한다(이 파일 자체는 정리하지 않는다 — 정리 없이 돌리려면 `npm run smoke:run`).
  */
 import { createClient } from '@supabase/supabase-js'
 import { randomUUID } from 'node:crypto'

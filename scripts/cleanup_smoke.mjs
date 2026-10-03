@@ -20,6 +20,9 @@
  * 사용법:
  *   npm run smoke:clean              # 삭제
  *   npm run smoke:clean -- --dry-run # 지울 대상만 보여주고 삭제하지 않음
+ *   --soft                           # Supabase CLI 연결 실패를 경고로만 처리하고 종료코드 0
+ *                                    # (npm run smoke가 통과한 뒤 자동 정리할 때 쓴다 — 정리를 못 해도
+ *                                    #  스모크 통과 결과를 실패로 바꾸지 않기 위함. 잔여 재고 중단은 그대로 실패)
  */
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
@@ -30,6 +33,7 @@ const TEST_ITEM_NAME = '__SMOKETEST_ITEM__'
 const TEST_ITEM_COLOR = 'TEST'
 const SMOKE_MEMO_PREFIX = '스모크테스트'
 const dryRun = process.argv.includes('--dry-run')
+const soft = process.argv.includes('--soft')
 
 // SQL은 임시 파일로 넘긴다 (Windows 셸에서 따옴표/% 이스케이프 문제를 피하려고).
 function runSql(sql) {
@@ -118,7 +122,12 @@ function main() {
 try {
   main()
 } catch (err) {
-  console.error('❌ 정리 실패:', err.message || err)
-  console.error('   Supabase CLI가 로그인/링크된 상태인지 확인하세요 (npx supabase login, npx supabase link).')
-  process.exitCode = 1
+  if (soft) {
+    console.warn('⚠️  스모크 전표를 자동 정리하지 못했습니다 (스모크 테스트 결과에는 영향 없음):', err.message || err)
+    console.warn('   Supabase CLI 로그인/링크 후 `npm run smoke:clean`으로 직접 정리하세요.')
+  } else {
+    console.error('❌ 정리 실패:', err.message || err)
+    console.error('   Supabase CLI가 로그인/링크된 상태인지 확인하세요 (npx supabase login, npx supabase link).')
+    process.exitCode = 1
+  }
 }
