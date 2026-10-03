@@ -16,6 +16,10 @@
  * 옵션
  *  --dry-run        내려받지 않고 대상만 보여준다
  *  --delete-pulled  내려받은 표본을 DB에서 지운다(DB 용량 절약. 사진은 로컬에만 남는다)
+ *  --timing         DB 조회 없이, 내려받아 둔 표본의 처리 시간 요약만 보여준다
+ *
+ * 내려받기가 끝나면 표본에 기록된 처리 시간(스캔 → 결과까지)을 요약한다. 시간 기록은 처리 시간 측정이
+ * 배포된 뒤의 스캔부터 남는다.
  */
 import fs from 'fs'
 import os from 'os'
@@ -29,6 +33,7 @@ const BATCH = 5
 const args = new Set(process.argv.slice(2))
 const dryRun = args.has('--dry-run')
 const deletePulled = args.has('--delete-pulled')
+const timingOnly = args.has('--timing')
 
 /** Supabase CLI로 SQL을 실행하고 rows를 돌려준다. SQL은 따옴표 문제를 피하려고 임시 파일로 넘긴다. */
 function query(sql) {
@@ -96,7 +101,50 @@ function existingIds() {
   return ids
 }
 
+/** 내려받아 둔 표본의 처리 시간 요약(중앙값·90%·최대). ocr_result.json의 timings/clientTimings를 읽는다. */
+export function timingStats(dir = OUT_DIR) {
+  const series = { total: [], ai: [], serverOther: [], transfer: [], catalogWait: [] }
+  if (fs.existsSync(dir)) {
+    for (const d of fs.readdirSync(dir)) {
+      const f = path.join(dir, d, 'ocr_result.json')
+      if (!fs.existsSync(f)) continue
+      let r
+      try { r = JSON.parse(fs.readFileSync(f, 'utf8')) } catch { continue }
+      const t = r.timings || {}, c = r.clientTimings || {}
+      if (c.totalMs) series.total.push(c.totalMs)
+      if (t.aiMs) series.ai.push(t.aiMs)
+      if (t.serverMs && t.aiMs) series.serverOther.push(t.serverMs - t.aiMs)
+      if (c.totalMs && t.serverMs) series.transfer.push(Math.max(0, c.totalMs - t.serverMs))
+      if (t.catalogWaitMs !== undefined) series.catalogWait.push(t.catalogWaitMs)
+    }
+  }
+  const summarize = xs => {
+    if (!xs.length) return null
+    const v = [...xs].sort((a, b) => a - b)
+    const at = q => v[Math.max(0, Math.ceil(q * v.length) - 1)] // 최근접 순위 백분위
+    return { n: v.length, median: at(0.5), p90: at(0.9), max: v[v.length - 1] }
+  }
+  return Object.fromEntries(Object.entries(series).map(([k, xs]) => [k, summarize(xs)]))
+}
+
+function printTimingStats() {
+  const s = timingStats()
+  if (!s.total && !s.ai) {
+    console.log('\n⏱ 처리 시간 기록이 있는 표본이 아직 없습니다(처리 시간 측정 배포 이후 스캔부터 기록).')
+    return
+  }
+  const sec = ms => (ms / 1000).toFixed(1) + '초'
+  const line = (label, x) => x && console.log(`   ${label.padEnd(14)} 중앙값 ${sec(x.median)}  90% ${sec(x.p90)}  최대 ${sec(x.max)}  (${x.n}건)`)
+  console.log('\n⏱ 처리 시간 (스캔 → 결과 표시)')
+  line('전체(체감)', s.total)
+  line('AI 판독', s.ai)
+  line('서버 기타', s.serverOther)
+  line('압축·전송', s.transfer)
+  line('품번 목록 대기', s.catalogWait)
+}
+
 function main() {
+  if (timingOnly) return printTimingStats()
   console.log('🔎 확정된 OCR 표본을 조회합니다 (Supabase CLI)...')
   let list
   try {
@@ -118,7 +166,7 @@ function main() {
   for (const r of todo) {
     console.log(`   - ${String(r.created_at).slice(0, 16)} ${r.scan_type.padEnd(12)} ${r.item_count}개 품목${r.confirm_note === 'mixed' ? ' (합쳐진 행 있음)' : ''}`)
   }
-  if (dryRun || todo.length === 0) return
+  if (dryRun || todo.length === 0) return printTimingStats()
 
   fs.mkdirSync(OUT_DIR, { recursive: true })
   const pulled = []
@@ -154,6 +202,7 @@ function main() {
     console.log(`🗑️ DB에서 ${pulled.length}건 삭제 (사진은 로컬에만 남음)`)
   }
   console.log(`\n✅ ${pulled.length}건 내려받음. expected.json을 사진과 대조해 검토한 뒤 "needs_review": false로 바꾸세요.`)
+  printTimingStats()
 }
 
 // 테스트에서 toExpectedItems만 가져다 쓸 수 있게, 직접 실행했을 때만 내려받기를 한다.

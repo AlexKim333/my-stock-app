@@ -159,6 +159,9 @@ const goodAudit = { date: '', warehouse: '', items: [{ modelo: 'CK928K', color: 
   const r = await run()
   check('정답 세트: 서버는 사진을 저장하지 않음(응답 지연 방지)', r.status === 200 && sampleCalls.length === 0, JSON.stringify(sampleCalls))
   check('정답 세트: 수집이 켜져 있음을 화면에 알림', r.body.collectSample === true, JSON.stringify(r.body))
+  const t = r.body.timings || {}
+  check('처리 시간: 단계별 시간(세션·품번 목록·AI·서버 전체)을 응답에 포함',
+    ['sessionMs', 'catalogWaitMs', 'aiMs', 'serverMs'].every(k => Number.isFinite(t[k]) && t[k] >= 0) && t.serverMs >= t.aiMs, JSON.stringify(t))
 
   process.env.OCR_SAMPLE_COLLECT = 'off'
   const off = await run()

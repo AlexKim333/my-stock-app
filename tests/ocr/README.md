@@ -20,7 +20,11 @@
 npm run ocr:pull -- --dry-run      # 받을 대상만 확인
 npm run ocr:pull                   # private/<날짜>-<종류>-<id>/ 로 내려받기 (이미 받은 건 건너뜀)
 npm run ocr:pull -- --delete-pulled  # 내려받은 뒤 DB에서 삭제 (DB 용량 절약)
+npm run ocr:pull -- --timing       # DB 조회 없이, 받아 둔 표본의 처리 시간 요약만
 ```
+
+내려받기가 끝나면 처리 시간(스캔 → 결과 표시) 요약도 나옵니다: 전체 체감 시간, AI 판독, 서버 기타, 압축·전송 각각의
+중앙값·90%·최대. 느린 원인이 AI인지 다른 단계인지 구분할 때 씁니다. 처리 시간 측정이 배포된 뒤의 스캔부터 기록됩니다.
 
 - Supabase CLI 로그인·링크(`npx supabase login`, `npx supabase link`)가 필요합니다. 앱의 anon 키로는 이 테이블을 읽을 수 없습니다.
 - 내려받은 `expected.json`은 제출 결과로 만든 **초안**(`"needs_review": true`)입니다. 직접 입력한 행은 빠지고,

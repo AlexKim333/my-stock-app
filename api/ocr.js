@@ -314,8 +314,16 @@ export default async function handler(req, res) {
   const startedAt = Date.now()
   try {
     // 카탈로그는 공개 읽기 데이터라 세션 확인과 동시에 불러와 대기 시간을 줄인다.
-    const catalogPromise = loadCatalogCodes()
+    // 단계별 처리 시간(ms). 응답에 실어 화면 완료 알림·정답 세트 표본에 남긴다(느린 원인이 AI인지 구분용).
+    const timings = {}
+    const catalogStartedAt = Date.now()
+    const catalogPromise = loadCatalogCodes().then(codes => {
+      timings.catalogLoadMs = Date.now() - catalogStartedAt // 캐시 적중이면 0에 가깝다
+      return codes
+    })
+    const sessionStartedAt = Date.now()
     const session = await verifyWmsSession(headerValue(req, 'x-wms-session').trim())
+    timings.sessionMs = Date.now() - sessionStartedAt
     if (!session.ok) {
       return res.status(session.status).json({ error: session.error })
     }
@@ -418,12 +426,15 @@ Rules:
     const responseSchema = isCarta ? CARTA_SCHEMA : (isAudit ? AUDIT_SCHEMA : ORDER_SCHEMA)
 
     // 카탈로그 힌트를 맨 앞 파트에 둔다. 같은 앞부분이 반복되어야 Gemini 암묵적 캐시가 적중한다.
+    const catalogWaitStartedAt = Date.now()
     const catalogCodes = await catalogPromise
+    timings.catalogWaitMs = Date.now() - catalogWaitStartedAt // 세션 확인과 겹치고 남은, 실제로 기다린 시간
     const parts = []
     if (catalogCodes && catalogCodes.length) parts.push({ text: catalogHintText(catalogCodes) })
     parts.push({ text: promptText })
     parts.push({ inline_data: { mime_type: 'image/jpeg', data: cleanB64 } })
 
+    const aiStartedAt = Date.now()
     const result = await generateWithFallback({
       apiKey,
       body: {
@@ -452,6 +463,9 @@ Rules:
     // 정답 세트 수집(ocr_samples)은 화면이 결과를 받은 뒤 백그라운드로 저장한다(사진 저장을 기다리느라
     // 스캔 결과가 늦어지지 않게). 서버는 수집을 켤지만 알려준다(OCR_SAMPLE_COLLECT=off로 끔).
     parsed.collectSample = process.env.OCR_SAMPLE_COLLECT !== 'off'
+    timings.aiMs = Date.now() - aiStartedAt // 대체 모델 재시도 포함
+    timings.serverMs = Date.now() - startedAt
+    parsed.timings = timings
     return res.status(200).json(parsed)
   } catch (err) {
     console.error('OCR API Handler error:', err)
