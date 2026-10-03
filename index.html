@@ -5392,9 +5392,21 @@ function addRecord() {
     const adjRadio = document.querySelector('input[name="adjType"]:checked');
     adjType = adjRadio ? adjRadio.value : 'replace';
     location = (adjType === 'increment' ? '재고추가' : '재고치환');
-    if (!itemName || (!qty && unitType === 'box') || (!qty && unitType === 'individual')) {
+    // 치환 모드에서 실사수량을 "0"으로 직접 입력한 경우는 재고 소진(0 확정)이므로 확인 후 허용한다.
+    // 비어 있거나 숫자가 아닌 입력, 추가 모드의 0은 기존처럼 막는다.
+    const isExplicitZero = adjType === 'replace' && qty === 0 && /^\s*0+\s*[pP]?\s*$/.test(rawQtyStr);
+    if (!itemName || (!qty && !isExplicitZero)) {
       alert('필수 항목(품명, 실사수량)을 입력하세요.');
       return;
+    }
+    if (isExplicitZero) {
+      const zeroUnitName = unitType === 'box' ? '상자' : '개';
+      const colorLabel = color ? ` (${color})` : '';
+      if (!confirm(`[${itemName}${colorLabel}] 실사수량이 0${zeroUnitName}이(가) 맞습니까?\n\n제출 시 해당 품목의 재고가 0으로 조정됩니다.`)) {
+        qtyInput.focus();
+        qtyInput.select();
+        return;
+      }
     }
   } else {
     if (!locationSelect) {
@@ -5510,7 +5522,7 @@ function addRecord() {
         const exist = records[existingIndex];
         const addedBox = formData.boxQty || 0;
         const addedIndiv = formData.individualQty || 0;
-        const addedStr = (addedBox > 0) ? `${addedBox}상자` : `${addedIndiv}개`;
+        const addedStr = (addedBox > 0 || unitType === 'box') ? `${addedBox}상자` : `${addedIndiv}개`;
 
         if (!exist.history || !Array.isArray(exist.history)) {
           const prevB = exist.boxQty || 0;
@@ -5536,7 +5548,7 @@ function addRecord() {
       }
       const initBox = formData.boxQty || 0;
       const initIndiv = formData.individualQty || 0;
-      formData.history = [(initBox > 0) ? `${initBox}상자` : `${initIndiv}개`];
+      formData.history = [(initBox > 0 || unitType === 'box') ? `${initBox}상자` : `${initIndiv}개`];
     }
     records.push(formData);
   }
@@ -5608,7 +5620,8 @@ function enterEditMode(idx) {
 
   if (qtyInput) {
     const qtyVal = isIndiv ? Math.abs(rec.individualQty || 0) : Math.abs(rec.boxQty || 0);
-    qtyInput.value = qtyVal || '';
+    // 재고조정(치환)의 실사수량 0은 유효한 값이므로 빈칸으로 지우지 않고 "0"으로 보여준다.
+    qtyInput.value = qtyVal || ((currentType === 'adj' && rec.adjType !== 'increment') ? '0' : '');
   }
 
   if (locationSelect && rec.location) {
