@@ -3,8 +3,8 @@
  * 🔥 WMS 핵심 흐름 스모크 테스트 (입고 / 출고 / 이동 / 재고조정)
  * ---------------------------------------------------------------------------
  * npm run verify(정적 분석)와 달리, 이 스크립트는 실제 프로덕션 Supabase에
- * 로그인해서 입고 → 이동 → 이동복귀 → 출고 → 재고부족 가드 → 재고조정까지
- * 실제 RPC를 호출하고 매 단계 재고 수치를 검증한다. 로컬/스테이징 DB가 없는
+ * 로그인해서 입고 → 이동 → 이동복귀 → 출고 → 재고부족 가드 → 서브창고발 출고 →
+ * 재고조정까지 실제 RPC를 호출하고 매 단계 재고 수치를 검증한다. 로컬/스테이징 DB가 없는
  * 프로젝트라(memory: stock-app-production-db 참고) 프로덕션 자체를 상대로
  * 돈다 — 그래서 반드시:
  *   1. 전용 테스트 창고(SMOKETEST)와 전용 테스트 품목(__SMOKETEST_ITEM__)만
@@ -222,6 +222,44 @@ async function main() {
     if (!threw) throw new Error('재고 부족인데 출고가 성공해버렸습니다 (음수 재고 가드 회귀 의심)')
     const main = await readStock(db, itemId, 'MAIN')
     assertEqual(main.box_qty, 0, 'MAIN 박스재고 (실패한 시도 후에도 변화 없어야 함)')
+  })
+
+  // 서브창고발 출고: 출발창고가 MAIN이 아니어도 그 창고 재고만 차감되고, 그 창고 재고가 모자라면 막혀야 한다.
+  // (앱에서 서브창고를 출발창고로 골라 고객에게 출고하는 경로. 이 시점 MAIN은 0이라 MAIN 재고가 부족분을 가리지 못한다.)
+  await step(`TEST 5-1: 입고(INBOUND) +10상자 → ${TEST_WAREHOUSE_CODE} (서브창고 출고 준비)`, async () => {
+    await processTx(db, { txType: 'INBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 10, unit_qty: 0 }] })
+    const main = await readStock(db, itemId, 'MAIN')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 10, `${TEST_WAREHOUSE_CODE} 박스재고`)
+    assertEqual(main.box_qty, 0, 'MAIN 박스재고 (변화 없어야 함)')
+  })
+
+  await step(`TEST 5-2: 출고(OUTBOUND) -4상자 ← ${TEST_WAREHOUSE_CODE} (서브창고발 출고)`, async () => {
+    await processTx(db, { txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 4, unit_qty: 0 }] })
+    const main = await readStock(db, itemId, 'MAIN')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고`)
+    assertEqual(main.box_qty, 0, 'MAIN 박스재고 (서브창고 출고가 MAIN을 건드리면 안 됨)')
+  })
+
+  await step(`TEST 5-3: 서브창고 재고 부족 가드 — ${TEST_WAREHOUSE_CODE} 6상자에서 7상자 출고 시도는 반드시 실패해야 함`, async () => {
+    let threw = false
+    try {
+      await processTx(db, { txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 7, unit_qty: 0 }] })
+    } catch {
+      threw = true
+    }
+    if (!threw) throw new Error('서브창고 재고 부족인데 출고가 성공해버렸습니다 (음수 재고 가드 회귀 의심)')
+    const main = await readStock(db, itemId, 'MAIN')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+    assertEqual(main.box_qty, 0, 'MAIN 박스재고 (변화 없어야 함)')
+  })
+
+  await step(`TEST 5-4: 출고(OUTBOUND) -6상자 ← ${TEST_WAREHOUSE_CODE} (0상자로 정리)`, async () => {
+    await processTx(db, { txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 6, unit_qty: 0 }] })
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 0, `${TEST_WAREHOUSE_CODE} 박스재고`)
   })
 
   let adjustInvoice
