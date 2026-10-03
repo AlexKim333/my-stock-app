@@ -27,6 +27,12 @@
  *  --update-baseline   이번 결과를 기준선(tests/ocr/.baseline.json, 커밋 안 됨)으로 저장
  *  --min-f1=<0~1>      전체 행 F1이 이 값보다 낮으면 종료코드 1
  *  --no-catalog        카탈로그 품번 힌트 없이 실행 (힌트 효과 비교용, OCR_CATALOG_HINT=off와 같음)
+ *  --no-screen         화면 매칭까지 포함한 채점을 건너뜀(카탈로그를 읽지 않음)
+ *
+ * 점수는 두 가지다.
+ *  - 행 F1(판독):  AI가 낸 modelo를 정답과 그대로 비교. 프롬프트·모델 변경의 효과를 본다.
+ *  - 행 F1(화면):  AI 판독을 앱 화면과 같은 매칭(별명 룰북·카탈로그)에 통과시킨 뒤 비교. 사용자가 실제로 보는 정확도.
+ *    '불일치 80%↑'는 정답과 다른 품목(또는 정답에 없는 행)이 ⚠️ 없이 표시된 경우로, 0이어야 안전하다.
  *
  * 기준선이 있으면 케이스별 점수를 기준선과 나란히 보여주므로, 프롬프트 수정 전에 한 번
  * --update-baseline으로 저장해 두고 수정 후 다시 돌려 비교하면 된다.
@@ -73,6 +79,95 @@ function callOcr(type, imageBase64) {
     }
     handler({ method: 'POST', headers: { 'x-wms-session': 'test' }, body: { type, imageBase64 } }, res)
   })
+}
+
+// ---------------------------------------------------------------------------
+// 화면 매칭까지 포함한 채점
+// AI 판독(modelo)을 앱 화면과 같은 매칭(별명 룰북 → findBestCatalogMatch)에 통과시켜, 사용자가 실제로 보는
+// 품목·일치율로 채점한다. 매칭 함수는 index.html에서 그대로 떼어 쓰고, 카탈로그·DB 별명은 anon 키로 읽는다.
+// 주문서 화면의 앞 행 이어받기·접미사 파생 같은 부가 처리는 재현하지 않는다(핵심 매칭만).
+// ---------------------------------------------------------------------------
+const SCREEN_REVIEW_SCORE = 0.8 // 화면 배지 기준: 80% 미만이면 ⚠️ 확인 필요
+
+async function loadScreenMatcher() {
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8')
+  const cut = (from, to) => {
+    const a = html.indexOf(from), b = html.indexOf(to)
+    if (a < 0 || b < 0 || b < a) throw new Error(`index.html에서 '${from}' 구간을 찾지 못함(코드 구조가 바뀜)`)
+    return html.slice(a, b)
+  }
+  const src = cut('let PRODUCT_ALIAS_MAP = {', 'function loadServerAliases()') +
+    cut('const COLOR_SYNONYMS = {', '// 💡 [자매 품목 탐색 엔진]')
+  const url = String(process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')
+  const key = process.env.VITE_SUPABASE_ANON_KEY
+  const headers = { apikey: key, Authorization: `Bearer ${key}` }
+  const getJson = async p => {
+    const r = await realFetch(`${url}/rest/v1/${p}`, { headers })
+    if (!r.ok) throw new Error(`${p.split('?')[0]} ${r.status}`)
+    return r.json()
+  }
+  const catalog = []
+  for (let o = 0; o < 20000; o += 1000) {
+    const rows = await getJson(`items?select=item_name,color,box_packaging_qty&is_active=eq.true&order=id&limit=1000&offset=${o}`)
+    rows.forEach(r => catalog.push({ name: r.item_name, color: r.color || 'SURTIDO', boxContent: r.box_packaging_qty }))
+    if (rows.length < 1000) break
+  }
+  // DB 별명을 앱(getAliasMap)과 같은 키로 합친다.
+  const serverAliases = {}
+  for (const r of await getJson('aliases?select=alias,target_item_name')) {
+    const a = String(r.alias || '').trim().toUpperCase()
+    if (!a || !r.target_item_name) continue
+    serverAliases[a] = r.target_item_name
+    serverAliases[a.replace(/[\s_\-\/.,#]+/g, '')] = r.target_item_name
+  }
+  const quiet = { ...console, warn: () => {} }
+  const { findBestCatalogMatch, resolveModelAliasExact } = new Function('console', 'serverAliases',
+    src + '; Object.assign(PRODUCT_ALIAS_MAP, serverAliases); return { findBestCatalogMatch, resolveModelAliasExact };'
+  )(quiet, serverAliases)
+  const clean = s => String(s || '').replace(/[\s_\-\/]/g, '').toUpperCase()
+
+  // 주문서 화면(onHandwrittenExtracted)의 독립 행 매칭과 같은 순서·점수 규칙
+  return (modelo, color) => {
+    const c = String(color || 'SURTIDO').toUpperCase() || 'SURTIDO'
+    const alias = resolveModelAliasExact(modelo) || resolveModelAliasExact(`${modelo} ${c}`)
+    const aliasItem = alias && catalog.find(it => clean(it.name) === clean(alias.targetModel))
+    if (aliasItem) return { name: aliasItem.name, score: 1 }
+    const m = findBestCatalogMatch(`${modelo} ${c}`, catalog, 0.55)
+    if (!m) return { name: modelo, score: 0.4 }
+    const exact = clean(m.item.name) === clean(modelo)
+    return { name: m.item.name, score: exact ? 1 : Math.min(0.99, Math.max(0.6, m.score)) }
+  }
+}
+
+let screenMatch = null
+if (!args['no-screen']) {
+  try {
+    screenMatch = await loadScreenMatcher()
+  } catch (e) {
+    console.warn(`⚠️ 화면 매칭 채점을 건너뜁니다: ${e.message}`)
+  }
+}
+
+/** 화면에서 매칭된 품목 이름으로 기대 품목과 짝짓는다. 틀렸는데 80% 이상이면 '위험'(⚠️ 없이 지나감). */
+function scoreScreen(expected, body) {
+  const norm = s => String(s || '').replace(/[\s_\-\/]/g, '').toUpperCase()
+  const shown = (body.results || body.items || []).map(a => ({ a, ...screenMatch(a.modelo, a.color) }))
+  const used = new Set()
+  let matched = 0
+  for (const exp of expected.items) {
+    const idx = shown.findIndex((s, i) => !used.has(i) && norm(s.name) === norm(exp.modelo))
+    if (idx >= 0) { used.add(idx); matched++ }
+  }
+  const wrong = shown.filter((_, i) => !used.has(i))
+  const precision = shown.length ? matched / shown.length : (expected.items.length ? 0 : 1)
+  const recall = expected.items.length ? matched / expected.items.length : 1
+  return {
+    f1: precision + recall ? (2 * precision * recall) / (precision + recall) : 0,
+    matched, shownRows: shown.length, expectedRows: expected.items.length,
+    flaggedOk: shown.filter((s, i) => used.has(i) && s.score < SCREEN_REVIEW_SCORE).length,
+    danger: wrong.filter(s => s.score >= SCREEN_REVIEW_SCORE),
+    flaggedWrong: wrong.filter(s => s.score < SCREEN_REVIEW_SCORE)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +268,8 @@ const tokens = { prompt: 0, cached: 0, thoughts: 0, output: 0, calls: 0 }
 let catalogSize = 0
 const models = {}
 const caseF1 = {}
+const screenTotals = { matched: 0, shownRows: 0, expectedRows: 0, flaggedOk: 0, flaggedWrong: 0, danger: 0 }
+const dangerRows = []
 let apiErrors = 0
 
 console.log(`🧪 OCR 정답 세트 평가: ${cases.length}개 케이스 × ${runs}회\n`)
@@ -203,8 +300,15 @@ for (const c of cases) {
     f1s.push(s.f1)
     for (const k of Object.keys(totals)) totals[k] += s[k]
 
+    const sc = screenMatch ? scoreScreen(c.expected, body) : null
+    if (sc) {
+      for (const k of ['matched', 'shownRows', 'expectedRows', 'flaggedOk']) screenTotals[k] += sc[k]
+      screenTotals.flaggedWrong += sc.flaggedWrong.length
+      screenTotals.danger += sc.danger.length
+      sc.danger.forEach(d => dangerRows.push(`${c.name}: ${d.a.modelo_raw || d.a.modelo} → ${d.name} ${Math.round(d.score * 100)}%`))
+    }
     const perfect = s.f1 === 1 && s.qtyOk === s.qtyChecked && s.uncertainCaught === s.uncertainExpected && !s.headerProblems.length
-    console.log(`${perfect ? '✅' : '⚠️'} ${c.name}${c.expected.needs_review ? ' (검토 전)' : ''}${tag}  행 F1 ${pct(s.f1)} (${s.matched}/${s.expectedRows}, 추출 ${s.actualRows}행)  필드 ${s.qtyOk}/${s.qtyChecked}  ${ms}ms`)
+    console.log(`${perfect ? '✅' : '⚠️'} ${c.name}${c.expected.needs_review ? ' (검토 전)' : ''}${tag}  행 F1 ${pct(s.f1)} (${s.matched}/${s.expectedRows}, 추출 ${s.actualRows}행)  필드 ${s.qtyOk}/${s.qtyChecked}${sc ? `  화면 F1 ${pct(sc.f1)}` : ''}  ${ms}ms`)
     for (const r of s.rows) {
       if (r.problems.length) console.log(`     - ${r.exp.modelo}${r.exp.color ? ' ' + r.exp.color : ''}: ${r.problems.join(', ')}`)
     }
@@ -224,7 +328,15 @@ latencies.sort((a, b) => a - b)
 const median = latencies.length ? latencies[Math.floor(latencies.length / 2)] : 0
 
 console.log('\n================================================================')
-console.log(`행 F1          ${pct(f1)}  (정밀도 ${pct(precision)}, 재현율 ${pct(recall)})`)
+console.log(`행 F1(판독)    ${pct(f1)}  (정밀도 ${pct(precision)}, 재현율 ${pct(recall)})`)
+const sp = screenTotals.shownRows ? screenTotals.matched / screenTotals.shownRows : 0
+const sr = screenTotals.expectedRows ? screenTotals.matched / screenTotals.expectedRows : 0
+const screenF1 = sp + sr ? (2 * sp * sr) / (sp + sr) : 0
+if (screenMatch) {
+  console.log(`행 F1(화면)    ${pct(screenF1)}  (정밀도 ${pct(sp)}, 재현율 ${pct(sr)}) — 앱 매칭까지 거친 결과`)
+  console.log(`  맞았지만 ⚠️ 표시  ${screenTotals.flaggedOk}행 / 틀렸고 ⚠️ 표시  ${screenTotals.flaggedWrong}행 / 불일치 80%↑  ${screenTotals.danger}행`)
+  dangerRows.forEach(d => console.log(`    · ${d} (정답과 다른 품목이거나 정답에 없는 행 — 사진과 대조 필요)`))
+}
 console.log(`필드 정확도    ${totals.qtyChecked ? pct(totals.qtyOk / totals.qtyChecked) : '-'}  (${totals.qtyOk}/${totals.qtyChecked}, 짝지어진 행의 수량·원문)`)
 console.log(`불확실 표시    ${totals.uncertainExpected ? `${totals.uncertainCaught}/${totals.uncertainExpected}` : '-'}  (정답에 uncertain:true로 적은 행 중 표시된 수)`)
 console.log(`헤더 정확도    ${totals.headerChecked ? `${totals.headerOk}/${totals.headerChecked}` : '-'}`)
@@ -239,7 +351,10 @@ if (apiErrors) console.log(`API 오류       ${apiErrors}건`)
 if (baseline) {
   console.log(`\n📊 기준선(${baseline.savedAt}) 대비 케이스별 행 F1`)
   // --filter로 일부만 돌렸으면 전체 점수는 비교 대상이 달라 의미가 없다.
-  if (!args.filter) console.log(`   전체 ${pct(baseline.f1)} → ${pct(f1)}`)
+  if (!args.filter) {
+    console.log(`   전체(판독) ${pct(baseline.f1)} → ${pct(f1)}`)
+    if (screenMatch && baseline.screenF1 !== undefined) console.log(`   전체(화면) ${pct(baseline.screenF1)} → ${pct(screenF1)}`)
+  }
   for (const [name, now] of Object.entries(caseF1)) {
     const before = baseline.caseF1?.[name]
     const mark = before === undefined ? '🆕' : now > before ? '⬆️' : now < before ? '⬇️' : '  '
@@ -248,7 +363,7 @@ if (baseline) {
 }
 
 if (args['update-baseline']) {
-  fs.writeFileSync(BASELINE_PATH, JSON.stringify({ savedAt: new Date().toISOString(), f1, caseF1 }, null, 2))
+  fs.writeFileSync(BASELINE_PATH, JSON.stringify({ savedAt: new Date().toISOString(), f1, screenF1: screenMatch ? screenF1 : undefined, caseF1 }, null, 2))
   console.log(`\n💾 기준선 저장: ${path.relative(ROOT, BASELINE_PATH)}`)
 }
 
