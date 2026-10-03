@@ -252,6 +252,21 @@
     box-sizing: border-box !important;
   }
 
+  .qty-spin-wrap {
+    flex: 1 !important;
+    min-width: 0 !important;
+  }
+  .qty-spin-wrap input[type="text"] {
+    padding-right: 40px !important;
+  }
+  .qty-spin-btns {
+    width: 34px !important;
+    top: 2px !important;
+    bottom: 2px !important;
+    right: 2px !important;
+  }
+  .qty-spin-btns button { font-size: 10pt !important; }
+
   .unit-options {
     padding-left: 84px !important;
     gap: 24px !important;
@@ -672,6 +687,41 @@
       outline: none;
       transition: border-color 0.15s;
     }
+    .qty-spin-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: stretch;
+    }
+    .qty-spin-wrap input[type="text"] {
+      padding-right: 24px;
+    }
+    .qty-spin-btns {
+      position: absolute;
+      top: 1px;
+      right: 1px;
+      bottom: 1px;
+      width: 20px;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid #cbd5e1;
+      border-radius: 0 3px 3px 0;
+      overflow: hidden;
+    }
+    .qty-spin-btns button {
+      flex: 1;
+      min-height: 0;
+      padding: 0;
+      margin: 0;
+      border: none;
+      background: #f1f5f9;
+      color: #475569;
+      font-size: 7pt;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .qty-spin-btns button + button { border-top: 1px solid #cbd5e1; }
+    .qty-spin-btns button:hover { background: #dbeafe; color: #1d4ed8; }
+    .qty-spin-btns button:active { background: #bfdbfe; }
     select:focus, input[type="text"]:focus, input[type="number"]:focus {
       border-color: #2e7d32;
       box-shadow: 0 0 0 2px rgba(46, 125, 50, 0.12);
@@ -4250,7 +4300,7 @@ const typeConfig = {
       </div>
       <div class="input-row"><label for="itemName">품명:</label><input type="text" id="itemName" name="itemName" autocomplete="off" oninput="filterItems(this.value)" onchange="autoFillColor()" tabindex="2"><div id="customDropdown" class="dropdown-container" style="display: none;"><ul id="itemSuggestionsList"></ul></div></div>
       <div class="input-row"><label for="color">색상:</label><input type="text" id="color" name="color" value="SURTIDO" tabindex="3"></div>
-      <div class="input-row"><label id="qtyLabel"></label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this)"></div>
+      <div class="input-row"><label id="qtyLabel"></label><span class="qty-spin-wrap"><input type="text" id="qty" name="qty" tabindex="4" inputmode="numeric" autocomplete="off" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this)" onkeydown="handleQtyKeyStep(event)"><span class="qty-spin-btns"><button type="button" tabindex="-1" title="수량 +1" onmousedown="event.preventDefault()" onclick="stepQty(1)">▲</button><button type="button" tabindex="-1" title="수량 -1" onmousedown="event.preventDefault()" onclick="stepQty(-1)">▼</button></span></span></div>
       <div class="input-row"><label for="boxContent">박스당수량:</label><input type="number" id="boxContent" name="boxContent" tabindex="5"></div>
     `
   },
@@ -4282,7 +4332,7 @@ const typeConfig = {
       </div>
       <div class="input-row"><label for="itemName">품명:</label><input type="text" id="itemName" name="itemName" autocomplete="off" oninput="filterItems(this.value)" onchange="autoFillColor()" tabindex="2"><div id="customDropdown" class="dropdown-container" style="display: none;"><ul id="itemSuggestionsList"></ul></div></div>
       <div class="input-row"><label for="color">색상:</label><input type="text" id="color" name="color" value="SURTIDO" tabindex="3"></div>
-      <div class="input-row"><label id="qtyLabel"></label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this)"></div>
+      <div class="input-row"><label id="qtyLabel"></label><span class="qty-spin-wrap"><input type="text" id="qty" name="qty" tabindex="4" inputmode="numeric" autocomplete="off" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this)" onkeydown="handleQtyKeyStep(event)"><span class="qty-spin-btns"><button type="button" tabindex="-1" title="수량 +1" onmousedown="event.preventDefault()" onclick="stepQty(1)">▲</button><button type="button" tabindex="-1" title="수량 -1" onmousedown="event.preventDefault()" onclick="stepQty(-1)">▼</button></span></span></div>
       <div class="input-row"><label for="boxContent">박스당수량:</label><input type="number" id="boxContent" name="boxContent" tabindex="5"></div>
     `
   },
@@ -4344,7 +4394,7 @@ const typeConfig = {
       <div class="input-row"><label for="itemName">품명:</label><input type="text" id="itemName" name="itemName" autocomplete="off" oninput="filterItems(this.value)" onchange="autoFillColor(); checkItemAuditHint(this.value);" tabindex="2"><div id="customDropdown" class="dropdown-container" style="display: none;"><ul id="itemSuggestionsList"></ul></div></div>
       <div id="itemAuditHintBox" style="display: none; margin-bottom: 6px; padding: 4px 8px; border-radius: 5px; font-size: 8pt; font-weight: 600;"></div>
       <div class="input-row"><label for="color">색상:</label><input type="text" id="color" name="color" value="SURTIDO" tabindex="3"></div>
-      <div class="input-row"><label id="qtyLabel">실사수량:</label><input type="text" id="qty" name="qty" tabindex="4" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this); updateLiveAdjPreview();"></div>
+      <div class="input-row"><label id="qtyLabel">실사수량:</label><span class="qty-spin-wrap"><input type="text" id="qty" name="qty" tabindex="4" inputmode="numeric" autocomplete="off" placeholder="수량 (예: 1 또는 10P)" onfocus="this.select()" oninput="handleQtyInput(this); updateLiveAdjPreview();" onkeydown="handleQtyKeyStep(event)"><span class="qty-spin-btns"><button type="button" tabindex="-1" title="수량 +1" onmousedown="event.preventDefault()" onclick="stepQty(1)">▲</button><button type="button" tabindex="-1" title="수량 -1" onmousedown="event.preventDefault()" onclick="stepQty(-1)">▼</button></span></span></div>
       <div id="liveAdjPreviewBox" style="display: none; margin-bottom: 6px; padding: 5px 8px; border-radius: 5px; font-size: 8.2pt; font-weight: 700;"></div>
       <div class="input-row"><label for="boxContent">박스당수량:</label><input type="number" id="boxContent" name="boxContent" tabindex="5"></div>
     `
@@ -5145,6 +5195,25 @@ function autoFillColor() {
 function updateUnitType() {
   const checkedRadio = document.querySelector('input[name="unitType"]:checked');
   if (checkedRadio) unitType = checkedRadio.value;
+}
+
+// 수량 입력칸 스핀(▲▼ 버튼 / 방향키). "10P" 같은 낱개 접미사를 유지하려고 type=text를 쓰므로 직접 증감한다.
+function stepQty(delta) {
+  const el = document.getElementById('qty');
+  if (!el) return;
+  const raw = (el.value || '').trim();
+  const suffixMatch = raw.match(/(pz|p)$/i);
+  const suffix = suffixMatch ? suffixMatch[0] : '';
+  const current = parseInt(raw.replace(/\D/g, ''), 10) || 0;
+  const next = Math.min(9999, Math.max(0, current + delta));
+  el.value = String(next) + suffix;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function handleQtyKeyStep(e) {
+  if (!e || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+  e.preventDefault();
+  stepQty(e.key === 'ArrowUp' ? 1 : -1);
 }
 
 function handleQtyInput(el) {
