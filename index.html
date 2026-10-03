@@ -4633,7 +4633,7 @@ function onWarehouseChanged() {
       updateTable();
     }
   }
-  if (currentType === 'adj') refreshAdjWarehouseStock();
+  if (currentType === 'adj' || currentType === 'out') refreshAdjWarehouseStock();
   updateTotals();
 }
 
@@ -4696,7 +4696,7 @@ function restoreMetadata() {
         warehouseSelect.value = metadata.warehouse;
       }
     }
-    if (currentType === 'adj') refreshAdjWarehouseStock();
+    if (currentType === 'adj' || currentType === 'out') refreshAdjWarehouseStock();
     if (typeof highlightActiveLocationButton === 'function') highlightActiveLocationButton();
   } catch (e) {
     localStorage.removeItem(storageKey);
@@ -5235,12 +5235,15 @@ function getReservedQty(itemName, color, boxContent, excludeIndex = -1) {
   const targetClean = (itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
   const targetColor = (color || 'SURTIDO').trim().toLowerCase();
   const targetBoxContent = Number(boxContent) || 0;
+  // 가용재고는 출발창고별이므로, 다른 창고의 보류/장바구니 수량은 선점으로 세지 않는다.
+  const targetWh = String(getAdjWarehouse() || 'MAIN').trim().toUpperCase();
 
-  const matchItem = (r) => {
+  const matchItem = (r, holdWh) => {
     const rClean = (r.itemName || '').replace(/[\s_\-]/g, '').toLowerCase();
     const rColor = (r.color || 'SURTIDO').trim().toLowerCase();
     const rBoxContent = Number(r.boxContent) || 0;
-    return rClean === targetClean && rColor === targetColor && (targetBoxContent <= 0 || rBoxContent === targetBoxContent);
+    const rWh = String(r.sourceWarehouse || r.warehouse || holdWh || 'MAIN').trim().toUpperCase();
+    return rWh === targetWh && rClean === targetClean && rColor === targetColor && (targetBoxContent <= 0 || rBoxContent === targetBoxContent);
   };
 
   // 1. 현재 출고 보류 목록(pendingOutRecordsList)의 수량 집계
@@ -5251,7 +5254,7 @@ function getReservedQty(itemName, color, boxContent, excludeIndex = -1) {
       pList.forEach(p => {
         if (p.records && Array.isArray(p.records)) {
           p.records.forEach(rec => {
-            if (matchItem(rec)) {
+            if (matchItem(rec, p.sourceWarehouse || p.warehouse)) {
               if (rec.unitType === 'box' || (rec.boxQty && rec.boxQty !== 0)) {
                 reservedBoxes += Math.abs(rec.boxQty || 0);
               }
@@ -5284,13 +5287,17 @@ function getReservedQty(itemName, color, boxContent, excludeIndex = -1) {
 }
 
 function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
+  // 출고는 출발창고의 실재고로 검사한다. 서브창고 재고를 아직 못 불러왔으면 품목 등록 여부만 MAIN 카탈로그로 보고,
+  // 수량 검사는 건너뛴다(서버가 제출 시 재고 부족을 거절한다).
+  const warehouseUnverified = currentType === 'out' && !isViewWarehouseStockLoaded();
+  const stockSrc = (currentType === 'out' && !warehouseUnverified) ? (getAdjStockSource() || stockDataCache) : stockDataCache;
   const normColor = (color || 'SURTIDO').trim().toLowerCase();
   const normBoxContent = Number(boxContent) || 0;
   const trimmedName = (itemName || '').trim();
   const targetClean = trimmedName.replace(/[\s_\-]/g, '').toLowerCase();
 
   // 1순위: 품명 완전 일치(Exact Match) + 색상 일치 + 규격 일치
-  let item = stockDataCache.find(it => {
+  let item = stockSrc.find(it => {
     const itName = (it.name || '').trim();
     const itColor = (it.color || 'SURTIDO').trim().toLowerCase();
     const itBoxContent = Number(it.boxContent) || 0;
@@ -5300,7 +5307,7 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
 
   // 2순위: 품명 완전 일치 + SURTIDO fallback
   if (!item) {
-    item = stockDataCache.find(it => {
+    item = stockSrc.find(it => {
       const itName = (it.name || '').trim();
       const itColor = (it.color || 'SURTIDO').trim().toLowerCase();
       return itName === trimmedName && itColor === 'surtido';
@@ -5309,7 +5316,7 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
 
   // 3순위: 정규화(공백/하이픈 제거) 일치 항목 중, 본사 재고(stockBox)가 많은 항목 우선 매칭
   if (!item) {
-    const candidates = stockDataCache.filter(it => {
+    const candidates = stockSrc.filter(it => {
       const itClean = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
       const itColor = (it.color || 'SURTIDO').trim().toLowerCase();
       return itClean === targetClean && (itColor === normColor || itColor === 'surtido');
@@ -5322,7 +5329,7 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
 
   // 4순위: 이름만이라도 정규화 일치하는 항목 (재고 많은 순)
   if (!item) {
-    const candidates = stockDataCache.filter(it => {
+    const candidates = stockSrc.filter(it => {
       const itClean = (it.name || '').replace(/[\s_\-]/g, '').toLowerCase();
       return itClean === targetClean;
     });
@@ -5334,6 +5341,10 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
 
   if (!item) {
     return { isRegistered: false };
+  }
+
+  if (warehouseUnverified) {
+    return { isRegistered: true, isSufficient: true, unverified: true };
   }
 
   // 출고 입력 시 소프트 예약(보류/장바구니 선점 수량)을 차감하여 순수 가용재고(ATP) 산출
@@ -5503,6 +5514,11 @@ function addRecord() {
       setPage('상품등록', productData);
     }
     return;
+  }
+
+  if (currentType === 'out' && stockInfo.unverified) {
+    refreshAdjWarehouseStock();
+    showAppToast('⏳ 출발창고 재고를 불러오는 중입니다. 재고 부족 여부는 제출 시 서버가 확인합니다.', 2500);
   }
 
   if (currentType === 'out' && !stockInfo.isSufficient) {
@@ -5772,7 +5788,10 @@ function updateTable() {
 
   // ★ [성능 최적화] updateTable 호출마다 발생하던 O(records × stock × 3) 반복 연산을 O(stock) 1회 Map 생성 + O(1) 조회로 단축
   // 재고조정 화면은 선택한 조정 창고의 재고를 기준으로 현재고/예상을 계산한다.
-  const stockList = currentType === 'adj' ? getAdjStockSource() : stockDataCache;
+  // 출고입력은 출발창고 재고 기준. 서브창고 재고를 아직 못 불러왔으면 MAIN 수치로 오표시/오경고하지 않도록 비워 둔다.
+  const stockList = currentType === 'adj'
+    ? getAdjStockSource()
+    : (currentType === 'out' ? (isViewWarehouseStockLoaded() ? getAdjStockSource() : null) : stockDataCache);
   let stockExactMap = null;
   let stockCleanMap = null;
   let stockSurtidoMap = null;
@@ -6479,6 +6498,7 @@ function confirmSubmitCore() {
           loadStockData(true);
         }
 
+        if (type === 'out') refreshAdjWarehouseStock(true);
         alert('입출고가 성공적으로 처리되었습니다.');
         // ★ [데이터 정합성 보장: 즉시 확정 커밋 패턴]
         // 인쇄 성공 여부/취소와 무관하게 서버 커밋 성공 즉시 장바구니/스토리지 정리 완료 -> 재고 이중 차감 원천 봉쇄
@@ -7215,6 +7235,8 @@ function loadPending() {
     return;
   }
   if (currentType === 'out') {
+    // 창고 드롭다운을 프로그램으로 바꿨으므로 가용재고 검사 기준을 그 출발창고로 다시 불러온다.
+    if (typeof refreshAdjWarehouseStock === 'function') refreshAdjWarehouseStock(true);
     let shortMsg = '';
     if (effectiveWh === 'MAIN' && Array.isArray(stockDataCache)) {
       const need = new Map();
@@ -12409,7 +12431,7 @@ function applyStockChange(detail) {
   }
 
   // 3) 재고조정 화면의 조정 창고 재고
-  if (currentType === 'adj' && getAdjWarehouse() !== 'MAIN' && touches(getAdjWarehouse())) {
+  if ((currentType === 'adj' || currentType === 'out') && getAdjWarehouse() !== 'MAIN' && touches(getAdjWarehouse())) {
     refreshAdjWarehouseStock(true);
   }
 
@@ -13656,13 +13678,21 @@ function onAdjTypeRadioChanged(val) {
 let adjWarehouseStock = { code: 'MAIN', map: null, loadedAt: 0 };
 let adjStockSourceMemo = { base: null, code: null, map: null, list: null };
 
+// 선택한 창고의 실재고로 화면 재고를 보여주는 화면: 재고조정(조정창고)과 출고입력(출발창고).
+// (이름은 재고조정에서 시작해 남아 있다. 입고입력은 MAIN 캐시를 그대로 쓴다.)
 function getAdjWarehouse() {
   const whSelect = document.getElementById('warehouseSelect');
-  return (currentType === 'adj' && whSelect && whSelect.value) ? whSelect.value : 'MAIN';
+  return ((currentType === 'adj' || currentType === 'out') && whSelect && whSelect.value) ? whSelect.value : 'MAIN';
+}
+
+// 선택한 창고의 재고가 화면에 준비됐는지 (MAIN은 항상 준비됨)
+function isViewWarehouseStockLoaded() {
+  const code = getAdjWarehouse();
+  return code === 'MAIN' || (adjWarehouseStock.code === code && !!adjWarehouseStock.map);
 }
 
 function refreshAdjWarehouseStock(force) {
-  if (currentType !== 'adj') return;
+  if (currentType !== 'adj' && currentType !== 'out') return;
   const code = getAdjWarehouse();
   if (code === 'MAIN') {
     adjWarehouseStock = { code: 'MAIN', map: null, loadedAt: Date.now() };
