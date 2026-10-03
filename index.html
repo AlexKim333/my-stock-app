@@ -5095,6 +5095,11 @@ function filterItems(searchText) {
     list.innerHTML = '';
     const fragment = document.createDocumentFragment();
     filteredItems.forEach(item => {
+      const vs = getViewStock(item);
+      const whTag = vs.code !== 'MAIN' ? `(${escapeHtml(vs.code)})` : '';
+      const stockHtml = vs.pending
+        ? '<span style="color:#94a3b8;">불러오는 중…</span>'
+        : `<strong style="color:#2e7d32;">${vs.box}상자</strong> + ${vs.indiv}개`;
       const isAliasMatch = targetClean && (item.name || '').toLowerCase().replace(/[\s_\-\/]/g, '') === targetClean;
       const li = document.createElement('li');
       li.innerHTML = `
@@ -5104,7 +5109,7 @@ function filterItems(searchText) {
           ${isAliasMatch ? `<span style="font-size:7pt; background:#eff6ff; color:#1d4ed8; padding:1px 4px; border-radius:3px; font-weight:600; border: 1px solid #bfdbfe;">🏷️ 별명(${escapeHtml(aliasInfo.rawAlias)})</span>` : ''}
         </div>
         <div style="font-size:7.8pt; color:#64748b; flex:none; text-align:right;">
-          재고: <strong style="color:#2e7d32;">${item.stockBox}상자</strong> + ${item.stockIndividual}개 <span style="color:#94a3b8;">(${item.boxContent}入)</span>
+          재고${whTag}: ${stockHtml} <span style="color:#94a3b8;">(${item.boxContent}入)</span>
         </div>
       `;
       li.onclick = () => selectItem(item.name, item.color, item.boxContent);
@@ -6437,6 +6442,20 @@ function confirmSubmitCore() {
   if (type === 'adj') {
     const adjWh = getAdjWarehouse();
     records.forEach(r => { r.warehouse = adjWh; });
+  } else if (type === 'out' || type === 'in') {
+    // 그리드/OCR 등으로 담은 행에는 창고가 비어 있을 수 있다. 서버는 첫 행의 창고를 쓰므로(미지정이면 MAIN),
+    // 확인창에 보이는 선택 창고와 실제 차감 창고가 어긋나지 않도록 제출 직전에 맞춘다.
+    const whSel = document.getElementById('warehouseSelect');
+    const submitWh = (whSel && whSel.value) || 'MAIN';
+    records.forEach(r => {
+      if (type === 'out') {
+        r.warehouse = submitWh;
+        r.sourceWarehouse = submitWh;
+      } else {
+        if (!r.warehouse) r.warehouse = submitWh;
+        if (!r.targetWarehouse) r.targetWarehouse = submitWh;
+      }
+    });
   }
   const recordsToPrint = [...records];
   callServer(typeConfig[type].processFunction, [records, adminValue], {
@@ -8659,7 +8678,9 @@ function openGridSelectionModal(idx) {
     return;
   }
 
-  activeGridVariants = stockDataCache.filter(item => item.name === itemName);
+  activeGridVariants = getViewStockSource().filter(item => item.name === itemName);
+  const gridStockPending = !isViewWarehouseStockLoaded();
+  const gridWhCode = getAdjWarehouse();
   if (activeGridVariants.length === 0) {
     alert(`[${itemName}] 상품의 재고 정보를 찾을 수 없습니다.`);
     return;
@@ -8675,7 +8696,7 @@ function openGridSelectionModal(idx) {
       <tr>
         <td style="font-weight: bold; text-align: left; padding-left: 10px;">${escapeHtml(v.color)}</td>
         <td>${v.boxContent}개입</td>
-        <td style="color: #555;">${v.stockBox}상자 (${v.stockIndividual}개)</td>
+        <td style="color: #555;">${gridStockPending ? '불러오는 중…' : `${v.stockBox}상자 (${v.stockIndividual}개)${gridWhCode !== 'MAIN' ? ` · ${escapeHtml(gridWhCode)}` : ''}`}</td>
         <td><input type="number" min="0" class="grid-input" id="gridBox_${vIdx}" oninput="calcGridRowTotal(${vIdx})" placeholder="0"></td>
         <td><input type="number" min="0" class="grid-input" id="gridInd_${vIdx}" oninput="calcGridRowTotal(${vIdx})" placeholder="0"></td>
         <td id="gridRowTotal_${vIdx}" style="font-weight: bold; color: #1976d2;">0개</td>
@@ -9722,7 +9743,8 @@ function findSiblingVariants(itemName, currentColor = 'SURTIDO', currentWarehous
   // 2. 마스터 카탈로그에서 후보 검색 및 그룹화
   const candidatesMap = new Map();
 
-  stockDataCache.forEach(it => {
+  // 자매 품목 추천의 재고 수치/정렬도 출발창고 기준(출고입력)으로 맞춘다.
+  getViewStockSource().forEach(it => {
     if (!it.name) return;
     const itClean = it.name.replace(/[\s_\-\/.,#]/g, '').toUpperCase();
     if (itClean === cleanName) return; // 본인 제외
@@ -13698,6 +13720,7 @@ function refreshAdjWarehouseStock(force) {
     adjWarehouseStock = { code: 'MAIN', map: null, loadedAt: Date.now() };
     updateTable();
     updateLiveAdjPreview();
+    rerenderOpenItemDropdown();
     return;
   }
   if (!force && adjWarehouseStock.code === code && adjWarehouseStock.map && Date.now() - adjWarehouseStock.loadedAt < 30000) return;
@@ -13709,6 +13732,7 @@ function refreshAdjWarehouseStock(force) {
       adjWarehouseStock = { code: res.warehouse, map: new Map((res.items || []).map(it => [it.key, it])), loadedAt: Date.now() };
       updateTable();
       refreshOpenStockViews();
+      rerenderOpenItemDropdown();
     },
     onError: err => showAppToast(`⚠️ ${code} 창고 재고를 불러오지 못했습니다: ${err.message || err}`, 3000)
   });
@@ -13728,6 +13752,27 @@ function getAdjStockSource() {
   });
   adjStockSourceMemo = { base: stockDataCache, code, map, list };
   return list;
+}
+
+// 화면에 보여줄 재고의 기준 목록: 출고입력/재고조정은 선택한 창고 재고, 그 외·MAIN·미로딩은 MAIN 캐시.
+function getViewStockSource() {
+  return isViewWarehouseStockLoaded() ? getAdjStockSource() : stockDataCache;
+}
+
+// 품목 하나의 표시용 재고. 서브창고 재고를 아직 못 불러왔으면 MAIN 수치를 대신 보여주지 않고 pending으로 알린다.
+function getViewStock(item) {
+  const code = getAdjWarehouse();
+  if (code === 'MAIN') return { box: item.stockBox || 0, indiv: item.stockIndividual || 0, pending: false, code };
+  if (!isViewWarehouseStockLoaded()) return { box: 0, indiv: 0, pending: true, code };
+  const w = adjWarehouseStock.map.get(item.key);
+  return { box: w ? w.stockBox : 0, indiv: w ? w.stockIndividual : 0, pending: false, code };
+}
+
+// 열려 있는 품명 자동완성 목록을 현재 기준 창고 재고로 다시 그린다.
+function rerenderOpenItemDropdown() {
+  if (typeof dropdownVisible === 'undefined' || !dropdownVisible) return;
+  const input = document.getElementById('itemName');
+  if (input && input.value && input.value.trim()) filterItems(input.value);
 }
 
 function updateLiveAdjPreview() {
