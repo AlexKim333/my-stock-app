@@ -128,7 +128,9 @@ async function verifyWmsSession(token) {
   }
 }
 
-// 활성 품목 품번 목록. 손글씨 판독이 애매할 때(5/S, 0/O, O/A 등) 실제 품번 쪽으로 읽게 하는 힌트로 쓴다.
+// 최근 입출고가 있었던 품목의 품번 목록. 손글씨 판독이 애매할 때(5/S, 0/O, O/A 등) 실제 품번 쪽으로 읽게 하는 힌트로 쓴다.
+// 전체 카탈로그(약 1,400개)를 보내면 스캔마다 입력이 약 8,600 토큰 늘어나므로, 최근 OCR_CATALOG_DAYS일(기본 90일)
+// 안에 움직인 품목(약 370개, 약 2,300 토큰)만 보낸다. 목록에 없는 품목도 화면 매칭은 전체 카탈로그로 한다.
 // 서버리스 인스턴스가 살아 있는 동안 메모리에 캐시하고, 불러오지 못하면 힌트 없이 진행한다(OCR 자체는 막지 않음).
 let catalogCache = { codes: null, at: 0 }
 
@@ -139,18 +141,21 @@ async function loadCatalogCodes() {
   const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
   if (!supabaseUrl || !anonKey) return null
+  const since = new Date(Date.now() - envInt('OCR_CATALOG_DAYS', 90) * 24 * 60 * 60 * 1000).toISOString()
   try {
     const names = new Set()
-    for (let offset = 0; offset < 20000; offset += 1000) {
+    for (let offset = 0; offset < 50000; offset += 1000) {
       const resp = await fetchWithTimeout(
-        `${supabaseUrl.replace(/\/+$/, '')}/rest/v1/items?select=item_name&is_active=eq.true&order=id&limit=1000&offset=${offset}`,
+        `${supabaseUrl.replace(/\/+$/, '')}/rest/v1/stock_transactions?select=items(item_name,is_active)` +
+          `&created_at=gte.${encodeURIComponent(since)}&order=id&limit=1000&offset=${offset}`,
         { headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` } },
         CATALOG_TIMEOUT_MS
       )
-      if (!resp.ok) throw new Error(`items ${resp.status}`)
+      if (!resp.ok) throw new Error(`stock_transactions ${resp.status}`)
       const rows = await resp.json()
       for (const r of rows) {
-        const name = String(r.item_name || '').trim()
+        if (r.items?.is_active === false) continue
+        const name = String(r.items?.item_name || '').trim()
         // 스모크 테스트 품목(__SMOKETEST_ITEM__) 같은 내부용 이름은 제외
         if (name && !name.startsWith('__')) names.add(name)
       }
@@ -166,12 +171,13 @@ async function loadCatalogCodes() {
 }
 
 function catalogHintText(codes) {
-  return `Known product codes in this store's catalog are listed below. Use them ONLY to resolve ambiguous handwriting in "modelo" (never in "modelo_raw", which is always the literal handwriting):
+  return `Product codes that moved in this store recently are listed below. This is NOT the full catalog: many valid products are missing from it.
+Use the list ONLY to resolve ambiguous handwriting in "modelo" (never in "modelo_raw", which is always the literal handwriting):
 - If the written code plausibly matches a listed code and differs only by commonly confused characters (5/S, 0/O, O/A, 1/I/L, 8/B, 2/Z) or a missing hyphen/space, output the listed code exactly as listed.
-- If the written code is clearly not in the list, transcribe it exactly as written. Do NOT replace it with a different similar-looking listed code: new products that are not in the list are common.
+- If the written code is clearly not in the list, transcribe it exactly as written. Do NOT replace it with a different similar-looking listed code: codes that are not in the list are common and valid.
 - Keep a written variant suffix letter (e.g. "CK928 K" -> "CK928K") even if that variant is not listed.
 
-CATALOG CODES:
+RECENT PRODUCT CODES:
 ${codes.join(', ')}`
 }
 

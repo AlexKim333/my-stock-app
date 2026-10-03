@@ -9751,6 +9751,16 @@ function sequenceMatcher(a, b) {
   return Math.min(1.0, Math.max(0.0, composite));
 }
 
+// 품번이 '손글씨 혼동 글자만' 다른지 판별하는 키. 혼동 글자를 한쪽으로 모아 비교한다
+// (A는 O와 헷갈리지만 CK928A/CK928O처럼 실제로 다른 변형이 있어 모으지 않는다).
+function ocrCodeKey(code) {
+  return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+    .replace(/[OQ]/g, '0').replace(/[IL]/g, '1').replace(/S/g, '5').replace(/B/g, '8').replace(/Z/g, '2');
+}
+
+// 품번이 실제로 다른 후보의 최대 점수. 화면 배지 기준(95↑ 초록, 80↑ 파랑, 그 아래 ⚠️)에서 ⚠️가 되도록 80 미만.
+const DIFFERENT_CODE_MAX_SCORE = 0.75;
+
 function findBestCatalogMatch(query, catalog, threshold = 0.55, options = {}) {
   if (!catalog || catalog.length === 0) return null;
   const q = (query || '').toLowerCase().trim();
@@ -9835,21 +9845,39 @@ function findBestCatalogMatch(query, catalog, threshold = 0.55, options = {}) {
     return { item: bestPrefixMatch, score: 1.0 };
   }
 
-  // 2단계: Gestalt SequenceMatcher 유사도 검사
-  for (let i = 0; i < catalog.length; i++) {
-    const item = catalog[i];
-    const candidate = `${item.name} ${item.color || 'SURTIDO'}`.replace(/[\s_\-\/]/g, '').toLowerCase().trim();
-    const score = sequenceMatcher(qClean, candidate);
-    if (score > maxScore) {
-      maxScore = score;
-      best = item;
+  // 2단계: 유사도 검사 — 품번과 색상을 따로 본다.
+  //  - 예전처럼 '품번+색상'을 한 문자열로 비교하면 색상이 같은 엉뚱한 품목이 이긴다
+  //    (예: 'YES016 NEGRO' → YE5016(SURTIDO)이 아니라 P-150 NEGRO). 색상은 같은 점수일 때만 우선한다.
+  //    품목이 정해지면 색상 변형은 호출하는 쪽에서 다시 찾는다.
+  //  - 품번이 손글씨 혼동 글자(5/S, 0/O, 1/I/L, 8/B, 2/Z) 말고도 다르면 다른 상품일 가능성이 크므로
+  //    최대 75%(⚠️ 확인 필요)로 낮춘다(예: 'YE5017' → YE5077이 98%로 확정처럼 보이던 문제).
+  const { base: qBase, color: qColor } = extractColorAndBase(query || '');
+  const qCode = (qBase || query || '').replace(/[\s_\-\/]/g, '').toLowerCase();
+  let bestColorMatches = false;
+  if (qCode) {
+    for (let i = 0; i < catalog.length; i++) {
+      const item = catalog[i];
+      const nameClean = (item.name || '').replace(/[\s_\-\/]/g, '').toLowerCase();
+      // 표준 색상표에 없는 색상명(FIUSHA, COCOA, 'MARINO(AZUL OSCURO)' 등)은 위에서 분리되지 않으므로,
+      // 질의 끝이 이 품목의 색상명이면 그 부분을 떼고 품번만 비교한다.
+      const itemColorClean = (item.color || 'SURTIDO').replace(/[\s_\-\/]/g, '').toLowerCase();
+      const endsWithItemColor = itemColorClean && qClean.length > itemColorClean.length && qClean.endsWith(itemColorClean);
+      const code = endsWithItemColor ? qClean.slice(0, -itemColorClean.length) : qCode;
+      let score = sequenceMatcher(code, nameClean);
+      if (ocrCodeKey(code) !== ocrCodeKey(nameClean)) score = Math.min(score, DIFFERENT_CODE_MAX_SCORE);
+      const colorMatches = endsWithItemColor || (!!qColor && (item.color || 'SURTIDO').toUpperCase() === qColor);
+      if (score > maxScore || (score === maxScore && colorMatches && !bestColorMatches)) {
+        maxScore = score;
+        best = item;
+        bestColorMatches = colorMatches;
+      }
     }
   }
 
-  // 색상 외 글자가 붙은 접두사 후보: 품명을 그대로 포함하므로 유력하지만 100%는 아니다(최대 90%).
+  // 색상 외 글자가 붙은 접두사 후보(예: 'P1605'에 'P-160'): 품번이 다르므로 확인 필요 수준을 넘지 않는다.
   if (fuzzyPrefixMatch) {
     const nameClean = (fuzzyPrefixMatch.name || '').replace(/[\s_\-\/]/g, '').toLowerCase();
-    const prefixScore = Math.min(0.9, sequenceMatcher(qClean, nameClean));
+    const prefixScore = Math.min(DIFFERENT_CODE_MAX_SCORE, sequenceMatcher(qClean, nameClean));
     if (prefixScore > maxScore) {
       maxScore = prefixScore;
       best = fuzzyPrefixMatch;
