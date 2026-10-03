@@ -961,6 +961,13 @@ export const serverMethods = {
     const payload = []
     const packCheckRows = []
 
+    // 한 번의 퀵 조정은 한 창고만 대상으로 한다 (지정이 없으면 MAIN)
+    const warehouses = [...new Set(adjustments.map(a => String(a.warehouse || 'MAIN').trim().toUpperCase() || 'MAIN'))]
+    if (warehouses.length > 1) {
+      throw new Error(`한 번에 한 창고만 퀵 재고조정할 수 있습니다. (섞인 창고: ${warehouses.join(', ')})`)
+    }
+    const warehouse = warehouses[0]
+
     for (const adj of adjustments) {
       const name = String(adj.itemName || '').trim()
       const color = String(adj.color || 'SURTIDO').trim()
@@ -994,7 +1001,7 @@ export const serverMethods = {
       const res = await supabase.rpc('rpc_adjust_stock', {
         p_admin: handler,
         p_items: payload,
-        p_warehouse: 'MAIN',
+        p_warehouse: warehouse,
         p_memo: '퀵재고조정',
         p_idempotency_key: idemKey
       })
@@ -1009,12 +1016,13 @@ export const serverMethods = {
       .from('inventory_stocks')
       .select('item_id, box_qty, unit_qty')
       .in('item_id', payload.map(p => p.item_id))
-      .eq('warehouse_code', 'MAIN')
+      .eq('warehouse_code', warehouse)
     if (freshErr) console.warn('[SupabaseAdapter] 조정 후 재고 재조회 실패:', freshErr)
     const stockMap = new Map((freshStocks || []).map(st => [st.item_id, st]))
 
     return {
       success: true,
+      warehouse,
       invoiceNumber: data?.invoice_no,
       message: '재고 조정이 완료되었습니다.',
       stockVerified: !freshErr,

@@ -2400,6 +2400,7 @@
     </div>
     <div id="stockWarningModal" class="modal">
       <p id="warningMessage"></p>
+      <button id="btnStockWarningQuickAdj" type="button" onclick="openQuickAdjustFromWarning()" style="display: none; background: #2563eb; color: #ffffff; border: none; border-radius: 4px; padding: 5px 12px; font-weight: 700; cursor: pointer;">⚡ 퀵 재고조정</button>
       <button onclick="closeStockWarningModal()">닫기</button>
     </div>
 
@@ -2627,7 +2628,7 @@
     </div>
 
     <!-- ⚡ 퀵 재고조정 모달 (실재고 즉시 반영) -->
-    <div id="quickStockModal" class="modal" style="display: none; width: 420px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.25);">
+    <div id="quickStockModal" class="modal" style="display: none; width: 420px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); z-index: 1100;">
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 12px;">
         <h3 style="margin: 0; color: #1e293b; font-size: 11.5pt; font-weight: bold; display: flex; align-items: center; gap: 6px;">
           <span>⚡</span> <span>퀵 재고조정 (실재고 즉시 반영)</span>
@@ -5363,7 +5364,7 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
   }
 
   if (warehouseUnverified) {
-    return { isRegistered: true, isSufficient: true, unverified: true };
+    return { isRegistered: true, isSufficient: true, unverified: true, item };
   }
 
   // 출고 입력 시 소프트 예약(보류/장바구니 선점 수량)을 차감하여 순수 가용재고(ATP) 산출
@@ -5384,6 +5385,7 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
     const isSufficient = effectiveBoxStock >= qty;
     return {
       isRegistered: true,
+      item,
       isSufficient: isSufficient,
       boxStock: effectiveBoxStock,
       rawBoxStock: item.stockBox,
@@ -5404,6 +5406,7 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
     }
     return {
       isRegistered: true,
+      item,
       isSufficient: totalIndividual >= remainingQty && boxStock >= 0,
       boxStock: effectiveBoxStock,
       individualStock: effectiveIndivStock,
@@ -5545,7 +5548,20 @@ function addRecord() {
       qty,
       unitType === 'box' ? stockInfo.boxStock : stockInfo.individualStock,
       unitType === 'box' ? '박스' : '낱개',
-      { reservedBoxes: stockInfo.reservedBoxes, reservedIndividuals: stockInfo.reservedIndividuals }
+      { reservedBoxes: stockInfo.reservedBoxes, reservedIndividuals: stockInfo.reservedIndividuals },
+      stockInfo.item ? {
+        itemName: stockInfo.item.name,
+        color: stockInfo.item.color || 'SURTIDO',
+        boxContent: stockInfo.item.boxContent || 0,
+        // 선점(보류/장바구니) 수량을 빼기 전의 해당 창고 실재고
+        curBox: stockInfo.item.stockBox || 0,
+        curIndiv: stockInfo.item.stockIndividual || 0,
+        unit: unitType,
+        qty: qty,
+        reservedBoxes: stockInfo.reservedBoxes || 0,
+        reservedIndividuals: stockInfo.reservedIndividuals || 0,
+        warehouse: String(getAdjWarehouse() || 'MAIN').toUpperCase()
+      } : null
     );
     return;
   }
@@ -5664,15 +5680,40 @@ function addRecord() {
   updateTotals();
 }
 
-function showStockWarningModal(orderQty, currentStock, unit, reservedInfo = null) {
-  let message = `가용재고(ATP)가 부족합니다! 주문: ${orderQty}${unit}, 주문가능(가용): ${currentStock}${unit}`;
+let stockWarningQuickCtx = null;
+
+function showStockWarningModal(orderQty, currentStock, unit, reservedInfo = null, quickCtx = null) {
+  const whTag = (quickCtx && quickCtx.warehouse && quickCtx.warehouse !== 'MAIN') ? ` [${quickCtx.warehouse}]` : '';
+  let message = `가용재고(ATP)가 부족합니다!${whTag} 주문: ${orderQty}${unit}, 주문가능(가용): ${currentStock}${unit}`;
   if (reservedInfo && (reservedInfo.reservedBoxes > 0 || reservedInfo.reservedIndividuals > 0)) {
     message += `\n\n(ℹ️ 보류 목록에 이미 ${reservedInfo.reservedBoxes}상자 / ${reservedInfo.reservedIndividuals}개가 선점 예약되어 있습니다.)`;
   }
   const warningMessageP = document.getElementById('warningMessage');
   const stockWarningModalDiv = document.getElementById('stockWarningModal');
   if (warningMessageP) warningMessageP.textContent = message;
+  // 실재고가 전산과 다를 때 바로 맞출 수 있도록 퀵 재고조정을 연결한다 (조정 후 같은 출고 행을 자동으로 다시 담는다)
+  stockWarningQuickCtx = quickCtx;
+  const quickBtn = document.getElementById('btnStockWarningQuickAdj');
+  if (quickBtn) quickBtn.style.display = quickCtx ? 'inline-block' : 'none';
   if (stockWarningModalDiv) stockWarningModalDiv.style.display = 'block';
+}
+
+function openQuickAdjustFromWarning() {
+  const ctx = stockWarningQuickCtx;
+  if (!ctx) return;
+  closeStockWarningModal();
+  const isBox = ctx.unit !== 'individual';
+  // 부족분을 메우도록: 선점 수량 + 이번 요청량 (이미 실재고가 더 많으면 그대로)
+  const need = (isBox ? ctx.reservedBoxes : ctx.reservedIndividuals) + ctx.qty;
+  openQuickAdjustModal(ctx.itemName, ctx.color, ctx.boxContent, ctx.curBox, ctx.curIndiv, ctx.qty, {
+    warehouse: ctx.warehouse,
+    unit: isBox ? 'box' : 'individual',
+    targetBox: isBox ? Math.max(need, ctx.curBox) : ctx.curBox,
+    targetIndiv: isBox ? ctx.curIndiv : Math.max(need, ctx.curIndiv),
+    reserved: isBox ? ctx.reservedBoxes : ctx.reservedIndividuals,
+    // 조정이 끝나면 방금 막혔던 출고 행을 입력폼 그대로 다시 담는다
+    afterAdjust: () => addRecord()
+  });
 }
 
 function closeStockWarningModal() {
@@ -5968,7 +6009,7 @@ function updateTable() {
             shortageBadge = `
               <div style="margin-top: 2px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; max-width: 100%;">
                 <span style="font-size: 7.2pt; background: #fee2e2; color: #b91c1c; padding: 1px 5px; border-radius: 3px; font-weight: 700;">${shortText}</span>
-                <button type="button" class="btn-quick-adj no-print" onclick="openQuickAdjustModal(${jsArg(rec.itemName || '')}, ${jsArg(rec.color || 'SURTIDO')}, ${rec.boxContent || 0}, ${curBox}, ${curIndiv}, ${reqBox || 1})" title="실재고 반영을 위한 퀵 재고조정">⚡ 퀵재고</button>
+                <button type="button" class="btn-quick-adj no-print" onclick="openQuickAdjustModal(${jsArg(rec.itemName || '')}, ${jsArg(rec.color || 'SURTIDO')}, ${rec.boxContent || 0}, ${curBox}, ${curIndiv}, ${reqBox || 1}, { warehouse: ${jsArg(getAdjWarehouse())} })" title="실재고 반영을 위한 퀵 재고조정">⚡ 퀵재고</button>
               </div>
             `;
           }
@@ -9192,19 +9233,28 @@ function closeHotkeyConfigModal() {
 
 let activeQuickAdjTarget = null;
 
-function openQuickAdjustModal(itemName, color, boxContent, currentBox, currentIndiv, requestedQty) {
-  activeQuickAdjTarget = { itemName, color, boxContent, currentBox, currentIndiv };
+// opts(선택): { warehouse, unit:'box'|'individual', targetBox, targetIndiv, reserved, afterAdjust }
+//  - warehouse: 조정할 창고 (기본 MAIN)
+//  - afterAdjust: 조정 성공 후 실행할 콜백 (출고 재고부족 경고에서 호출했을 때 막혔던 행을 다시 담는다)
+function openQuickAdjustModal(itemName, color, boxContent, currentBox, currentIndiv, requestedQty, opts = {}) {
+  const warehouse = String((opts && opts.warehouse) || 'MAIN').toUpperCase();
+  const reqUnit = (opts && opts.unit === 'individual') ? '개' : '상자';
+  activeQuickAdjTarget = { itemName, color, boxContent, currentBox, currentIndiv, warehouse, afterAdjust: (opts && opts.afterAdjust) || null };
   const titleEl = document.getElementById('qadjItemTitle');
   const curEl = document.getElementById('qadjCurrentStock');
   const reqEl = document.getElementById('qadjRequestedQty');
   const targetBoxInput = document.getElementById('qadjTargetBox');
   const targetIndivInput = document.getElementById('qadjTargetIndiv');
 
-  if (titleEl) titleEl.textContent = `${itemName} (${color}) - ${boxContent || 0}入`;
+  const whTag = warehouse !== 'MAIN' ? ` · 🏢 ${warehouse}` : '';
+  const reserved = (opts && opts.reserved) || 0;
+  if (titleEl) titleEl.textContent = `${itemName} (${color}) - ${boxContent || 0}入${whTag}`;
   if (curEl) curEl.textContent = `${currentBox}상자 + ${currentIndiv}개`;
-  if (reqEl) reqEl.textContent = `${requestedQty}상자`;
-  if (targetBoxInput) targetBoxInput.value = Math.max(requestedQty, currentBox || 0);
-  if (targetIndivInput) targetIndivInput.value = currentIndiv || 0;
+  if (reqEl) reqEl.textContent = `${requestedQty}${reqUnit}${reserved > 0 ? ` (+보류/장바구니 선점 ${reserved}${reqUnit})` : ''}`;
+  const defBox = (opts && opts.targetBox !== undefined) ? opts.targetBox : Math.max(requestedQty, currentBox || 0);
+  const defIndiv = (opts && opts.targetIndiv !== undefined) ? opts.targetIndiv : (currentIndiv || 0);
+  if (targetBoxInput) targetBoxInput.value = defBox;
+  if (targetIndivInput) targetIndivInput.value = defIndiv;
 
   const modal = document.getElementById('quickStockModal');
   const overlay = document.getElementById('modalOverlay');
@@ -9240,6 +9290,7 @@ function submitQuickStockAdjustment() {
     boxContent: activeQuickAdjTarget.boxContent,
     targetBox: targetBox,
     targetIndividual: targetIndiv,
+    warehouse: activeQuickAdjTarget.warehouse || 'MAIN',
     location: '재고조정',
     admin: currentAdmin
   }];
@@ -9257,35 +9308,54 @@ function submitQuickStockAdjustment() {
       const confirmedBox = serverItem ? serverItem.stockBox : targetBox;
       const confirmedIndiv = serverItem ? serverItem.stockIndividual : targetIndiv;
       const cacheKey = `${target.itemName}_${target.color || 'SURTIDO'}_${target.boxContent || 1}`;
-      const cached = stockDataCache.find(s => s.key === cacheKey) || stockDataCache.find(s =>
-        s.name === target.itemName &&
-        (s.color || 'SURTIDO') === (target.color || 'SURTIDO') &&
-        Number(s.boxContent || 1) === Number(target.boxContent || 1)
-      );
-      if (cached) {
-        cached.stockBox = confirmedBox;
-        cached.stockIndividual = confirmedIndiv;
-      }
+      const isMainAdj = (target.warehouse || 'MAIN') === 'MAIN';
+      if (isMainAdj) {
+        const cached = stockDataCache.find(s => s.key === cacheKey) || stockDataCache.find(s =>
+          s.name === target.itemName &&
+          (s.color || 'SURTIDO') === (target.color || 'SURTIDO') &&
+          Number(s.boxContent || 1) === Number(target.boxContent || 1)
+        );
+        if (cached) {
+          cached.stockBox = confirmedBox;
+          cached.stockIndividual = confirmedIndiv;
+        }
 
-      // 2. 로컬 스토리지 캐시 및 다른 창/탭 실시간 동기화 브로드캐스트
-      const stamp = Date.now().toString();
-      try {
-        localStorage.setItem('cached_stock_data', JSON.stringify(stockDataCache));
-        localStorage.setItem('stock_data_updated', stamp);
-        localStorage.setItem('wms_cross_window_stock_sync', stamp);
-      } catch (e) {}
-      lastSyncedStockTime = stamp; // 이 창이 쓴 값이므로 포커스 복귀 시 재렌더 불필요
+        // 2. 로컬 스토리지 캐시 및 다른 창/탭 실시간 동기화 브로드캐스트
+        const stamp = Date.now().toString();
+        try {
+          localStorage.setItem('cached_stock_data', JSON.stringify(stockDataCache));
+          localStorage.setItem('stock_data_updated', stamp);
+          localStorage.setItem('wms_cross_window_stock_sync', stamp);
+        } catch (e) {}
+        lastSyncedStockTime = stamp; // 이 창이 쓴 값이므로 포커스 복귀 시 재렌더 불필요
+      } else if (adjWarehouseStock.code === target.warehouse && adjWarehouseStock.map) {
+        // 서브창고 조정: 화면에 올라온 그 창고 재고에 서버 확정값을 바로 반영한다 (새 Map으로 교체해 파생 목록 캐시도 무효화).
+        const nextMap = new Map(adjWarehouseStock.map);
+        const prev = nextMap.get(cacheKey) || { key: cacheKey };
+        nextMap.set(cacheKey, { ...prev, stockBox: confirmedBox, stockIndividual: confirmedIndiv });
+        adjWarehouseStock = { code: target.warehouse, map: nextMap, loadedAt: Date.now() };
+      }
 
       // 3. 즉각 화면 렌더링 (재고부족 빨간색 경고 및 퀵재고 버튼 즉시 해제 & 가용재고 즉시 표시)
       updateTable();
       updateTotals();
 
       // 4. 브라우저 DOM 렌더링 완료 후 완료 알림 표시
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          alert(`✅ [${payload[0].itemName} (${payload[0].color || 'SURTIDO'})] 재고가 ${confirmedBox}상자 + ${confirmedIndiv}개로 조정되었습니다.`);
-        }, 50);
-      });
+      const whLabel = (target.warehouse && target.warehouse !== 'MAIN') ? `[${target.warehouse}] ` : '';
+      const doneMsg = `✅ ${whLabel}[${payload[0].itemName} (${payload[0].color || 'SURTIDO'})] 재고가 ${confirmedBox}상자 + ${confirmedIndiv}개로 조정되었습니다.`;
+      if (typeof target.afterAdjust === 'function') {
+        // 출고 재고부족 경고에서 온 조정: 알림창 대신 토스트로 알리고, 막혔던 출고 행을 이어서 담는다.
+        showAppToast(doneMsg, 2500);
+        if (!isMainAdj) refreshAdjWarehouseStock(true);
+        setTimeout(() => target.afterAdjust(), 0);
+      } else {
+        if (!isMainAdj) refreshAdjWarehouseStock(true);
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            alert(doneMsg);
+          }, 50);
+        });
+      }
     },
     onError: function(err) {
       alert('❌ 퀵 재고조정 실패: ' + (err.message || err));
@@ -12535,7 +12605,10 @@ function refreshOpenStockViews() {
   if (qModal && qModal.style.display === 'block' && activeQuickAdjTarget) {
     const t = activeQuickAdjTarget;
     const key = `${t.itemName}_${t.color || 'SURTIDO'}_${t.boxContent || 1}`;
-    const fresh = (stockDataCache || []).find(s => s.key === key);
+    // 서브창고 조정이면 그 창고 재고로 비교한다 (MAIN 캐시 수치로 덮어쓰지 않는다)
+    const fresh = (t.warehouse && t.warehouse !== 'MAIN')
+      ? (adjWarehouseStock.code === t.warehouse && adjWarehouseStock.map ? adjWarehouseStock.map.get(key) : null)
+      : (stockDataCache || []).find(s => s.key === key);
     if (fresh && (fresh.stockBox !== t.currentBox || fresh.stockIndividual !== t.currentIndiv)) {
       t.currentBox = fresh.stockBox;
       t.currentIndiv = fresh.stockIndividual;
