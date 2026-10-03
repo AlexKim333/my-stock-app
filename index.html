@@ -2347,6 +2347,7 @@
     </div>
     <div id="confirmModal" class="modal">
       <h3 id="confirmTitle"></h3>
+      <div id="confirmReviewWarning" style="display:none; margin: 0 0 10px; padding: 8px 10px; border: 1px solid #fcd34d; border-radius: 6px; background: #fffbeb; color: #92400e; font-size: 9pt; line-height: 1.5;"></div>
       <table id="confirmTable">
         <thead id="confirmHeader"></thead>
         <tbody id="confirmBody"></tbody>
@@ -6390,7 +6391,7 @@ function showConfirmModal() {
         ? '<span style="color:#047857; font-weight:700;">➕ 재고추가</span>' 
         : '<span style="color:#1d4ed8; font-weight:700;">🔄 재고치환</span>';
       html += `
-        <tr>
+        <tr${needsMatchReview(rec) ? ' style="background:#fef3c7;"' : ''}>
           <td>${escapeHtml(rec.itemName)}</td>
           <td>${escapeHtml(rec.color)}</td>
           <td style="font-weight:bold;">${rec.boxQty}상자</td>
@@ -6421,7 +6422,7 @@ function showConfirmModal() {
       }
 
       html += `
-        <tr>
+        <tr${needsMatchReview(rec) ? ' style="background:#fef3c7;"' : ''}>
           <td>${escapeHtml(rec.itemName)}</td>
           <td>${escapeHtml(rec.color)}</td>
           <td>${currentType === 'in' ? rec.boxQty : Math.abs(rec.boxQty)}</td>
@@ -6434,6 +6435,25 @@ function showConfirmModal() {
     }
   });
   tbody.innerHTML = html;
+
+  // ⚠️ 확인 필요 행 요약: 일치율이 낮은 행(카탈로그에 없는 품번이 비슷한 품목으로 잡힌 경우 등)을 제출 직전에 한 번 더 알린다.
+  const warnEl = document.getElementById('confirmReviewWarning');
+  if (warnEl) {
+    const reviewRows = currentType === 'product' ? [] : records.filter(needsMatchReview);
+    if (reviewRows.length > 0) {
+      const list = reviewRows.map(r =>
+        `• ${escapeHtml(r.itemName)} (${escapeHtml(r.color || 'SURTIDO')}) ${r.matchRate}%` +
+        (r.rawModel ? ` — 주문서 원문: ${escapeHtml(r.rawModel)}` : '')
+      ).join('<br>');
+      warnEl.innerHTML = `<strong>⚠️ 확인 필요 ${reviewRows.length}건</strong> — 주문서와 다른 품목으로 잡혔을 수 있습니다. ` +
+        `노란 행을 확인한 뒤 제출하세요.<br>${list}`;
+      warnEl.style.display = 'block';
+    } else {
+      warnEl.innerHTML = '';
+      warnEl.style.display = 'none';
+    }
+  }
+
   confirmModalDiv.style.display = 'block';
 }
 
@@ -10692,6 +10712,15 @@ function onHandwrittenError(err) {
 // 서버가 스캔마다 사진·판독 결과를 저장하고 ocrSampleId를 돌려준다. 그 스캔에서 나온 행에 id를 달아 두었다가
 // 제출에 성공하면 사람이 확정한 행을 스캔별로 서버에 붙인다(npm run ocr:pull로 내려받아 정답 세트로 사용).
 // -------------------------------------------------------------------
+// 일치율이 이 값 미만이면 '확인 필요'(⚠️). 장바구니 배지 기준(95↑ 초록, 80↑ 파랑, 그 아래 ⚠️)과 같다.
+const REVIEW_MATCH_RATE = 80;
+
+/** 사람이 확인해야 하는 행인가(직접 수정했거나 별명으로 확정된 행은 제외). */
+function needsMatchReview(rec) {
+  return !!rec && !rec.isManualEdited && !rec.isAlias &&
+    rec.matchRate !== undefined && rec.matchRate !== null && rec.matchRate < REVIEW_MATCH_RATE;
+}
+
 function ocrSampleTag(sampleId) {
   return sampleId ? { ocrSampleIds: [sampleId] } : {};
 }
@@ -11109,7 +11138,9 @@ function selectDisambiguatedLocation(selectedLoc) {
   if (records && records.length > 0) {
     pendingRecs.forEach(newRec => {
       const matchKey = `${newRec.itemName.replace(/[\s_\-]/g, '').toUpperCase()}__${newRec.color.replace(/[\s_\-]/g, '').toUpperCase()}`;
-      const existingRec = records.find(r => 
+      // 확인 필요(⚠️) 행은 기존 행과 합치지 않는다(수량이 섞이고 ⚠️가 가려짐).
+      const existingRec = needsMatchReview(newRec) ? null : records.find(r =>
+        !needsMatchReview(r) &&
         `${r.itemName.replace(/[\s_\-]/g, '').toUpperCase()}__${(r.color || 'SURTIDO').replace(/[\s_\-]/g, '').toUpperCase()}` === matchKey
       );
 
@@ -11587,7 +11618,11 @@ function onHandwrittenExtracted(data) {
     if (rowBoxQty === 0 && rowIndivQty === 0) return;
 
     // 5. 1줄 통합용 맵에 누적 (동일 품명 + 색상 기준)
-    const itemKey = `${finalItemName.replace(/[\s_\-]/g, '').toUpperCase()}__${finalColor.replace(/[\s_\-]/g, '').toUpperCase()}`;
+    // 확인이 필요한 줄(⚠️)은 같은 품목이라도 합치지 않는다. 합치면 일치율이 섞여 ⚠️가 사라지고 수량도 섞인다
+    // (예: 'YE5015 2' + 카탈로그에 없는 'YE5017 1' → 'YE5015 3상자 88%').
+    const rowNeedsReview = rowMatchScore < REVIEW_MATCH_RATE / 100;
+    const itemKey = `${finalItemName.replace(/[\s_\-]/g, '').toUpperCase()}__${finalColor.replace(/[\s_\-]/g, '').toUpperCase()}` +
+      (rowNeedsReview ? `__REVIEW${consolidatedMap.size}` : '');
 
     if (!consolidatedMap.has(itemKey)) {
       consolidatedMap.set(itemKey, {
@@ -11619,10 +11654,11 @@ function onHandwrittenExtracted(data) {
 
   // 1줄로 통합된 레코드 목록 생성
   consolidatedMap.forEach(group => {
-    let totalScore = 0;
-    group.rawSources.forEach(s => totalScore += (s.score !== undefined ? s.score : 1.0));
-    const avgScore = group.rawSources.length > 0 ? (totalScore / group.rawSources.length) : 1.0;
-    const matchRate = Math.round(avgScore * 100);
+    // 합쳐진 줄의 일치율은 평균이 아니라 가장 낮은 값(평균이면 낮은 줄이 묻힌다).
+    const minScore = group.rawSources.length > 0
+      ? Math.min(...group.rawSources.map(s => (s.score !== undefined ? s.score : 1.0)))
+      : 1.0;
+    const matchRate = Math.round(minScore * 100);
 
     newRecords.push({
       itemName: group.itemName,
@@ -11675,7 +11711,9 @@ function onHandwrittenExtracted(data) {
     if (hasExistingRecords) {
       recordsToProceed.forEach(newRec => {
         const matchKey = `${newRec.itemName.replace(/[\s_\-]/g, '').toUpperCase()}__${newRec.color.replace(/[\s_\-]/g, '').toUpperCase()}`;
-        const existingRec = records.find(r => 
+        // 확인 필요(⚠️) 행은 기존 행과 합치지 않는다(수량이 섞이고 ⚠️가 가려짐).
+        const existingRec = needsMatchReview(newRec) ? null : records.find(r =>
+          !needsMatchReview(r) &&
           `${r.itemName.replace(/[\s_\-]/g, '').toUpperCase()}__${(r.color || 'SURTIDO').replace(/[\s_\-]/g, '').toUpperCase()}` === matchKey
         );
 
