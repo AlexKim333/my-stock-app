@@ -11,6 +11,7 @@
     "test": "npm run verify && npm run test:ai",
     "test:ai": "node scripts/test_ai_query_stock.mjs",
     "smoke": "node scripts/smoke_test.mjs",
+    "smoke:clean": "node scripts/cleanup_smoke.mjs",
     "update-types": "npx supabase gen types typescript --project-id xfxmodlrczofwylyedjh > src/types/supabase.ts",
     "sync-db": "npm run update-types"
   },
