@@ -1,11 +1,14 @@
 import { installSupabaseBridge, preloadItemIdCache, askAiInventoryBot } from './lib/supabaseAdapter.js'
 import { supabase, WMS_AUTH_STORAGE_KEY } from './lib/supabase.js'
 import { initStockSync } from './lib/stockSync.js'
+import { printReceipt } from './lib/receiptPrint.js'
 import FlexSearch from 'flexsearch'
 
 // 0. ktk-wms-v2 동급 최강 FlexSearch 초고속 검색엔진 전역 등록
 window.FlexSearch = FlexSearch
 window.askAiInventoryBot = askAiInventoryBot
+// 입출고증 인쇄 양식 (index.html · searchmodify.html 공용)
+window.printReceipt = printReceipt
 
 
 // 1. Supabase 브릿지 설치
