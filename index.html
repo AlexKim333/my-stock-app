@@ -2915,6 +2915,12 @@
             <input type="checkbox" id="chkBelowSafeStock" onchange="filterSubWarehouseTable()" style="margin: 0; cursor: pointer;">
             <span>📉 안전재고 이하</span>
           </label>
+          <!-- ⭐ 관심품목 리스트 3개: 클릭 시 해당 리스트 품목만 필터링 (다시 클릭하면 해제) -->
+          <div style="display: inline-flex; align-items: center; gap: 3px; height: 28px; padding: 0 4px; background: #faf5ff; border: 1px solid #d8b4fe; border-radius: 5px; box-sizing: border-box;" title="관심품목 리스트를 클릭하면 그 품목만 표시됩니다 (다시 클릭하면 해제)">
+            <span style="font-size: 8.5pt; color: #7e22ce; font-weight: 700; white-space: nowrap; padding: 0 2px;">⭐</span>
+            <div id="subWhWatchlistChips" style="display: inline-flex; gap: 3px;"></div>
+            <button type="button" onclick="openWatchlistEditor()" style="height: 22px; padding: 0 7px; border: 1px solid #c084fc; background: #ffffff; color: #7e22ce; border-radius: 4px; font-size: 7.8pt; font-weight: 700; cursor: pointer; white-space: nowrap;" title="관심품목 리스트 편집">✏️ 편집</button>
+          </div>
         </div>
         <div style="font-size: 8.3pt; color: #64748b; white-space: nowrap; flex-shrink: 0; display: flex; align-items: center; gap: 6px;">
           <span id="subWhSortBadge" style="display: none; font-size: 7.5pt; background: #e0f2fe; color: #0284c7; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd; font-weight: 600; cursor: pointer;" onclick="resetSubWhSort()" title="클릭 시 정렬 초기화"></span>
@@ -2980,6 +2986,78 @@
         <div>
           <button type="button" onclick="closeSubWarehouseMatrixModal()" style="padding: 6px 18px; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 5px; font-weight: 600; cursor: pointer; font-size: 8.5pt;">창 닫기</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ⭐ 2차 모달: 관심품목 리스트 편집 (리스트 3개 × 품목 수 제한 없음) -->
+    <div id="watchlistEditorBackdrop" onclick="closeWatchlistEditor()" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); z-index: 1075;"></div>
+    <div id="watchlistEditorModal" class="modal" style="display: none; width: 1100px; max-width: 96vw; height: 86vh; max-height: 86vh; padding: 14px 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.4); z-index: 1080; box-sizing: border-box; border-radius: 8px; flex-direction: column;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #a855f7; padding-bottom: 8px; margin-bottom: 10px; flex-shrink: 0;">
+        <h3 style="margin: 0; font-size: 11.5pt; font-weight: bold; color: #1e293b;">⭐ 관심품목 리스트 편집</h3>
+        <button type="button" onclick="closeWatchlistEditor()" style="background: none; border: none; font-size: 16pt; cursor: pointer; color: #94a3b8; line-height: 1;">&times;</button>
+      </div>
+
+      <!-- 리스트 선택 탭 + 이름 변경 -->
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-shrink: 0; flex-wrap: wrap;">
+        <div id="wlEditorTabs" style="display: inline-flex; gap: 4px;"></div>
+        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 8.5pt; color: #475569; font-weight: 600; margin-left: 8px; width: auto; white-space: nowrap;">
+          리스트 이름
+          <input type="text" id="wlEditorNameInput" maxlength="20" oninput="onWatchlistNameInput(this.value)" style="height: 28px; width: 180px; padding: 0 8px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 9pt; box-sizing: border-box;">
+        </label>
+      </div>
+
+      <div style="display: flex; gap: 12px; flex: 1; min-height: 0;">
+        <!-- 왼쪽: 전체 품목 검색 -->
+        <div style="flex: 1.25; display: flex; flex-direction: column; min-width: 0; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-shrink: 0;">
+            <input type="text" id="wlEditorSearchInput" placeholder="🔍 품명 / 색상 검색 (전체 품목)..." oninput="renderWatchlistSearchTable()" autocomplete="off" style="flex: 1; height: 28px; padding: 0 8px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 9pt; box-sizing: border-box;">
+            <button type="button" onclick="addAllWatchlistSearchResults()" style="height: 28px; padding: 0 10px; border: 1px solid #a855f7; background: #faf5ff; color: #7e22ce; border-radius: 5px; font-size: 8.2pt; font-weight: 700; cursor: pointer; white-space: nowrap;" title="현재 검색 결과를 모두 이 리스트에 추가">＋ 검색결과 전체 추가</button>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 8pt; color: #64748b; margin-bottom: 4px; flex-shrink: 0;">
+            <span id="wlEditorSearchCount">전체 품목</span>
+            <span>행을 클릭하면 추가 / 제거됩니다</span>
+          </div>
+          <div style="flex: 1; overflow: auto; border: 1px solid #f1f5f9; border-radius: 4px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt;">
+              <thead>
+                <tr style="position: sticky; top: 0; background: #f1f5f9; color: #334155;">
+                  <th style="padding: 5px 4px; width: 34px;"></th>
+                  <th style="padding: 5px 4px; text-align: left;">품명</th>
+                  <th style="padding: 5px 4px; text-align: left;">색상</th>
+                  <th style="padding: 5px 4px; text-align: right;">메인</th>
+                  <th style="padding: 5px 4px; text-align: right;">서브합계</th>
+                </tr>
+              </thead>
+              <tbody id="wlEditorSearchTbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 오른쪽: 현재 리스트에 담긴 품목 -->
+        <div style="flex: 1; display: flex; flex-direction: column; min-width: 0; border: 1px solid #e9d5ff; border-radius: 6px; padding: 8px; background: #fdfaff;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-shrink: 0; height: 28px;">
+            <span style="font-size: 9pt; font-weight: 700; color: #6b21a8;">담긴 품목 <span id="wlEditorListCount">0</span>개</span>
+            <button type="button" onclick="clearWatchlistEditorItems()" style="height: 24px; padding: 0 8px; border: 1px solid #fca5a5; background: #ffffff; color: #b91c1c; border-radius: 4px; font-size: 8pt; font-weight: 600; cursor: pointer;">전체 비우기</button>
+          </div>
+          <div style="flex: 1; overflow: auto; border: 1px solid #f3e8ff; border-radius: 4px; background: #ffffff;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt;">
+              <thead>
+                <tr style="position: sticky; top: 0; background: #f3e8ff; color: #6b21a8;">
+                  <th style="padding: 5px 4px; width: 36px; text-align: right;">#</th>
+                  <th style="padding: 5px 4px; text-align: left;">품명</th>
+                  <th style="padding: 5px 4px; text-align: left;">색상</th>
+                  <th style="padding: 5px 4px; width: 34px;"></th>
+                </tr>
+              </thead>
+              <tbody id="wlEditorListTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px; padding-top: 10px; margin-top: 10px; border-top: 1px solid #e2e8f0; flex-shrink: 0;">
+        <button type="button" onclick="saveWatchlistEditor()" style="padding: 7px 18px; background: #7e22ce; color: #ffffff; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 9pt;">💾 저장</button>
+        <button type="button" onclick="closeWatchlistEditor()" style="padding: 7px 18px; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 5px; font-weight: 600; cursor: pointer; font-size: 9pt;">취소</button>
       </div>
     </div>
 
@@ -12544,6 +12622,8 @@ function openSubWarehouseMatrixModal() {
     } catch (e) {}
   }
 
+  renderWatchlistChips();
+
   // 캐시된 데이터가 있으면 먼저 즉시 렌더링하고 백그라운드 갱신
   if (subWhMatrixData) {
     updateTruckGauges();
@@ -13339,6 +13419,278 @@ function updateSubWhPaginationControls(totalFiltered, totalPages, currentPage, s
   }
 }
 
+// -------------------------------------------------------------------
+// ⭐ 관심품목 리스트 (3개, 품목 수 제한 없음) — 이 브라우저(localStorage)에 저장
+// 툴바 칩을 누르면 그 리스트 품목만 매트릭스에 표시되고, 다시 누르면 해제된다.
+// 품목은 품명+색상으로 식별한다(입수가 다른 같은 품명·색상은 함께 표시).
+// -------------------------------------------------------------------
+const WATCHLIST_STORAGE_KEY = 'wms_subwh_watchlists_v1';
+const WATCHLIST_COUNT = 3;
+const WATCHLIST_SEARCH_RENDER_LIMIT = 300;
+let activeWatchlistIndex = null; // null = 필터 꺼짐
+let wlEditorLists = [];
+let wlEditorIndex = 0;
+let wlEditorSearchResults = [];
+
+function watchlistItemKey(codigo, color) {
+  return `${String(codigo || '').trim().toUpperCase()}___${String(color || 'SURTIDO').trim().toUpperCase()}`;
+}
+
+function getWatchlists() {
+  let saved = [];
+  try {
+    saved = JSON.parse(localStorage.getItem(WATCHLIST_STORAGE_KEY) || '[]');
+  } catch (e) {}
+  const lists = [];
+  for (let i = 0; i < WATCHLIST_COUNT; i++) {
+    const s = Array.isArray(saved) && saved[i] ? saved[i] : {};
+    lists.push({
+      name: (s.name && String(s.name).trim()) || `관심 ${i + 1}`,
+      items: Array.isArray(s.items) ? s.items.filter(it => it && it.codigo) : []
+    });
+  }
+  return lists;
+}
+
+function getActiveWatchlistKeySet() {
+  if (activeWatchlistIndex === null) return null;
+  const list = getWatchlists()[activeWatchlistIndex];
+  return new Set(list.items.map(it => watchlistItemKey(it.codigo, it.color)));
+}
+
+function renderWatchlistChips() {
+  const container = document.getElementById('subWhWatchlistChips');
+  if (!container) return;
+  container.innerHTML = getWatchlists().map((list, i) => {
+    const isActive = activeWatchlistIndex === i;
+    return `
+      <button type="button" onclick="toggleWatchlistFilter(${i})" title="${escapeHtml(list.name)} (${list.items.length}개) — ${isActive ? '클릭하면 필터 해제' : '클릭하면 이 품목만 표시'}"
+        style="height: 22px; max-width: 120px; padding: 0 7px; border-radius: 4px; font-size: 7.8pt; font-weight: 700; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        border: 1px solid ${isActive ? '#7e22ce' : '#e9d5ff'}; background: ${isActive ? '#7e22ce' : '#ffffff'}; color: ${isActive ? '#ffffff' : (list.items.length ? '#6b21a8' : '#c4b5fd')};">
+        ${escapeHtml(list.name)} (${list.items.length})
+      </button>
+    `;
+  }).join('');
+}
+
+function toggleWatchlistFilter(index) {
+  if (activeWatchlistIndex === index) {
+    activeWatchlistIndex = null;
+  } else if (!getWatchlists()[index].items.length) {
+    openWatchlistEditor(index); // 빈 리스트는 바로 편집창으로
+    return;
+  } else {
+    activeWatchlistIndex = index;
+  }
+  renderWatchlistChips();
+  filterSubWarehouseTable();
+}
+
+function openWatchlistEditor(index) {
+  if (!subWhMatrixData || !subWhMatrixData.items) {
+    alert('품목 목록을 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
+    return;
+  }
+  wlEditorLists = getWatchlists().map(l => ({ name: l.name, items: l.items.map(it => ({ codigo: it.codigo, color: it.color })) }));
+  wlEditorIndex = typeof index === 'number' ? index : (activeWatchlistIndex !== null ? activeWatchlistIndex : 0);
+  const searchInput = document.getElementById('wlEditorSearchInput');
+  if (searchInput) searchInput.value = '';
+  document.getElementById('watchlistEditorBackdrop').style.display = 'block';
+  document.getElementById('watchlistEditorModal').style.display = 'flex';
+  renderWatchlistEditor();
+  setTimeout(() => { if (searchInput) searchInput.focus(); }, 50);
+}
+
+function closeWatchlistEditor() {
+  document.getElementById('watchlistEditorBackdrop').style.display = 'none';
+  document.getElementById('watchlistEditorModal').style.display = 'none';
+}
+
+function switchWatchlistEditorTab(index) {
+  wlEditorIndex = index;
+  renderWatchlistEditor();
+}
+
+function onWatchlistNameInput(value) {
+  wlEditorLists[wlEditorIndex].name = value;
+  renderWatchlistEditorTabs();
+}
+
+function renderWatchlistEditor() {
+  renderWatchlistEditorTabs();
+  const nameInput = document.getElementById('wlEditorNameInput');
+  if (nameInput) nameInput.value = wlEditorLists[wlEditorIndex].name;
+  renderWatchlistSearchTable();
+  renderWatchlistListTable();
+}
+
+function renderWatchlistEditorTabs() {
+  const tabs = document.getElementById('wlEditorTabs');
+  if (!tabs) return;
+  tabs.innerHTML = wlEditorLists.map((list, i) => {
+    const isActive = i === wlEditorIndex;
+    return `
+      <button type="button" onclick="switchWatchlistEditorTab(${i})"
+        style="height: 28px; max-width: 160px; padding: 0 12px; border-radius: 5px; font-size: 8.5pt; font-weight: 700; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        border: 1px solid ${isActive ? '#7e22ce' : '#d8b4fe'}; background: ${isActive ? '#7e22ce' : '#faf5ff'}; color: ${isActive ? '#ffffff' : '#6b21a8'};">
+        ${escapeHtml(list.name || `관심 ${i + 1}`)} (${list.items.length})
+      </button>
+    `;
+  }).join('');
+}
+
+function getWatchlistEditorKeySet() {
+  return new Set(wlEditorLists[wlEditorIndex].items.map(it => watchlistItemKey(it.codigo, it.color)));
+}
+
+function renderWatchlistSearchTable() {
+  const tbody = document.getElementById('wlEditorSearchTbody');
+  const countEl = document.getElementById('wlEditorSearchCount');
+  if (!tbody) return;
+  const query = (document.getElementById('wlEditorSearchInput').value || '').toLowerCase().trim();
+
+  // 같은 품명·색상(입수만 다른 품목)은 한 줄로 묶는다
+  const byKey = new Map();
+  ((subWhMatrixData && subWhMatrixData.items) || []).forEach(item => {
+    const key = watchlistItemKey(item.codigo, item.color);
+    const row = byKey.get(key);
+    if (row) {
+      row.mainStock += Number(item.mainStock) || 0;
+      row.totalSubStock += Number(item.totalSubStock) || 0;
+      return;
+    }
+    byKey.set(key, {
+      key,
+      codigo: String(item.codigo || '').trim(),
+      color: String(item.color || 'SURTIDO').trim(),
+      mainStock: Number(item.mainStock) || 0,
+      totalSubStock: Number(item.totalSubStock) || 0
+    });
+  });
+
+  wlEditorSearchResults = Array.from(byKey.values())
+    .filter(row => !query || `${row.codigo} ${row.color}`.toLowerCase().includes(query))
+    .sort((a, b) => a.codigo.localeCompare(b.codigo, undefined, { numeric: true, sensitivity: 'base' }) ||
+      a.color.localeCompare(b.color, undefined, { numeric: true, sensitivity: 'base' }));
+
+  const shown = wlEditorSearchResults.slice(0, WATCHLIST_SEARCH_RENDER_LIMIT);
+  if (countEl) {
+    countEl.textContent = wlEditorSearchResults.length > shown.length
+      ? `검색 결과 ${wlEditorSearchResults.length}개 (상위 ${shown.length}개 표시 — 검색어로 좁혀 주세요)`
+      : `검색 결과 ${wlEditorSearchResults.length}개`;
+  }
+
+  if (!shown.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding: 24px; text-align: center; color: #94a3b8;">일치하는 품목이 없습니다.</td></tr>';
+    return;
+  }
+
+  const inList = getWatchlistEditorKeySet();
+  tbody.innerHTML = shown.map((row, i) => {
+    const added = inList.has(row.key);
+    return `
+      <tr onclick="toggleWatchlistEditorItemAt(${i})" style="cursor: pointer; border-bottom: 1px solid #f1f5f9; background: ${added ? '#f3e8ff' : '#ffffff'};">
+        <td style="padding: 4px; text-align: center; font-weight: 800; color: ${added ? '#7e22ce' : '#cbd5e1'};">${added ? '✓' : '＋'}</td>
+        <td style="padding: 4px; font-weight: 700; color: #0f172a;">${escapeHtml(row.codigo)}</td>
+        <td style="padding: 4px; color: #475569;">${escapeHtml(row.color)}</td>
+        <td style="padding: 4px; text-align: right; color: #1d4ed8;">${row.mainStock}</td>
+        <td style="padding: 4px; text-align: right; color: #0f766e;">${row.totalSubStock}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderWatchlistListTable() {
+  const tbody = document.getElementById('wlEditorListTbody');
+  const countEl = document.getElementById('wlEditorListCount');
+  if (!tbody) return;
+  const items = wlEditorLists[wlEditorIndex].items;
+  if (countEl) countEl.textContent = items.length;
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="padding: 24px; text-align: center; color: #94a3b8; line-height: 1.6;">아직 담긴 품목이 없습니다.<br>왼쪽 목록에서 품목을 클릭해 추가하세요.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map((it, i) => `
+    <tr style="border-bottom: 1px solid #f3e8ff;">
+      <td style="padding: 4px; text-align: right; color: #94a3b8;">${i + 1}</td>
+      <td style="padding: 4px; font-weight: 700; color: #0f172a;">${escapeHtml(it.codigo)}</td>
+      <td style="padding: 4px; color: #475569;">${escapeHtml(it.color)}</td>
+      <td style="padding: 2px 4px; text-align: center;">
+        <button type="button" onclick="removeWatchlistEditorItemAt(${i})" title="리스트에서 빼기" style="border: none; background: none; color: #ef4444; cursor: pointer; font-size: 10pt; font-weight: 700;">✕</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function sortWatchlistEditorItems() {
+  wlEditorLists[wlEditorIndex].items.sort((a, b) =>
+    a.codigo.localeCompare(b.codigo, undefined, { numeric: true, sensitivity: 'base' }) ||
+    a.color.localeCompare(b.color, undefined, { numeric: true, sensitivity: 'base' }));
+}
+
+function refreshWatchlistEditorLists() {
+  renderWatchlistEditorTabs();
+  renderWatchlistSearchTable();
+  renderWatchlistListTable();
+}
+
+function toggleWatchlistEditorItemAt(resultIndex) {
+  const row = wlEditorSearchResults[resultIndex];
+  if (!row) return;
+  const list = wlEditorLists[wlEditorIndex];
+  const pos = list.items.findIndex(it => watchlistItemKey(it.codigo, it.color) === row.key);
+  if (pos !== -1) {
+    list.items.splice(pos, 1);
+  } else {
+    list.items.push({ codigo: row.codigo, color: row.color });
+    sortWatchlistEditorItems();
+  }
+  refreshWatchlistEditorLists();
+}
+
+function addAllWatchlistSearchResults() {
+  const query = (document.getElementById('wlEditorSearchInput').value || '').trim();
+  const inList = getWatchlistEditorKeySet();
+  const toAdd = wlEditorSearchResults.filter(row => !inList.has(row.key));
+  if (!toAdd.length) {
+    alert('추가할 새 품목이 없습니다.');
+    return;
+  }
+  if (!query && !confirm(`검색어 없이 전체 ${toAdd.length}개 품목을 모두 추가하시겠습니까?`)) return;
+  toAdd.forEach(row => wlEditorLists[wlEditorIndex].items.push({ codigo: row.codigo, color: row.color }));
+  sortWatchlistEditorItems();
+  refreshWatchlistEditorLists();
+}
+
+function removeWatchlistEditorItemAt(index) {
+  wlEditorLists[wlEditorIndex].items.splice(index, 1);
+  refreshWatchlistEditorLists();
+}
+
+function clearWatchlistEditorItems() {
+  const list = wlEditorLists[wlEditorIndex];
+  if (!list.items.length) return;
+  if (!confirm(`[${list.name}] 리스트의 ${list.items.length}개 품목을 모두 비우시겠습니까?`)) return;
+  list.items = [];
+  refreshWatchlistEditorLists();
+}
+
+function saveWatchlistEditor() {
+  const lists = wlEditorLists.map((l, i) => ({ name: String(l.name || '').trim() || `관심 ${i + 1}`, items: l.items }));
+  try {
+    localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(lists));
+  } catch (e) {
+    alert('관심품목 리스트를 저장하지 못했습니다: ' + (e.message || e));
+    return;
+  }
+  // 방금 편집한 리스트로 필터를 켠다 (비어 있으면 끈다)
+  activeWatchlistIndex = lists[wlEditorIndex].items.length ? wlEditorIndex : null;
+  closeWatchlistEditor();
+  renderWatchlistChips();
+  filterSubWarehouseTable();
+  showAppToast(`⭐ 관심품목 리스트가 저장되었습니다. (${lists[wlEditorIndex].name}: ${lists[wlEditorIndex].items.length}개)`);
+}
+
 function filterSubWarehouseTable(options) {
   if (!subWhMatrixData || !subWhMatrixData.items) return;
 
@@ -13355,11 +13707,13 @@ function filterSubWarehouseTable(options) {
   const cartKeyMap = getSubWhCartKeyMap();
   const neededCountEl = document.getElementById('neededItemsCount');
   if (neededCountEl) neededCountEl.textContent = Object.keys(cartKeyMap).length;
+  const watchKeys = getActiveWatchlistKeySet();
 
   subWhFilteredItems = subWhMatrixData.items.filter(item => {
     const itemKey = `${item.codigo}___${item.color}`.toUpperCase();
     const isNeeded = cartKeyMap[itemKey] !== undefined;
 
+    if (watchKeys && !watchKeys.has(watchlistItemKey(item.codigo, item.color))) return false;
     if (onlyNeeded && !isNeeded) return false;
     if (onlyZeroEffective && (item.effectiveStock || 0) > 0) return false;
     if (onlyBelowSafe && ((item.safeStock || 0) <= 0 || (item.effectiveStock || 0) > (item.safeStock || 0))) return false;
@@ -13537,6 +13891,7 @@ function renderSubWhTable(items, cartKeyMap) {
           <div style="font-size: 22pt; margin-bottom: 8px;">📦</div>
           <div style="font-weight: bold; color: #334155; font-size: 10pt; margin-bottom: 6px;">일치하는 품목이 없습니다.</div>
           <div style="font-size: 8.5pt; color: #64748b; line-height: 1.5;">
+            ${activeWatchlistIndex !== null ? `관심품목 <strong>[${escapeHtml(getWatchlists()[activeWatchlistIndex].name)}]</strong> 필터가 켜져 있습니다. 다른 필터(서브창고 재고 있는 품목만 등)와 함께 적용됩니다.<br>` : ''}
             ${totalCount > 0 && onlyInStock ? `현재 전체 ${totalCount}개 품목 중 서브창고 재고가 1개 이상인 품목만 표시하도록 필터링되어 있습니다.<br>상단 <strong>[서브창고 재고 있는 품목만]</strong> 체크를 해제하시면 전체 품목을 확인하실 수 있습니다.` : '검색어를 변경하시거나 우측 상단의 [🔄 새로고침] 버튼을 눌러주세요.'}
           </div>
         </td>
