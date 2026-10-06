@@ -249,6 +249,8 @@
     .banner-row.second button:hover {
       background-color: #047857;
     }
+    .banner-row.second button.btn-reprint { background-color: #2563eb; }
+    .banner-row.second button.btn-reprint:hover { background-color: #1d4ed8; }
     .radio-group {
       display: inline-flex;
       align-items: center;
@@ -525,6 +527,7 @@
           <span id="loadedInvoiceNumber">000</span>
         </div>
         <button type="button" onclick="searchRecords()">🔍 전표 검색</button>
+        <button type="button" class="btn-reprint" onclick="reprintReceipt()" title="장바구니에 있는 전표를 기존 양식으로 다시 출력">🖨️ 전표 재발행</button>
       </div>
     </div>
     <div class="content">
@@ -1422,6 +1425,8 @@ function searchRecords() {
   const paddedSeq = (seq || '1').padStart(3, '0');
   const fullInvoiceNumber = `${formattedDate}-${paddedSeq}`;
   document.getElementById('loadedInvoiceNumber').textContent = paddedSeq || '000';
+  // 재발행은 화면 입력값이 아니라 실제로 불러온 전표의 유형/날짜/번호로 출력한다.
+  loadedReceipt = { typeValue, date, paddedSeq };
   // 화살표로 전표를 빠르게 넘길 때 이전 조회 결과가 뒤늦게 도착해 덮어쓰지 않도록 최신 응답만 반영한다.
   callServer('searchRecords', [type, fullInvoiceNumber], {
     key: 'searchRecords',
@@ -1429,6 +1434,31 @@ function searchRecords() {
     onSuccess: displayRecords,
     onError: err => alert('전표 조회 실패: ' + (err && err.message ? err.message : err))
   });
+}
+
+let loadedReceipt = null;
+
+/**
+ * 장바구니(현재 표)에 있는 전표를 기존 printReceipt 양식으로 다시 출력한다.
+ * 서버에는 아무것도 쓰지 않는다.
+ */
+function reprintReceipt() {
+  if (!loadedReceipt) {
+    alert('먼저 [전표 검색]으로 전표를 불러오세요.');
+    return;
+  }
+  if (records.length === 0) {
+    alert('재발행할 전표 내역이 없습니다.');
+    return;
+  }
+  if (JSON.stringify(records) !== JSON.stringify(originalRecords) &&
+      !confirm('저장(Update)되지 않은 변경 내용이 있습니다.\n현재 장바구니 내용 그대로 출력할까요?')) {
+    return;
+  }
+  const { typeValue, date, paddedSeq } = loadedReceipt;
+  const adminValue = document.getElementById('adminInput').value;
+  const fullInvoiceNumber = `${date.replace(/-/g, '/')}-${paddedSeq}`;
+  printReceipt([...records], typeValue, date, adminValue, fullInvoiceNumber);
 }
 
 function displayRecords(recordsData) {
