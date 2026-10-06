@@ -219,6 +219,18 @@
     #searchDate { width: 130px !important; }
     #invoiceNumber { width: 65px !important; text-align: center; font-weight: 800; color: #1e293b; }
     #adminInput { width: 90px !important; text-align: center; font-weight: 700; }
+    #loadedOrigin {
+      display: inline-block;
+      min-width: 70px;
+      text-align: center;
+      font-size: 10pt;
+      font-weight: 800;
+      color: #b45309;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      padding: 2px 8px;
+      border-radius: 6px;
+    }
     #loadedInvoiceNumber {
       display: inline-block;
       min-width: 42px;
@@ -518,6 +530,10 @@
         </div>
       </div>
       <div class="banner-row second">
+        <div class="input-group" title="불러온 전표의 창고 (출고·이동: 출발 창고 / 입고: 도착 창고)">
+          <label id="loadedOriginLabel">ORIGEN:</label>
+          <span id="loadedOrigin">-</span>
+        </div>
         <div class="input-group">
           <label for="adminInput">관리자:</label>
           <input type="text" id="adminInput" name="adminInput" value="ADMIN">
@@ -870,7 +886,12 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
   const doc = iframe.contentWindow.document;
   const invoiceNo = String(invoiceNumber || '');
   const displayNumber = invoiceNo.includes('-') ? invoiceNo.split('-')[1] : invoiceNo;
-  const formattedDate = selectedDate.replace(/-/g, '/');
+  // 출고입력 화면과 같은 toLocaleDateString() 형식(예: 2026. 10. 6.)으로 찍되, 날짜는 전표 날짜를 쓴다.
+  // 'YYYY-MM-DD'를 new Date()로 바로 파싱하면 UTC로 해석돼 멕시코 시간대에서 하루 밀리므로 로컬 날짜로 만든다.
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(selectedDate || ''));
+  const formattedDate = ymd
+    ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3])).toLocaleDateString()
+    : String(selectedDate || '').replace(/-/g, '/');
   const totalItems = new Set(records.map(r => `${r.itemName}_${r.color}`)).size;
   const totalBoxes = records.reduce((sum, r) => sum + Math.abs(r.boxQty), 0);
   const totalIndividuals = records.reduce((sum, r) => sum + Math.abs(r.individualQty), 0);
@@ -1447,6 +1468,7 @@ function searchRecords() {
   document.getElementById('loadedInvoiceNumber').textContent = paddedSeq || '000';
   // 재발행은 화면 입력값이 아니라 실제로 불러온 전표의 유형/날짜/번호로 출력한다.
   loadedReceipt = { typeValue, date, paddedSeq };
+  renderLoadedOrigin();
   // 화살표로 전표를 빠르게 넘길 때 이전 조회 결과가 뒤늦게 도착해 덮어쓰지 않도록 최신 응답만 반영한다.
   callServer('searchRecords', [type, fullInvoiceNumber], {
     key: 'searchRecords',
@@ -1457,6 +1479,16 @@ function searchRecords() {
 }
 
 let loadedReceipt = null;
+
+/** 불러온 전표의 창고를 배너에 표시한다. 입고는 도착 창고이므로 DESTINO로 표기. */
+function renderLoadedOrigin() {
+  const label = document.getElementById('loadedOriginLabel');
+  const value = document.getElementById('loadedOrigin');
+  if (!label || !value) return;
+  const typeValue = loadedReceipt ? loadedReceipt.typeValue : 'out';
+  label.textContent = typeValue === 'in' ? 'DESTINO:' : (typeValue === 'adj' ? '창고:' : 'ORIGEN:');
+  value.textContent = (loadedReceipt && loadedReceipt.warehouse) || '-';
+}
 
 /**
  * 장바구니(현재 표)에 있는 전표를 기존 printReceipt 양식으로 다시 출력한다.
@@ -1496,6 +1528,7 @@ function displayRecords(recordsData) {
     loadedReceipt.warehouse = recordsData[0].warehouse;
     loadedReceipt.txType = recordsData[0].txType;
   }
+  renderLoadedOrigin();
   updateTable();
 
   if (records.length > 0) {
