@@ -711,6 +711,7 @@
         });
       };
       onClick('autocompleteDropdown', '[data-item-name]', el => selectItemFromDropdown(el.dataset.itemName));
+      onClick('autocompleteDropdown', '[data-more-results]', () => showMoreAutocompleteResults());
       onClick('recentChipsContainer', '[data-item-name]', el => selectItemFromDropdown(el.dataset.itemName));
       onClick('ledgerTableBody', '[data-invoice]', el => openSearchModifyInvoice(el.dataset.invoice));
     }
@@ -726,7 +727,23 @@
     }
 
     /* 2. 상품 검색 및 자동완성 */
+    const AUTOCOMPLETE_PAGE_SIZE = 20;
+    let autocompleteLimit = AUTOCOMPLETE_PAGE_SIZE;
+
     function handleItemSearchInput(val) {
+      autocompleteLimit = AUTOCOMPLETE_PAGE_SIZE; // 검색어가 바뀌면 처음 개수부터
+      renderAutocompleteDropdown(val);
+    }
+
+    function showMoreAutocompleteResults() {
+      const dropdown = document.getElementById('autocompleteDropdown');
+      const scrollTop = dropdown ? dropdown.scrollTop : 0;
+      autocompleteLimit += AUTOCOMPLETE_PAGE_SIZE;
+      renderAutocompleteDropdown(document.getElementById('itemSearchInput')?.value);
+      if (dropdown) dropdown.scrollTop = scrollTop;
+    }
+
+    function renderAutocompleteDropdown(val) {
       const dropdown = document.getElementById('autocompleteDropdown');
       const q = String(val || '').trim().toUpperCase();
 
@@ -735,22 +752,28 @@
         return;
       }
 
-      const matches = catalogCache.filter(it => 
+      const allMatches = catalogCache.filter(it => 
         String(it.name || '').toUpperCase().includes(q) ||
         String(it.color || '').toUpperCase().includes(q)
-      ).slice(0, 10);
+      );
+      const matches = allMatches.slice(0, autocompleteLimit);
 
       if (matches.length === 0) {
         if (dropdown) dropdown.style.display = 'none';
         return;
       }
 
+      const remaining = allMatches.length - matches.length;
       dropdown.innerHTML = matches.map(it => `
         <div class="autocomplete-item" data-item-name="${escapeHtml(it.name)}">
           <span style="font-weight:700; color:#1e293b;">${escapeHtml(it.name)} <span style="font-size:7.5pt; color:#64748b;">(${escapeHtml(it.color || 'SURTIDO')})</span></span>
           <span style="font-size:7.5pt; color:#2563eb; font-weight:600;">재고: ${it.stockBox || 0}상자</span>
         </div>
-      `).join('');
+      `).join('') + (remaining > 0 ? `
+        <div class="autocomplete-item" data-more-results="1" style="justify-content:center; color:#2563eb; font-weight:700; background:#f8fafc;">
+          ▼ 결과 더보기 (${matches.length} / ${allMatches.length}개 표시 · ${remaining}개 더 있음)
+        </div>
+      ` : '');
 
       dropdown.style.display = 'block';
     }
