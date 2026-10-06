@@ -1306,15 +1306,19 @@ function loadStockData(silent = false) {
   });
 }
 
-function loadDropdowns() {
-  const select = document.getElementById('location');
+function updateLocationLabel(type) {
   const label = document.getElementById('locationLabel');
-  if (!select) return;
-
-  const type = currentType || 'in';
   if (label) {
     label.textContent = type === 'in' ? '입고처:' : (type === 'adj' ? '조정유형/위치:' : '출고처:');
   }
+}
+
+function loadDropdowns() {
+  const select = document.getElementById('location');
+  if (!select) return;
+
+  const type = currentType || 'in';
+  updateLocationLabel(type);
 
   if (locationCacheByType[type] && locationCacheByType[type].length > 0) {
     select.innerHTML = '<option value="">선택</option>' + locationCacheByType[type].map(loc => `<option value="${escapeHtml(loc)}">${escapeHtml(loc)}</option>`).join('');
@@ -1469,6 +1473,8 @@ function searchRecords() {
   // 재발행은 화면 입력값이 아니라 실제로 불러온 전표의 유형/날짜/번호로 출력한다.
   loadedReceipt = { typeValue, date, paddedSeq };
   renderLoadedOrigin();
+  // 라디오가 change 이벤트 없이 바뀐 경우(브라우저 폼 복원 등)에도 라벨은 불러온 전표 유형을 따른다.
+  updateLocationLabel(typeValue);
   // 화살표로 전표를 빠르게 넘길 때 이전 조회 결과가 뒤늦게 도착해 덮어쓰지 않도록 최신 응답만 반영한다.
   callServer('searchRecords', [type, fullInvoiceNumber], {
     key: 'searchRecords',
