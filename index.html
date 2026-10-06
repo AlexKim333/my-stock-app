@@ -3651,11 +3651,12 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
         <style>
           @page { size: letter landscape; margin: 0.5in; margin-bottom: 1in; }
           body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-          .page { width: 100%; height: 7.5in; display: flex; justify-content: center; align-items: center; page-break-after: always; margin-bottom: 0.5in; }
-          .receipt-container { display: flex; justify-content: space-between; width: 10in; margin-top: 0.2in; }
-          .receipt { width: 4.75in; border: 1px solid #000; padding: 0.1in; box-sizing: border-box; margin-bottom: 0.2in; }
-          .header { text-align: center; font-weight: bold; font-size: 14pt; margin-bottom: 0.2in; }
-          .details { font-size: 10pt; margin-bottom: 0.2in; }
+          /* 전표는 출력 가능 높이 7in(레터 가로 8.5in - 위 0.5in - 아래 1in) 안에 들어가야 한다. 넘치면 맨 위 타이틀이 잘려 출력된다. */
+          .page { width: 100%; height: 7in; display: flex; justify-content: center; align-items: flex-start; page-break-after: always; }
+          .receipt-container { display: flex; justify-content: space-between; width: 10in; }
+          .receipt { width: 4.75in; border: 1px solid #000; padding: 0.1in; box-sizing: border-box; }
+          .header { text-align: center; font-weight: bold; font-size: 14pt; margin-bottom: 0.1in; }
+          .details { font-size: 10pt; margin-bottom: 0.1in; }
           .details p { margin: 0.05in 0; }
           .location { font-size: 10pt; font-weight: bold; text-decoration: underline; }
           .location-value { color: blue; font-size: 13pt; }
@@ -3664,9 +3665,9 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
           .summary-table th, .summary-table td { border: 1px solid #000; padding: 0.05in; text-align: center; }
           .summary-table th { background-color: #f2f2f2; font-weight: bold; }
           .main-table { width: 100%; border-collapse: collapse; font-size: 10pt; }
-          .main-table th, .main-table td { border: 1px solid #000; padding: 0.05in; text-align: center; height: 0.3in; }
+          .main-table th, .main-table td { border: 1px solid #000; padding: 0.04in; text-align: center; height: 0.25in; }
           .main-table th { background-color: #f2f2f2; font-weight: bold; }
-          .footer { text-align: center; font-size: 10pt; margin-top: 0.2in; display: flex; justify-content: space-between; align-items: center; }
+          .footer { text-align: center; font-size: 10pt; margin-top: 0.1in; display: flex; justify-content: space-between; align-items: center; }
           .page-number { font-weight: bold; }
         </style>
       </head>
