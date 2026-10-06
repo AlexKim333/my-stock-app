@@ -864,7 +864,7 @@ function loadStockDataShared(options) {
  * print()가 예외를 던지거나 사용자가 인쇄를 취소해도 callback은 반드시
  * 실행된다. 커밋 후 정리 작업을 이 콜백에 의존하는 호출부가 있기 때문이다.
  */
-function printReceipt(records, type, selectedDate, admin, invoiceNumber, callback) {
+function printReceipt(records, type, selectedDate, admin, invoiceNumber, callback, route) {
   const iframe = document.getElementById('printFrame');
   if (!iframe) return;
   const doc = iframe.contentWindow.document;
@@ -876,12 +876,32 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
   const totalIndividuals = records.reduce((sum, r) => sum + Math.abs(r.individualQty), 0);
   const rowsPerPage = 15;
   const pages = Math.ceil(records.length / rowsPerPage);
-  const title = type === 'in' ? 'COMPROBANTE DE ENTRADA' : (type === 'adj' ? 'COMPROBANTE DE AJUSTE' : 'COMPROBANTE DE SALIDA');
-  const titleColor = type === 'in' ? 'red' : (type === 'adj' ? '#4f46e5' : 'black');
+  const locationValue = records.length > 0 ? records[0].location : '미지정';
+  // index.html의 최신 양식과 같은 경로 표기. route는 불러온 전표의 창고/거래유형이다.
+  const selectedWh = (route && route.warehouse) || 'MAIN';
+  const isTransfer = type === 'out' && !!(route && route.txType === 'MOVE');
+
+  let title = type === 'in' ? 'COMPROBANTE DE ENTRADA' : (type === 'adj' ? 'COMPROBANTE DE AJUSTE' : 'COMPROBANTE DE SALIDA');
+  let titleColor = type === 'in' ? 'red' : (type === 'adj' ? '#4f46e5' : 'black');
+  if (isTransfer) {
+    title = 'COMPROBANTE DE TRASPASO';
+    titleColor = '#1e3a8a';
+  }
+
+  let routeLineHtml = '';
+  if (isTransfer) {
+    routeLineHtml = `ORIGEN: <b>[${escapeHtml(selectedWh)}]</b> ➔ DESTINO: <b style="color: #047857;">🏢 [${escapeHtml(locationValue)}]</b>`;
+  } else if (type === 'in') {
+    routeLineHtml = `PROV: <b>${escapeHtml(locationValue)}</b> ➔ DESTINO: <b>[${escapeHtml(selectedWh)}]</b>`;
+  } else if (type === 'adj') {
+    routeLineHtml = `ALMACEN: <b>[${escapeHtml(selectedWh)}]</b>`;
+  } else {
+    routeLineHtml = `ORIGEN: <b>[${escapeHtml(selectedWh)}]</b> ➔ CLIENTE: <b>${escapeHtml(locationValue)}</b>`;
+  }
+
   const adminColor = admin === 'ADMIN' ? 'black' : 'green';
   const adminStyle = `font-size: 11pt; color: ${adminColor};`;
   let htmlContent = '';
-  const locationValue = records.length > 0 ? records[0].location : '미지정';
   for (let page = 0; page < pages; page++) {
     const startIdx = page * rowsPerPage;
     const endIdx = Math.min(startIdx + rowsPerPage, records.length);
@@ -913,7 +933,7 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
             <div class="details">
               <p>No: ${displayNumber}</p>
               <p>fetcha: ${formattedDate}</p>
-              <p class="location">UBICACION: <span class="location-value">${locationValue}</span></p>
+              <p class="location"><span class="location-value">${routeLineHtml}</span></p>
               <p class="admin">VENDEDOR: <span style="${adminStyle}">${admin}</span></p>
               ${summaryTable}
             </div>
@@ -928,7 +948,7 @@ function printReceipt(records, type, selectedDate, admin, invoiceNumber, callbac
             <div class="details">
               <p>No: ${displayNumber}</p>
               <p>fetcha: ${formattedDate}</p>
-              <p class="location">UBICACION: <span class="location-value">${locationValue}</span></p>
+              <p class="location"><span class="location-value">${routeLineHtml}</span></p>
               <p class="admin">VENDEDOR: <span style="${adminStyle}">${admin}</span></p>
               ${summaryTable}
             </div>
@@ -1458,7 +1478,7 @@ function reprintReceipt() {
   const { typeValue, date, paddedSeq } = loadedReceipt;
   const adminValue = document.getElementById('adminInput').value;
   const fullInvoiceNumber = `${date.replace(/-/g, '/')}-${paddedSeq}`;
-  printReceipt([...records], typeValue, date, adminValue, fullInvoiceNumber);
+  printReceipt([...records], typeValue, date, adminValue, fullInvoiceNumber, null, loadedReceipt);
 }
 
 function displayRecords(recordsData) {
@@ -1472,6 +1492,10 @@ function displayRecords(recordsData) {
     unitType: record.boxQty !== 0 ? 'box' : 'individual'
   }));
   originalRecords = JSON.parse(JSON.stringify(records));
+  if (loadedReceipt && recordsData.length > 0) {
+    loadedReceipt.warehouse = recordsData[0].warehouse;
+    loadedReceipt.txType = recordsData[0].txType;
+  }
   updateTable();
 
   if (records.length > 0) {
@@ -1795,7 +1819,7 @@ if (invoiceNumber.padStart(3, '0') !== loadedInvoiceNumber) {
         originalButton.style.visibility = 'visible';
         buttonContainer.removeChild(processingButton);
         loadStockData(true); // 인쇄 콜백 완료 후 재확인
-      });
+      }, loadedReceipt);
     },
     onError: err => {
       alert('업데이트 실패: ' + err.message);

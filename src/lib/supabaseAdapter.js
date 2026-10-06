@@ -1063,6 +1063,7 @@ export const serverMethods = {
         invoice_no,
         transaction_type,
         item_id,
+        warehouse_code,
         box_qty,
         unit_qty,
         partner_name,
@@ -1093,6 +1094,9 @@ export const serverMethods = {
       boxContent: row.items?.box_packaging_qty || 1,
       location: row.partner_name || row.memo || 'MAIN',
       admin: row.handler_name || 'ADMIN',
+      // 전표 재발행 시 ORIGEN/DESTINO 표기용 (OUTBOUND·MOVE는 출발 창고, INBOUND는 도착 창고)
+      warehouse: row.warehouse_code || 'MAIN',
+      txType: row.transaction_type,
       manufacturer: '',
       verificationStatus: 'PASS',
       afterStock: ''
