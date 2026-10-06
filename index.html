@@ -1039,8 +1039,11 @@
       padding: 10px;
       font-size: 12pt;
       font-weight: bold;
-      text-align: center;
+      text-align: left;
       border-bottom: 1px solid #ddd;
+      /* 공용 .banner의 flex/space-between이 "총 N건" 텍스트를 양끝으로 흩뜨리지 않도록 블록으로 */
+      display: block !important;
+      height: auto;
     }
     #pendingModal .grid-container {
       flex: 1;
@@ -2388,6 +2391,7 @@
               <button onclick="loadPending()">선택</button>
               <button onclick="deletePending()">삭제</button>
               <button onclick="cancelPendingModal()">취소</button>
+              <button onclick="printPendingWorkOrder()" title="선택한 보류 건을 작업지시서(ORDEN DE TRABAJO)로 인쇄">🖨️ 작업지시서</button>
             </div>
             <div class="detail-table">
               <table id="pendingDetailTable">
@@ -8048,10 +8052,50 @@ function handleError(error) {
 
 // printReceipt는 src/lib/receiptPrint.js로 이동했다 (SearchModify와 공유).
 
+// 🖨️ 보류 모달에서 선택한 보류 건을 작업지시서로 인쇄 (장바구니는 건드리지 않음)
+function printPendingWorkOrder() {
+  if (isPendingOperating) return;
+  if (selectedPendingIndex < 0) {
+    alert('선택된 보류 데이터가 없습니다.');
+    return;
+  }
+  const storageKey = typeConfig[currentType].pendingStorageKey;
+  let pendingList = [];
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) pendingList = JSON.parse(saved);
+  } catch (e) {
+    return;
+  }
+  const pendingData = pendingList[selectedPendingIndex];
+  if (!pendingData || !pendingData.records || pendingData.records.length === 0) {
+    alert('유효한 보류 품목이 없습니다.');
+    return;
+  }
+  const typeLabels = {
+    in: { party: 'ORIGEN / PROVEEDOR (입고처):', tipo: 'ENTRADA DE ALMACÉN' },
+    out: { party: 'DESTINO / CLIENTE (출고처):', tipo: 'SALIDA DE ALMACÉN' },
+    adj: { party: 'ALMACÉN (조정창고):', tipo: 'AJUSTE DE INVENTARIO' }
+  };
+  const labels = typeLabels[currentType] || typeLabels.out;
+  printWorkOrder({
+    records: pendingData.records,
+    location: currentType === 'adj' ? (pendingData.warehouse || 'MAIN') : (pendingData.location || ''),
+    invoiceNumber: `PEND-${selectedPendingIndex + 1}`,
+    datetime: pendingData.date || pendingData.createdAt,
+    admin: pendingData.admin,
+    partyLabel: labels.party,
+    tipo: labels.tipo
+  });
+}
+
 // 🖨️ [사장님 업무 지시] 장바구니 품목 스페인어 작업지시서(ORDEN DE TRABAJO) 즉시 인쇄
-function printWorkOrder() {
-  if (!records || records.length === 0) {
-    alert('⚠️ 장바구니에 인쇄할 품목이 없습니다.');
+// source를 넘기면 장바구니 대신 그 데이터(예: 보류 건)로 인쇄한다.
+function printWorkOrder(source) {
+  const src = source || null;
+  const printRecords = src ? src.records : records;
+  if (!printRecords || printRecords.length === 0) {
+    alert(src ? '⚠️ 인쇄할 품목이 없습니다.' : '⚠️ 장바구니에 인쇄할 품목이 없습니다.');
     return;
   }
 
@@ -8060,23 +8104,29 @@ function printWorkOrder() {
   const doc = iframe.contentWindow.document;
 
   const currentLocEl = document.getElementById('location');
-  const locationValue = (records.find(r => r.location && r.location.trim())?.location) 
-    || (currentLocEl ? currentLocEl.value.trim() : '') 
+  const locationValue = (src && src.location && String(src.location).trim())
+    || (printRecords.find(r => r.location && r.location.trim())?.location)
+    || (!src && currentLocEl ? currentLocEl.value.trim() : '')
     || '미지정 (SIN ASIGNAR)';
 
   const invoiceSpan = document.getElementById('invoiceNumber');
-  const invoiceNumber = (invoiceSpan ? invoiceSpan.textContent.trim() : '') || currentInvoiceNumber || '-';
+  const invoiceNumber = src
+    ? (src.invoiceNumber || '-')
+    : ((invoiceSpan ? invoiceSpan.textContent.trim() : '') || currentInvoiceNumber || '-');
 
   const datetimeInput = document.getElementById('datetime');
-  const datetimeStr = (datetimeInput ? datetimeInput.value.trim() : '') || new Date().toLocaleString();
+  const datetimeStr = (src ? String(src.datetime || '').trim() : (datetimeInput ? datetimeInput.value.trim() : '')) || new Date().toLocaleString();
 
   const adminSelect = document.getElementById('adminSelect');
-  const adminName = (adminSelect ? adminSelect.value.trim() : '') || 'ADMIN';
+  const adminName = (src ? String(src.admin || '').trim() : (adminSelect ? adminSelect.value.trim() : '')) || 'ADMIN';
 
-  const totalItems = new Set(records.map(r => `${r.itemName}_${r.color}`)).size;
-  const totalBoxes = records.reduce((sum, r) => sum + Math.abs(r.boxQty || 0), 0);
-  const totalIndividuals = records.reduce((sum, r) => sum + Math.abs(r.individualQty || 0), 0);
-  const grandTotalPieces = records.reduce((sum, r) => {
+  const partyLabel = (src && src.partyLabel) || 'DESTINO / CLIENTE (출고처):';
+  const tipoLabel = (src && src.tipo) || 'SALIDA DE ALMACÉN';
+
+  const totalItems = new Set(printRecords.map(r => `${r.itemName}_${r.color}`)).size;
+  const totalBoxes = printRecords.reduce((sum, r) => sum + Math.abs(r.boxQty || 0), 0);
+  const totalIndividuals = printRecords.reduce((sum, r) => sum + Math.abs(r.individualQty || 0), 0);
+  const grandTotalPieces = printRecords.reduce((sum, r) => {
     const b = Math.abs(r.boxQty || 0);
     const ind = Math.abs(r.individualQty || 0);
     const bc = r.boxContent || 0;
@@ -8126,7 +8176,7 @@ function printWorkOrder() {
   }
 
   let tableRows = '';
-  records.forEach((rec, idx) => {
+  printRecords.forEach((rec, idx) => {
     const b = Math.abs(rec.boxQty || 0);
     const ind = Math.abs(rec.individualQty || 0);
     const bc = rec.boxContent || 0;
@@ -8219,19 +8269,19 @@ function printWorkOrder() {
               <div class="subtitle-text">SURTIDO Y PREPARACIÓN DE PEDIDO (작업지시서)</div>
             </div>
             <div>
-              <span class="folio-badge">FOLIO: ${invoiceNumber}</span>
+              <span class="folio-badge">FOLIO: ${escapeHtml(invoiceNumber)}</span>
             </div>
           </div>
 
           <div class="client-hero">
-            <span class="client-label">DESTINO / CLIENTE (출고처):</span>
+            <span class="client-label">${escapeHtml(partyLabel)}</span>
             <span class="client-name">${escapeHtml(locationValue)}</span>
           </div>
 
           <div class="meta-grid">
-            <div class="meta-item"><span class="meta-label">FECHA:</span> <span class="meta-val">${datetimeStr}</span></div>
+            <div class="meta-item"><span class="meta-label">FECHA:</span> <span class="meta-val">${escapeHtml(datetimeStr)}</span></div>
             <div class="meta-item"><span class="meta-label">VENDEDOR/EMISOR:</span> <span class="meta-val">${escapeHtml(adminName)}</span></div>
-            <div class="meta-item"><span class="meta-label">TIPO:</span> <span class="meta-val">SALIDA DE ALMACÉN</span></div>
+            <div class="meta-item"><span class="meta-label">TIPO:</span> <span class="meta-val">${escapeHtml(tipoLabel)}</span></div>
           </div>
         </div>
 
