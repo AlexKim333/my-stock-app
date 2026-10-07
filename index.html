@@ -6762,9 +6762,17 @@ function snapshotOrderRows(rows) {
   }));
 }
 
+// 수량이 0이 된 행은 발주가 전부 취소된 것이므로 발주 원본을 지운다.
+// (남겨 두면 재보류·제출·삭제 때마다 같은 수량을 또 취소해 다른 보류의 발주까지 지운다.)
+function clearOrderedInfo(r) {
+  delete r.orderedItem;
+  delete r.orderedBoxQty;
+  delete r.orderedUnitQty;
+}
+
 function stampFromSnapshot(snap, src) {
   (snap || []).forEach(s => {
-    if (s.box <= 0 && s.unit <= 0) return;
+    if (s.box <= 0 && s.unit <= 0) { clearOrderedInfo(s.r); return; }
     s.r.sourceWarehouse = src;
     s.r.orderedItem = { itemName: s.name, color: s.color, boxContent: s.bc };
     s.r.orderedBoxQty = s.box;
@@ -6777,7 +6785,7 @@ function stampOrderedRows(rows, src) {
   (rows || []).forEach(r => {
     const box = Math.abs(r.boxQty || 0);
     const unit = Math.abs(r.individualQty || 0);
-    if (box <= 0 && unit <= 0) return;
+    if (box <= 0 && unit <= 0) { clearOrderedInfo(r); return; }
     r.sourceWarehouse = src;
     r.orderedItem = { itemName: String(r.itemName || '').trim(), color: r.color || 'SURTIDO', boxContent: Number(r.boxContent) || 1 };
     r.orderedBoxQty = box;
