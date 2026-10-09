@@ -43,12 +43,15 @@ function runSql(sql) {
   try {
     const out = execFileSync(
       process.platform === 'win32' ? 'npx.cmd' : 'npx',
-      ['supabase', 'db', 'query', '--linked', '-f', file],
+      // -o json 고정: 지정하지 않으면 CLI가 일반 터미널에서는 표(table)로 출력해 파싱이 실패한다.
+      ['supabase', 'db', 'query', '--linked', '-o', 'json', '-f', file],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32', timeout: 120000 }
     )
-    const start = out.indexOf('{')
-    if (start < 0) throw new Error('쿼리 결과를 해석할 수 없습니다: ' + out.slice(0, 200))
-    return JSON.parse(out.slice(start)).rows || []
+    // 일반 터미널은 행 배열([...]), AI 에이전트 환경은 { rows: [...] } 형태로 출력한다.
+    const starts = [out.indexOf('['), out.indexOf('{')].filter(i => i >= 0)
+    if (starts.length === 0) throw new Error('쿼리 결과를 해석할 수 없습니다: ' + out.slice(0, 200))
+    const parsed = JSON.parse(out.slice(Math.min(...starts)))
+    return Array.isArray(parsed) ? parsed : (parsed.rows || [])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
