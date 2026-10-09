@@ -2190,6 +2190,11 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+    /* 직원(staff)은 재고 조회 전용: 재고 매트릭스만 조회 모드로 보여준다 (applyWmsRole) */
+    .wms-staff-only { display: none !important; }
+    body.wms-staff .wms-staff-only { display: inline-flex !important; }
+    body.wms-staff .wms-admin-only { display: none !important; }
+    body.wms-staff #subWhTbody button { cursor: default !important; }
   </style>
 </head>
 <body>
@@ -2877,9 +2882,10 @@
           </label>
         </div>
         <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
-          <button type="button" onclick="openWinterSafeStockModal()" style="padding: 4px 10px; background: #0284c7; color: #ffffff; border: 1px solid #0369a1; border-radius: 4px; font-size: 8pt; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="과거 11~12월 트랜잭션 전수 분석 및 과학적 안전재고(Safe Stock) 산정">❄️ 성수기 안전재고</button>
+          <button type="button" class="wms-admin-only" onclick="openWinterSafeStockModal()" style="padding: 4px 10px; background: #0284c7; color: #ffffff; border: 1px solid #0369a1; border-radius: 4px; font-size: 8pt; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="과거 11~12월 트랜잭션 전수 분석 및 과학적 안전재고(Safe Stock) 산정">❄️ 성수기 안전재고</button>
           <button type="button" onclick="loadSubWarehouseMatrix(true)" style="padding: 4px 10px; background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; border-radius: 4px; font-size: 8pt; font-weight: 600; cursor: pointer;" title="서브창고 최신 재고 즉시 새로고침">🔄 새로고침</button>
-          <button type="button" onclick="closeSubWarehouseMatrixModal()" style="border: none; background: none; font-size: 18pt; cursor: pointer; color: #94a3b8; line-height: 1; padding: 0 4px;">&times;</button>
+          <button type="button" class="wms-staff-only" onclick="handleWmsLogout()" style="padding: 4px 10px; background: #ffffff; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 8pt; font-weight: 600; cursor: pointer; white-space: nowrap;" title="현재 작업자 계정에서 로그아웃">🚪 로그아웃 (<span id="subWhStaffName"></span>)</button>
+          <button type="button" class="wms-admin-only" onclick="closeSubWarehouseMatrixModal()" style="border: none; background: none; font-size: 18pt; cursor: pointer; color: #94a3b8; line-height: 1; padding: 0 4px;">&times;</button>
         </div>
       </div>
 
@@ -2903,7 +2909,7 @@
             <input type="text" id="subWhSearchInput" placeholder="품명 / 색상 검색..." oninput="onSubWhSearchInput()" style="width: 100%; height: 28px; padding: 0 8px 0 24px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 8.8pt; box-sizing: border-box;">
             <span style="position: absolute; left: 7px; top: 6px; color: #94a3b8; font-size: 9pt;">🔍</span>
           </div>
-          <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 8.5pt; color: #92400e; background: #fef3c7; border: 1px solid #fde68a; height: 28px; padding: 0 10px; border-radius: 5px; cursor: pointer; font-weight: 600; white-space: nowrap; box-sizing: border-box;">
+          <label class="wms-admin-only" style="display: inline-flex; align-items: center; gap: 5px; font-size: 8.5pt; color: #92400e; background: #fef3c7; border: 1px solid #fde68a; height: 28px; padding: 0 10px; border-radius: 5px; cursor: pointer; font-weight: 600; white-space: nowrap; box-sizing: border-box;">
             <input type="checkbox" id="chkOnlyNeeded" onchange="filterSubWarehouseTable()" style="margin: 0; cursor: pointer;">
             <span>🛒 장바구니 발주필요 (<span id="neededItemsCount" style="color: #b45309; font-weight: 800;">0</span>)</span>
           </label>
@@ -2962,7 +2968,7 @@
 
       <!-- 하단 액션 바 -->
       <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px; margin-top: 6px; border-top: 1px solid #e2e8f0; flex-shrink: 0;">
-        <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="wms-admin-only" style="display: flex; align-items: center; gap: 12px;">
           <span style="font-size: 8.8pt; color: #475569;">
             현재 담긴 품목: <strong id="draftItemsSummaryCount" style="color: #0f766e;">0</strong>개 / 
             총 발주: <strong id="draftItemsSummaryBoxes" style="color: #0f766e;">0</strong>상자
@@ -2984,7 +2990,7 @@
         </div>
 
         <div>
-          <button type="button" onclick="closeSubWarehouseMatrixModal()" style="padding: 6px 18px; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 5px; font-weight: 600; cursor: pointer; font-size: 8.5pt;">창 닫기</button>
+          <button type="button" class="wms-admin-only" onclick="closeSubWarehouseMatrixModal()" style="padding: 6px 18px; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 5px; font-weight: 600; cursor: pointer; font-size: 8.5pt;">창 닫기</button>
         </div>
       </div>
     </div>
@@ -12647,6 +12653,8 @@ function openSubWarehouseMatrixModal() {
 }
 
 function closeSubWarehouseMatrixModal() {
+  // 직원은 이 조회 화면만 쓴다 (닫기·Esc 무시, 로그아웃으로만 나감)
+  if (isWmsStaff()) return;
   const modal = document.getElementById('subWarehouseMatrixModal');
   const overlay = document.getElementById('modalOverlay');
   if (modal) modal.style.display = 'none';
@@ -14014,6 +14022,7 @@ function renderSubWhTable(items, cartKeyMap) {
  * 2차 미니 모달 오픈 (셀 클릭 시)
  */
 function onSubWhCellClick(itemIndex, warehouseName, availStock) {
+  if (isWmsStaff()) return; // 직원은 조회 전용 (발주 담기 불가)
   if (itemIndex < 0 || itemIndex >= subWhFilteredItems.length) return;
   const item = subWhFilteredItems[itemIndex];
   const grossStock = item.grossStocks ? (item.grossStocks[warehouseName] || 0) : availStock;
@@ -15504,7 +15513,9 @@ async function bootstrapApp() {
         }, 20);
       });
     }
-    initWmsAuth();
+    // 조회에 로그인이 필요하므로, 세션이 확인되거나 로그인할 때까지 화면 데이터 적재를 미룬다.
+    // (로그인 창에 오래 머물러도 적재 호출이 시간 초과로 버려지지 않게 한다)
+    await initWmsAuth();
   initPage();
   initAllHotkeys();
 }
@@ -16132,6 +16143,31 @@ if (document.readyState === 'loading') {
       localStorage.removeItem('wms_auth_user');
     }
 
+    /** 관리자가 아닌 로그인 사용자(직원). 서버도 쓰기 RPC를 관리자로 제한하므로 화면 제한은 안내용이다. */
+    function isWmsStaff() {
+      const s = readWmsAuthSession();
+      return !!s && String(s.access_level || '').toLowerCase() !== 'admin';
+    }
+
+    /** 직원은 재고 조회 전용: 재고 매트릭스를 조회 모드로 띄우고 발주·닫기 기능을 숨긴다. */
+    function applyWmsRole() {
+      const staff = isWmsStaff();
+      const wasStaff = document.body.classList.contains('wms-staff');
+      document.body.classList.toggle('wms-staff', staff);
+      if (staff) {
+        const nameEl = document.getElementById('subWhStaffName');
+        if (nameEl) nameEl.textContent = readWmsAuthSession()?.member_name || '';
+        if (!isSubWhMatrixOpen()) {
+          // 직원은 메인 창고 재고만 있는 품목도 찾아봐야 하므로 '서브창고 재고 있는 품목만' 필터를 끈다.
+          const onlyInStock = document.getElementById('chkOnlyInStock');
+          if (onlyInStock) onlyInStock.checked = false;
+          openSubWarehouseMatrixModal();
+        }
+      } else if (wasStaff) {
+        closeSubWarehouseMatrixModal();
+      }
+    }
+
     async function initWmsAuth() {
       try {
         const adminSelect = document.getElementById('adminSelect');
@@ -16151,23 +16187,33 @@ if (document.readyState === 'loading') {
         }
 
         const modal = document.getElementById('wmsAuthModal');
-        if (!saved) {
+        const waitForLogin = () => {
           if (modal) modal.style.display = 'flex';
+          return new Promise(resolve => window.addEventListener('wms-login', resolve, { once: true }));
+        };
+        if (!saved) {
+          await waitForLogin();
           return;
         }
 
         if (adminSelect) adminSelect.value = savedName;
-        if (typeof google !== 'undefined' && google.script && google.script.run) {
+        const valid = await new Promise(resolve => {
           google.script.run.withSuccessHandler(info => {
-            if (!info?.success || !info.user) {
-              clearWmsAuthSession();
-              if (modal) modal.style.display = 'flex';
+            if (!info?.success || !info.user) return resolve(false);
+            // 저장된 권한이 그 사이 바뀌었을 수 있으므로 서버 값으로 갱신
+            const current = readWmsAuthSession();
+            if (current && current.access_level !== info.user.access_level) {
+              persistWmsAuthSession({ ...current, access_level: info.user.access_level });
             }
-          }).withFailureHandler(() => {
-            clearWmsAuthSession();
-            if (modal) modal.style.display = 'flex';
-          }).sessionInfo();
+            resolve(true);
+          }).withFailureHandler(() => resolve(false)).sessionInfo();
+        });
+        if (valid) {
+          applyWmsRole();
+          return;
         }
+        clearWmsAuthSession();
+        await waitForLogin();
       } catch (err) {
         console.warn('initWmsAuth warning:', err);
       }
@@ -16209,6 +16255,9 @@ if (document.readyState === 'loading') {
         if (adminSelect) adminSelect.value = result.user.member_name || user;
         const modal = document.getElementById('wmsAuthModal');
         if (modal) modal.style.display = 'none';
+        // 로그인 전 대기 중이던 조회(supabaseAdapter.js awaitSession)를 이어서 실행
+        window.dispatchEvent(new CustomEvent('wms-login'));
+        applyWmsRole();
         if (typeof showAppToast === 'function') {
           showAppToast(`👋 ${result.user.member_name || user}님 환영합니다!`, 2500);
         }
@@ -16223,6 +16272,7 @@ if (document.readyState === 'loading') {
           google.script.run.withFailureHandler(() => {}).logout();
         }
         clearWmsAuthSession();
+        applyWmsRole();
         const modal = document.getElementById('wmsAuthModal');
         if (modal) modal.style.display = 'flex';
       }

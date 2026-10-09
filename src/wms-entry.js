@@ -1,5 +1,5 @@
 import { installSupabaseBridge, preloadItemIdCache, askAiInventoryBot } from './lib/supabaseAdapter.js'
-import { supabase, WMS_AUTH_STORAGE_KEY } from './lib/supabase.js'
+import { supabase, WMS_AUTH_STORAGE_KEY, readWmsSessionToken } from './lib/supabase.js'
 import { initStockSync } from './lib/stockSync.js'
 import { printReceipt } from './lib/receiptPrint.js'
 import FlexSearch from 'flexsearch'
@@ -14,8 +14,9 @@ window.printReceipt = printReceipt
 // 1. Supabase 브릿지 설치
 installSupabaseBridge()
 
-// 2. 품목 ID 캐시 백그라운드 사전 적재
-preloadItemIdCache()
+// 2. 품목 ID 캐시 백그라운드 사전 적재 (조회에 로그인이 필요하므로 로그인 직후 다시 적재)
+if (readWmsSessionToken()) preloadItemIdCache()
+window.addEventListener('wms-login', () => preloadItemIdCache())
 
 // 2-1. 재고 변경 자동 동기화 (로컬 쓰기 · 다른 탭 · Supabase Realtime)
 initStockSync()
@@ -43,7 +44,7 @@ window.addEventListener('wms-session-expired', () => {
     // 재로그인 후 다시 만료되면 다시 안내할 수 있도록 해제
     setTimeout(() => { sessionExpiredHandled = false }, 3000)
   } else {
-    alert('세션이 만료되었습니다. 메인 화면에서 다시 로그인하세요.')
+    alert('로그인이 필요합니다. 메인 화면에서 로그인하세요.')
     window.location.href = '/'
   }
 })

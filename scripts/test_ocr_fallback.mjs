@@ -28,6 +28,7 @@ function check(label, cond, extra = '') {
 let behaviors = {}
 let calls = []
 let sampleCalls = []
+let sessionLevel = 'admin'
 let sampleSave = () => new Response(JSON.stringify('11111111-2222-3333-4444-555555555555'), { status: 200 })
 const okBody = (data, finishReason = 'STOP') => new Response(JSON.stringify({
   candidates: [{ content: { parts: [{ text: typeof data === 'string' ? data : JSON.stringify(data) }] }, finishReason }],
@@ -43,7 +44,7 @@ globalThis.fetch = (url, opts = {}) => {
     return Promise.resolve(sampleSave())
   }
   if (url.includes('/rpc/rpc_session_info')) {
-    return Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }))
+    return Promise.resolve(new Response(JSON.stringify({ success: true, user: { access_level: sessionLevel } }), { status: 200 }))
   }
   const m = url.match(/models\/([^:]+):generateContent/)
   if (!m) return Promise.reject(new Error(`unexpected fetch ${url}`))
@@ -79,6 +80,14 @@ function scenario(models, map, env = {}) {
   Object.assign(process.env, env)
   behaviors = map
   calls = []
+}
+
+{
+  scenario(['s1'], { s1: () => okBody({ branch: 'X', requester: '', results: [] }) })
+  sessionLevel = 'staff'
+  const r = await run()
+  sessionLevel = 'admin'
+  check('직원(staff) 세션은 403이고 AI를 호출하지 않음', r.status === 403 && calls.length === 0 && /관리자/.test(r.body.error), JSON.stringify({ r, calls }))
 }
 
 const goodOrder = { branch: 'X', requester: '', results: [{ modelo: 'CK928K', color: 'SURTIDO', raw_qty: '1', boxes: 1, pack_qty: 0, no_de_bultos: 1 }] }

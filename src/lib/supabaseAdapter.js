@@ -2676,6 +2676,51 @@ function notifySessionExpired(err) {
   window.dispatchEvent(new CustomEvent('wms-session-expired', { detail: { message: String(err?.message || err || '') } }))
 }
 
+// 로그인 창 자체에 필요해 세션 없이 호출하는 메서드. 나머지는 DB가 세션 없는 조회를 거부한다.
+const PUBLIC_METHODS = new Set(['getAdminList', 'login', 'sessionInfo', 'logout'])
+
+let storedSessionCheck = null
+let loginWaiters = []
+
+if (typeof window !== 'undefined') {
+  // index.html의 로그인 성공 시점. 대기 중이던 호출을 새 세션으로 이어서 실행한다.
+  window.addEventListener('wms-login', () => {
+    storedSessionCheck = Promise.resolve(true)
+    const waiters = loginWaiters
+    loginWaiters = []
+    waiters.forEach(resolve => resolve())
+  })
+}
+
+/** 저장된 세션 토큰이 아직 유효한지 페이지당 한 번 확인한다(네트워크 오류는 통과시켜 본 호출이 판단하게 한다). */
+async function checkStoredSession() {
+  try {
+    const { error } = await supabase.rpc('rpc_session_info')
+    return !(error && isSessionError(error))
+  } catch {
+    return true
+  }
+}
+
+/**
+ * 로그인 전·세션 만료 후의 조회 호출은 오류로 끝내지 않고 로그인할 때까지 기다린다.
+ * (페이지 로드 시 여러 조회가 한꺼번에 실패해 오류 안내가 쏟아지는 것을 막는다.)
+ * 로그인 창이 없는 페이지(searchmodify 등)는 메인 화면으로 보낸다.
+ */
+async function awaitSession(fnName) {
+  if (PUBLIC_METHODS.has(fnName) || typeof window === 'undefined') return
+  for (;;) {
+    if (readWmsSessionToken()) {
+      if (!storedSessionCheck) storedSessionCheck = checkStoredSession()
+      if (await storedSessionCheck) return
+      notifySessionExpired(new Error('세션이 만료되었습니다. 다시 로그인하세요.'))
+    } else if (!document.getElementById('wmsAuthModal')) {
+      notifySessionExpired(new Error('로그인이 필요합니다.'))
+    }
+    await new Promise(resolve => loginWaiters.push(resolve))
+  }
+}
+
 /**
  * google.script.run 클라이언트 브릿지 생성자
  */
@@ -2695,6 +2740,7 @@ export function createGoogleScriptRunBridge() {
         const usesCallbacks = typeof successCb === 'function' || typeof failureCb === 'function'
         let result
         try {
+          await awaitSession(fnName)
           result = await fn.apply(serverMethods, args)
         } catch (err) {
           // 일시적인 연결 끊김은 경고로만 남기고, 그 외 오류는 빨간 줄로 남긴다.

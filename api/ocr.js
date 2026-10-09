@@ -122,6 +122,10 @@ async function verifyWmsSession(token) {
     if (!data?.success) {
       return { ok: false, status: 401, error: '세션이 만료되었습니다. 다시 로그인하세요.' }
     }
+    // 주문서·송장 판독은 입출고 입력용이라 관리자만 쓴다(직원은 재고 조회 전용).
+    if (String(data.user?.access_level || '').toLowerCase() !== 'admin') {
+      return { ok: false, status: 403, error: '관리자만 사용할 수 있습니다.' }
+    }
     return { ok: true }
   } catch (e) {
     return { ok: false, status: 503, error: `세션 확인 실패: ${e.message}` }
@@ -134,13 +138,13 @@ async function verifyWmsSession(token) {
 // 서버리스 인스턴스가 살아 있는 동안 메모리에 캐시하고, 불러오지 못하면 힌트 없이 진행한다(OCR 자체는 막지 않음).
 let catalogCache = { codes: null, at: 0 }
 
-async function loadCatalogCodes() {
+async function loadCatalogCodes(sessionToken) {
   if (process.env.OCR_CATALOG_HINT === 'off') return null
   if (catalogCache.codes && Date.now() - catalogCache.at < CATALOG_TTL_MS) return catalogCache.codes
 
   const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
-  if (!supabaseUrl || !anonKey) return null
+  if (!supabaseUrl || !anonKey || !sessionToken) return null
   const since = new Date(Date.now() - envInt('OCR_CATALOG_DAYS', 90) * 24 * 60 * 60 * 1000).toISOString()
   try {
     const names = new Set()
@@ -148,7 +152,8 @@ async function loadCatalogCodes() {
       const resp = await fetchWithTimeout(
         `${supabaseUrl.replace(/\/+$/, '')}/rest/v1/stock_transactions?select=items(item_name,is_active)` +
           `&created_at=gte.${encodeURIComponent(since)}&order=id&limit=1000&offset=${offset}`,
-        { headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` } },
+        // 재고·전표 조회는 로그인 세션이 필요하다(RLS). 요청한 사용자의 세션으로 읽는다.
+        { headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}`, 'x-wms-session': sessionToken } },
         CATALOG_TIMEOUT_MS
       )
       if (!resp.ok) throw new Error(`stock_transactions ${resp.status}`)
@@ -313,16 +318,17 @@ export default async function handler(req, res) {
 
   const startedAt = Date.now()
   try {
-    // 카탈로그는 공개 읽기 데이터라 세션 확인과 동시에 불러와 대기 시간을 줄인다.
+    // 카탈로그는 요청자의 세션으로 읽으므로(무효한 세션이면 DB가 거부) 세션 확인과 동시에 불러와 대기 시간을 줄인다.
     // 단계별 처리 시간(ms). 응답에 실어 화면 완료 알림·정답 세트 표본에 남긴다(느린 원인이 AI인지 구분용).
     const timings = {}
     const catalogStartedAt = Date.now()
-    const catalogPromise = loadCatalogCodes().then(codes => {
+    const sessionToken = headerValue(req, 'x-wms-session').trim()
+    const catalogPromise = loadCatalogCodes(sessionToken).then(codes => {
       timings.catalogLoadMs = Date.now() - catalogStartedAt // 캐시 적중이면 0에 가깝다
       return codes
     })
     const sessionStartedAt = Date.now()
-    const session = await verifyWmsSession(headerValue(req, 'x-wms-session').trim())
+    const session = await verifyWmsSession(sessionToken)
     timings.sessionMs = Date.now() - sessionStartedAt
     if (!session.ok) {
       return res.status(session.status).json({ error: session.error })

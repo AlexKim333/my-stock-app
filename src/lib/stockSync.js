@@ -2,7 +2,7 @@
 // 재고 변경 자동 동기화: 아래 네 가지 신호를 모아(0.5초 단위) 하나의 `wms-stock-changed` 이벤트로 알린다.
 //   1) local     이 탭에서 성공한 쓰기 RPC (브릿지의 `wms-bridge-success` 이벤트)
 //   2) tab       같은 브라우저의 다른 탭/창에서 성공한 쓰기 (BroadcastChannel)
-//   3) realtime  다른 기기·사용자의 변경 (Supabase Realtime: inventory_stocks, pending_orders)
+//   3) realtime  다른 기기·사용자의 변경 (Supabase Realtime: stock_change_signals ← inventory_stocks, pending_orders 트리거)
 //   4) resume    백그라운드에서 오래 있다 돌아왔거나 Realtime이 재연결됨 → 전체 새로고침
 // 화면 코드는 window.addEventListener('wms-stock-changed', e => ...) 로 받아 필요한 부분만 다시 읽는다.
 //   e.detail = { all, warehouses: string[], itemIds: string[], sources: string[] }
@@ -68,15 +68,14 @@ function subscribeRealtime() {
   let wasDown = false
   const channel = supabase.channel('wms-stock-changes')
 
-  channel.on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_stocks' }, payload => {
-    const row = payload.new && Object.keys(payload.new).length ? payload.new : payload.old
-    queue(whList(row?.warehouse_code), [row?.item_id], 'realtime')
-  })
-
-  channel.on('postgres_changes', { event: '*', schema: 'public', table: 'pending_orders' }, payload => {
-    const row = payload.new && Object.keys(payload.new).length ? payload.new : payload.old
+  // 재고 테이블은 로그인 세션이 있어야 읽을 수 있는데 Realtime은 세션 헤더를 보낼 수 없으므로,
+  // DB 트리거가 남기는 수량 없는 변경 신호(품목 id·창고 코드)를 구독하고 실제 값은 화면이 다시 읽는다.
+  channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stock_change_signals' }, payload => {
+    const row = payload.new || {}
+    const warehouses = Array.isArray(row.warehouses) ? row.warehouses : []
     // 발주 상태는 MAIN 유효재고(이동중)와 출발 창고 가용재고에 모두 영향
-    queue(whList(row?.from_warehouse, row?.to_warehouse, 'MAIN'), [row?.item_id], 'realtime')
+    const extra = row.source === 'pending_orders' ? ['MAIN'] : []
+    queue(whList(...warehouses, ...extra), [row.item_id], 'realtime')
   })
 
   channel.subscribe(status => {
