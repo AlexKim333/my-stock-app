@@ -29,6 +29,7 @@ window.getSupabaseClient = () => supabase
 
 // 5. 작업 중 세션 만료 시 로그인 화면으로 복귀 (한 번만 안내)
 let sessionExpiredHandled = false
+let waitingForParentLogin = false
 window.addEventListener('wms-session-expired', () => {
   if (sessionExpiredHandled) return
   sessionExpiredHandled = true
@@ -43,10 +44,20 @@ window.addEventListener('wms-session-expired', () => {
     }
     // 재로그인 후 다시 만료되면 다시 안내할 수 있도록 해제
     setTimeout(() => { sessionExpiredHandled = false }, 3000)
+  } else if (window.top !== window.self) {
+    // 메인 화면 안의 iframe(searchmodify 등): 로그인은 메인 화면의 로그인 창이 받는다.
+    // 여기서 '/'로 보내면 iframe 안에 메인 화면이 다시 열리고 그 안의 iframe이 또 알림을 띄우는 무한 반복이 된다.
+    // 메인 화면에서 로그인하면 아래 storage 이벤트로 이 페이지를 새로 불러온다.
+    waitingForParentLogin = true
   } else {
     alert('로그인이 필요합니다. 메인 화면에서 로그인하세요.')
     window.location.href = '/'
   }
+})
+
+window.addEventListener('storage', e => {
+  if (e.key !== WMS_AUTH_STORAGE_KEY || !waitingForParentLogin || !readWmsSessionToken()) return
+  window.location.reload()
 })
 
 console.log('⚡ [WMS Entry] Supabase WMS 코어 준비 완료')
