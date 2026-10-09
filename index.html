@@ -2195,6 +2195,23 @@
     body.wms-staff .wms-staff-only { display: inline-flex !important; }
     body.wms-staff .wms-admin-only { display: none !important; }
     body.wms-staff #subWhTbody button { cursor: default !important; }
+    .subwh-title-short, .subwh-card-only { display: none; }
+    /* 직원 + 좁은 화면(폰): 매트릭스 표 대신 품목 카드 목록 (renderSubWhCards) */
+    @media (max-width: 768px) {
+      body.wms-staff #subWarehouseMatrixModal { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; height: 100dvh !important; max-height: none !important; padding: 8px !important; border-radius: 0 !important; }
+      body.wms-staff .subwh-title-full, body.wms-staff .subwh-truck, body.wms-staff .subwh-table-only, body.wms-staff .subwh-footer, body.wms-staff #subWhSortBadge { display: none !important; }
+      body.wms-staff .subwh-title-short { display: inline; }
+      body.wms-staff .subwh-card-only { display: inline-block; }
+      body.wms-staff .subwh-head, body.wms-staff .subwh-head > div, body.wms-staff .subwh-toolbar, body.wms-staff .subwh-toolbar > div { flex-wrap: wrap !important; height: auto !important; gap: 6px !important; flex: 0 0 auto !important; align-content: flex-start !important; }
+      /* 상단 모바일 공통 규칙(#subWarehouseMatrixModal > div { height: 100% })이 헤더·툴바까지 화면 높이로 늘리므로 되돌린다 */
+      #subWarehouseMatrixModal > div { height: auto !important; max-height: none !important; }
+      #subWarehouseMatrixModal > #subWhTableContainer { flex: 1 1 auto !important; min-height: 0 !important; }
+      body.wms-staff .subwh-toolbar > div:first-child { flex: 1 1 100% !important; }
+      body.wms-staff .subwh-search { width: 100% !important; }
+      body.wms-staff #subWhSearchInput { height: 38px !important; font-size: 16px !important; padding-left: 28px !important; }
+      body.wms-staff .subwh-search > span { top: 10px !important; }
+      body.wms-staff #subWhTableContainer { background: #f1f5f9 !important; }
+    }
   </style>
 </head>
 <body>
@@ -2868,10 +2885,10 @@
     <!-- 🏢 외부(서브)창고 8대 실시간 재고 매트릭스 & 발주 모달 (1차 대형 모달 - 풀스크린 와이드) -->
     <div id="subWarehouseMatrixModal" class="modal" style="display: none; width: 99vw; max-width: 99vw; height: 98vh; max-height: 98vh; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 10px 14px; box-shadow: 0 25px 60px rgba(0,0,0,0.5); flex-direction: column; z-index: 1050; box-sizing: border-box; border-radius: 8px;">
       <!-- 상단 헤더 -->
-      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 6px; flex-shrink: 0;">
+      <div class="subwh-head" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 6px; flex-shrink: 0;">
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;">
           <h3 style="margin: 0; color: #0f766e; font-size: 11.5pt; font-weight: bold; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
-            <span>🏢</span> <span>외부(서브)창고 8대 실시간 재고 & 발주 매트릭스</span>
+            <span>🏢</span> <span class="subwh-title-full">외부(서브)창고 8대 실시간 재고 & 발주 매트릭스</span><span class="subwh-title-short">재고 조회</span>
           </h3>
           <span id="subWhSyncBadge" style="font-size: 8pt; color: #64748b; background: #f1f5f9; padding: 2px 8px; border-radius: 4px; white-space: nowrap;">동기화: 준비중</span>
           
@@ -2890,7 +2907,7 @@
       </div>
 
       <!-- 🚛 8대 창고별 트럭 1대(100상자) 적재율 실시간 게이지 바 (슬림 높이) -->
-      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 4px 8px; margin-bottom: 5px; flex-shrink: 0;">
+      <div class="subwh-truck" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 4px 8px; margin-bottom: 5px; flex-shrink: 0;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
           <span style="font-size: 8pt; font-weight: bold; color: #334155; display: flex; align-items: center; gap: 4px;">
             <span>🚛</span> <span>창고별 트럭 적재율 (물류비 절약 목표: 창고당 100상자)</span>
@@ -2903,9 +2920,9 @@
       </div>
 
       <!-- 툴바: 검색창, 장바구니 발주필요 필터, 품목수 카운트 (슬림 1줄 28px 레이아웃) -->
-      <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; height: 30px; flex-shrink: 0; background: #ffffff;">
+      <div class="subwh-toolbar" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; height: 30px; flex-shrink: 0; background: #ffffff;">
         <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-          <div style="position: relative; width: 240px;">
+          <div class="subwh-search" style="position: relative; width: 240px;">
             <input type="text" id="subWhSearchInput" placeholder="품명 / 색상 검색..." oninput="onSubWhSearchInput()" style="width: 100%; height: 28px; padding: 0 8px 0 24px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 8.8pt; box-sizing: border-box;">
             <span style="position: absolute; left: 7px; top: 6px; color: #94a3b8; font-size: 9pt;">🔍</span>
           </div>
@@ -2931,8 +2948,17 @@
         <div style="font-size: 8.3pt; color: #64748b; white-space: nowrap; flex-shrink: 0; display: flex; align-items: center; gap: 6px;">
           <span id="subWhSortBadge" style="display: none; font-size: 7.5pt; background: #e0f2fe; color: #0284c7; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd; font-weight: 600; cursor: pointer;" onclick="resetSubWhSort()" title="클릭 시 정렬 초기화"></span>
 
+          <!-- 모바일 카드 보기 전용 정렬 (renderSubWhCards) -->
+          <select id="subWhCardSort" class="subwh-card-only" onchange="onSubWhCardSortChange(this.value)" style="height: 30px; font-size: 9pt; padding: 0 4px; border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; color: #334155;" title="정렬">
+            <option value="">기본 순서</option>
+            <option value="codigo|asc">품명순</option>
+            <option value="effectiveStock|desc">유효재고 많은순</option>
+            <option value="effectiveStock|asc">유효재고 적은순</option>
+            <option value="mainStock|desc">메인재고 많은순</option>
+          </select>
+
           <!-- 페이지당 개수 선택 -->
-          <select id="subWhPageSizeSelect" onchange="changeSubWhPageSize(this.value)" style="height: 26px; font-size: 8pt; padding: 0 4px; border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; color: #334155; cursor: pointer; font-weight: 600;" title="페이지당 표시 품목 수">
+          <select id="subWhPageSizeSelect" class="subwh-table-only" onchange="changeSubWhPageSize(this.value)" style="height: 26px; font-size: 8pt; padding: 0 4px; border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; color: #334155; cursor: pointer; font-weight: 600;" title="페이지당 표시 품목 수">
             <option value="50">50개씩</option>
             <option value="100" selected>100개씩</option>
             <option value="200">200개씩</option>
@@ -2940,7 +2966,7 @@
           </select>
 
           <!-- 상단 페이지 이동 컨트롤 (◀ 1 / 3 ▶) -->
-          <div style="display: inline-flex; align-items: center; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 1px 3px; gap: 2px;">
+          <div class="subwh-table-only" style="display: inline-flex; align-items: center; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 1px 3px; gap: 2px;">
             <button type="button" id="btnSubWhPrevPage" onclick="changeSubWhPage(-1)" style="height: 22px; width: 24px; padding: 0; border: 1px solid #cbd5e1; background: #ffffff; border-radius: 3px; cursor: pointer; font-size: 7.5pt; font-weight: bold; color: #334155; display: flex; align-items: center; justify-content: center;" title="이전 페이지">◀</button>
             <select id="subWhPageJump" onchange="goToSubWhPage(Number(this.value))" style="height: 22px; font-size: 8pt; border: none; background: transparent; font-weight: 700; color: #0f766e; cursor: pointer; padding: 0 2px;" title="페이지 바로 선택">
               <option value="1">1 / 1</option>
@@ -2964,10 +2990,11 @@
           <thead id="subWhThead"></thead>
           <tbody id="subWhTbody"></tbody>
         </table>
+        <div id="subWhCardList" style="display: none; padding: 6px;"></div>
       </div>
 
       <!-- 하단 액션 바 -->
-      <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px; margin-top: 6px; border-top: 1px solid #e2e8f0; flex-shrink: 0;">
+      <div class="subwh-footer" style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px; margin-top: 6px; border-top: 1px solid #e2e8f0; flex-shrink: 0;">
         <div class="wms-admin-only" style="display: flex; align-items: center; gap: 12px;">
           <span style="font-size: 8.8pt; color: #475569;">
             현재 담긴 품목: <strong id="draftItemsSummaryCount" style="color: #0f766e;">0</strong>개 / 
@@ -13796,8 +13823,124 @@ function filterSubWarehouseTable(options) {
 /**
  * 8대 창고 매트릭스 테이블 렌더링
  */
-function renderSubWhTable(items, cartKeyMap) {
+/** 직원이 폰 폭에서 볼 때는 표 대신 품목 카드 목록을 그린다. */
+const SUBWH_CARD_MEDIA = window.matchMedia('(max-width: 768px)');
+const SUBWH_CARD_BATCH = 40;
+let subWhCardShown = 0;
+
+function isSubWhCardMode() {
+  return typeof isWmsStaff === 'function' && isWmsStaff() && SUBWH_CARD_MEDIA.matches;
+}
+
+SUBWH_CARD_MEDIA.addEventListener('change', () => {
+  if (isSubWhMatrixOpen() && subWhMatrixData) filterSubWarehouseTable({ keepPage: true });
+});
+
+function onSubWhCardSortChange(value) {
+  const [col, dir] = String(value || '').split('|');
+  subWhSortColumn = col || null;
+  subWhSortAsc = dir === 'asc';
+  filterSubWarehouseTable();
+  const container = document.getElementById('subWhTableContainer');
+  if (container) container.scrollTop = 0;
+}
+
+function renderSubWhCards(items) {
   const table = document.getElementById('subWhTable');
+  const list = document.getElementById('subWhCardList');
+  if (!list) return;
+  if (table) table.style.display = 'none';
+  list.style.display = 'block';
+  subWhCardShown = 0;
+  list.innerHTML = '';
+
+  const countEl = document.getElementById('subWhFilteredCount');
+  if (countEl) countEl.textContent = String(items.length);
+  const totalEl = document.getElementById('subWhTotalCount');
+  if (totalEl) totalEl.textContent = subWhMatrixData && subWhMatrixData.items ? subWhMatrixData.items.length : 0;
+  const sortSel = document.getElementById('subWhCardSort');
+  if (sortSel) {
+    const key = subWhSortColumn ? `${subWhSortColumn}|${subWhSortAsc ? 'asc' : 'desc'}` : '';
+    sortSel.value = [...sortSel.options].some(o => o.value === key) ? key : '';
+  }
+
+  if (items.length === 0) {
+    list.innerHTML = '<div style="padding: 40px 10px; text-align: center; color: #64748b; font-size: 10pt;">조건에 맞는 품목이 없습니다.</div>';
+    return;
+  }
+  appendSubWhCards();
+}
+
+function appendSubWhCards() {
+  const list = document.getElementById('subWhCardList');
+  const items = subWhFilteredItems || [];
+  if (!list || subWhCardShown >= items.length) return;
+  const warehouses = (subWhMatrixData && subWhMatrixData.warehouses) || [];
+  const end = Math.min(items.length, subWhCardShown + SUBWH_CARD_BATCH);
+
+  let html = '';
+  for (let i = subWhCardShown; i < end; i++) {
+    const item = items[i];
+    const effective = Number(item.effectiveStock) || 0;
+    const isBelowSafe = item.safeStock > 0 && effective <= item.safeStock;
+    const effColor = effective > 0 ? (isBelowSafe ? '#e11d48' : '#15803d') : '#ef4444';
+
+    const chips = [];
+    warehouses.forEach(wh => {
+      const avail = item.stocks ? (item.stocks[wh] || 0) : 0;
+      const committed = item.committedStocks ? (item.committedStocks[wh] || 0) : 0;
+      if (avail > 0) {
+        chips.push(`<span style="display: inline-block; padding: 3px 8px; border-radius: 4px; background: #ccfbf1; border: 1px solid #5eead4; color: #0f766e; font-weight: 700;">${escapeHtml(wh)} ${avail}${committed > 0 ? ` <span style="color: #c2410c; font-weight: 600;">(주문중 ${committed})</span>` : ''}</span>`);
+      } else if (committed > 0) {
+        chips.push(`<span style="display: inline-block; padding: 3px 8px; border-radius: 4px; background: #fff7ed; border: 1px dashed #fdba74; color: #c2410c; font-weight: 700;">${escapeHtml(wh)} 발주중 ${committed}</span>`);
+      }
+    });
+
+    html += `
+      <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+          <div style="font-size: 11.5pt; font-weight: 800; color: #0f172a; word-break: break-all;">${escapeHtml(item.codigo)} <span style="font-size: 8.5pt; font-weight: 600; color: #64748b;">${escapeHtml(item.color || '')}</span></div>
+          ${isBelowSafe ? '<span style="flex-shrink: 0; font-size: 7.5pt; background: #f43f5e; color: #ffffff; padding: 1px 6px; border-radius: 3px; font-weight: 700;">안전재고↓</span>' : ''}
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 8px; font-size: 8.5pt; color: #64748b;">
+          <div>메인 <b style="font-size: 12pt; color: #1e3a8a;">${Number(item.mainStock) || 0}</b></div>
+          <div>이동중 <b style="font-size: 12pt; color: #c2410c;">${Number(item.inTransit) || 0}</b></div>
+          <div>유효 <b style="font-size: 12pt; color: ${effColor};">${effective}</b></div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; font-size: 8.8pt;">
+          ${chips.length ? chips.join('') : '<span style="color: #94a3b8;">서브창고 재고 없음</span>'}
+        </div>
+      </div>`;
+  }
+  subWhCardShown = end;
+
+  const oldMore = document.getElementById('subWhCardMore');
+  if (oldMore) oldMore.remove();
+  list.insertAdjacentHTML('beforeend', html);
+  if (subWhCardShown < items.length) {
+    list.insertAdjacentHTML('beforeend', `<button type="button" id="subWhCardMore" onclick="appendSubWhCards()" style="display: block; width: 100%; padding: 12px; margin: 4px 0 8px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; color: #0f766e; font-weight: 700; font-size: 10pt;">더 보기 (남은 ${items.length - subWhCardShown}개)</button>`);
+  }
+}
+
+// 카드 보기에서는 목록 끝 근처까지 내리면 다음 묶음을 자동으로 붙인다.
+document.addEventListener('DOMContentLoaded', () => {
+  const container = document.getElementById('subWhTableContainer');
+  if (!container) return;
+  container.addEventListener('scroll', () => {
+    if (!isSubWhCardMode()) return;
+    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 300) appendSubWhCards();
+  }, { passive: true });
+});
+
+function renderSubWhTable(items, cartKeyMap) {
+  if (isSubWhCardMode()) {
+    renderSubWhCards(items);
+    return;
+  }
+  const cardList = document.getElementById('subWhCardList');
+  if (cardList) cardList.style.display = 'none';
+  const table = document.getElementById('subWhTable');
+  if (table && cardList && cardList.innerHTML) table.style.display = 'table'; // 카드 보기에서 넓은 화면으로 돌아온 경우
   const thead = document.getElementById('subWhThead');
   const tbody = document.getElementById('subWhTbody');
   if (!thead || !tbody || !subWhMatrixData) return;
