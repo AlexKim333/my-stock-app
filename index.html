@@ -4985,6 +4985,8 @@ function saveTableData() {
   try {
     const storageKey = typeConfig[currentType].sessionStorageKey;
     localStorage.setItem(storageKey, JSON.stringify(records));
+    // 출고 장바구니를 다 비우면 불러온 보류와의 연결도 끊는다(보류는 서버 목록에 그대로 남아 예약 유지).
+    if (currentType === 'out' && records.length === 0) setCartHoldRefs([]);
     saveMetadata();
   } catch (e) {
   }
@@ -5007,6 +5009,8 @@ function loadTableData() {
   } else {
     records = [];
   }
+  // 빈 출고 장바구니에 남은 보류 연결은 의미가 없다(다음 새 장바구니가 그 보류를 소진하지 않게 끊는다).
+  if (currentType === 'out' && (!Array.isArray(records) || records.length === 0)) setCartHoldRefs([]);
   updateTable();
   updateTotals();
   toggleScroll();
@@ -5269,11 +5273,12 @@ function getReservedQty(itemName, color, boxContent, excludeIndex = -1) {
     return rWh === targetWh && rClean === targetClean && rColor === targetColor && (targetBoxContent <= 0 || rBoxContent === targetBoxContent);
   };
 
-  // 1. 현재 출고 보류 목록(pendingOutRecordsList)의 수량 집계
+  // 1. 출고 보류 수량 집계: 서버 보류(모든 기기) + 아직 서버로 못 옮긴 이 기기의 예전 보류.
+  //    이 장바구니로 불러온 보류는 아래 2번(장바구니 행)으로 세므로 제외한다.
   try {
-    const saved = localStorage.getItem(typeConfig.out.pendingStorageKey);
-    if (saved) {
-      const pList = JSON.parse(saved);
+    const inCart = new Set(getCartHoldRefs().map(r => r.id));
+    const pList = getPendingListFor('out').filter(p => !(p.serverId && inCart.has(p.serverId)));
+    {
       pList.forEach(p => {
         if (p.records && Array.isArray(p.records)) {
           p.records.forEach(rec => {
@@ -6575,7 +6580,9 @@ function confirmSubmitCore() {
     });
   }
   const recordsToPrint = [...records];
-  callServer(typeConfig[type].processFunction, [records, adminValue], {
+  // 출고: 이 장바구니로 불러온 보류를 함께 보내 같은 트랜잭션에서 소진한다(자기 예약에 막히지 않고, 이중 출고도 막힌다).
+  const submitArgs = type === 'out' ? [records, adminValue, { holdRefs: getCartHoldRefs() }] : [records, adminValue];
+  callServer(typeConfig[type].processFunction, submitArgs, {
     key: 'submitForm',
     timeout: 90000, // 다건 전표는 시트 일괄 쓰기가 길어질 수 있다
     onSuccess: result => {
@@ -6651,6 +6658,10 @@ function confirmSubmitCore() {
         if (storageKey) localStorage.removeItem(storageKey);
         if (metadataKey) localStorage.removeItem(metadataKey);
         clearPendingOrigin();
+        if (type === 'out') {
+          setCartHoldRefs([]);
+          refreshOutHolds();
+        }
         const locationSelect = document.getElementById('location');
         if (locationSelect) locationSelect.value = '';
         clearForm();
@@ -6675,7 +6686,14 @@ function confirmSubmitCore() {
         }
       }
     },
-    onError: handleError,
+    onError: err => {
+      handleError(err);
+      // 연결된 보류가 이미 처리되었거나 다른 곳에서 다시 불러간 경우 연결을 끊을지 묻는다.
+      if (type === 'out') {
+        offerUnlinkStaleHold((err && err.message) || String(err || ''));
+        refreshOutHolds();
+      }
+    },
     // 성공·실패·타임아웃 어느 경로로 끝나도 버튼을 되살린다.
     onSettled: () => {
       originalButton.style.visibility = 'visible';
@@ -6708,6 +6726,231 @@ function setPendingModalButtonsState(disabled, text = null) {
     } else if (!disabled && loadBtn.dataset.originalText) {
       loadBtn.textContent = loadBtn.dataset.originalText;
     }
+  }
+}
+
+/**
+ * 📦 [출고 보류 = 서버 저장 · 모든 기기 공유 · 가용재고 예약]
+ * 출고 보류는 서버(outbound_holds)에 저장되고, 보류 수량은 그 창고 가용재고에서 예약된다.
+ * 다른 기기의 출고·외부창고 발주도 이 수량을 쓸 수 없고, 가용재고가 모자라면 보류 저장 자체가 거절된다.
+ *  - outHoldCache: 서버 목록 캐시(보류 모달·가용재고 계산용). 입고/재고조정 보류는 지금처럼 이 기기(localStorage)에만 있다.
+ *  - 장바구니 ↔ 보류 연결(cartHoldRefs_out = [{id, version}]): 불러온 보류는 서버에 남아 예약을 유지하고,
+ *    제출하면 같은 트랜잭션에서 소진, 다시 보류하면 하나로 교체된다. 다른 기기가 그 사이 다시 불러가거나
+ *    고치면 version이 달라져 서버가 제출을 거절한다(같은 주문 이중 출고 방지).
+ *  - 예전 기기별 보류(pendingOutRecordsList)는 열 때 서버로 옮기고, 재고 부족 등으로 못 옮긴 건은 그 기기에 남겨 표시한다.
+ */
+let outHoldCache = { list: [], loaded: false, loading: false, loadedAt: 0 };
+let outHoldLegacyMigrating = false;
+const OUT_HOLD_REFS_KEY = 'cartHoldRefs_out';
+
+function getCartHoldRefs() {
+  try {
+    const v = JSON.parse(localStorage.getItem(OUT_HOLD_REFS_KEY) || '[]');
+    return Array.isArray(v) ? v.filter(r => r && r.id) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function setCartHoldRefs(refs) {
+  try {
+    if (refs && refs.length) localStorage.setItem(OUT_HOLD_REFS_KEY, JSON.stringify(refs));
+    else localStorage.removeItem(OUT_HOLD_REFS_KEY);
+  } catch (e) {
+  }
+}
+
+function mapServerOutHold(h) {
+  const createdIso = h.createdAt || null;
+  return {
+    serverId: h.id,
+    version: h.version,
+    records: Array.isArray(h.records) ? h.records : [],
+    location: h.partner || '',
+    admin: h.admin || '',
+    date: h.holdDate || '',
+    createdAt: h.createdLabel || (createdIso ? new Date(createdIso).toLocaleString() : ''),
+    createdAtIso: createdIso,
+    warehouse: h.warehouse || 'MAIN',
+    loadedBy: h.loadedBy || null,
+    loadedAt: h.loadedAt || null
+  };
+}
+
+function getLegacyOutHolds() {
+  try {
+    const v = JSON.parse(localStorage.getItem(typeConfig.out.pendingStorageKey) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// 보류 목록: 출고는 서버 목록 + 아직 서버로 못 옮긴 예전 기기별 보류, 그 외는 이 기기(localStorage) 목록
+function getPendingListFor(type) {
+  if (type === 'out') {
+    return outHoldCache.list.concat(getLegacyOutHolds().map(p => Object.assign({}, p, { legacyLocal: true })));
+  }
+  const cfg = typeConfig && typeConfig[type];
+  if (!cfg || !cfg.pendingStorageKey) return [];
+  try {
+    const v = JSON.parse(localStorage.getItem(cfg.pendingStorageKey) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function refreshOutHolds(onDone) {
+  outHoldCache.loading = true;
+  callServer('listOutboundHolds', [], {
+    key: 'listOutboundHolds',
+    mode: 'latest',
+    onSuccess: list => {
+      outHoldCache = { list: (list || []).map(mapServerOutHold), loaded: true, loading: false, loadedAt: Date.now() };
+      if (currentType === 'out') updatePendingCount();
+      migrateLegacyOutHolds();
+      if (onDone) onDone(true);
+    },
+    onError: err => {
+      outHoldCache.loading = false;
+      console.warn('[OutHold] 목록 조회 실패:', err);
+      if (onDone) onDone(false, err);
+    }
+  });
+}
+
+// 예전 기기별 출고 보류를 서버로 옮긴다(한 건씩). 실패한 건은 사유를 붙여 이 기기에 남긴다.
+function migrateLegacyOutHolds() {
+  if (outHoldLegacyMigrating || (typeof isWmsStaff === 'function' && isWmsStaff())) return;
+  const pending = getLegacyOutHolds().filter(p => p && !p.migrateError && Array.isArray(p.records) && p.records.length);
+  if (!pending.length) return;
+  outHoldLegacyMigrating = true;
+  const target = pending[0];
+  const wh = String(target.warehouse || (target.records[0] && (target.records[0].sourceWarehouse || target.records[0].warehouse)) || 'MAIN').toUpperCase();
+  const sameHold = p => p && p.createdAt === target.createdAt && (p.location || '') === (target.location || '');
+  const finish = mutate => {
+    try {
+      const list = getLegacyOutHolds();
+      const idx = list.findIndex(sameHold);
+      if (idx >= 0) {
+        mutate(list, idx);
+        if (list.length) localStorage.setItem(typeConfig.out.pendingStorageKey, JSON.stringify(list));
+        else localStorage.removeItem(typeConfig.out.pendingStorageKey);
+      }
+    } catch (e) {
+    }
+    outHoldLegacyMigrating = false;
+  };
+  callServer('saveOutboundHold', [{
+    replace: [],
+    warehouse: wh,
+    partner: target.location || '',
+    admin: target.admin || '',
+    holdDate: target.date || '',
+    createdLabel: target.createdAt || '',
+    records: target.records
+  }], {
+    key: 'migrateOutHold',
+    onSuccess: () => {
+      finish((list, idx) => list.splice(idx, 1));
+      refreshOutHolds();
+    },
+    onError: err => {
+      const msg = (err && err.message) || String(err || '');
+      // 네트워크 문제는 다음에 다시 시도하고, 재고 부족 등 서버 거절은 사유를 남겨 사람이 정리하게 한다.
+      if (/fetch|network|timeout|시간 초과|연결|처리 중|로그인|세션|관리자/i.test(msg)) {
+        outHoldLegacyMigrating = false;
+        return;
+      }
+      finish((list, idx) => { list[idx].migrateError = msg; });
+      if (currentType === 'out') updatePendingCount();
+    },
+    onLateSuccess: () => {
+      finish((list, idx) => list.splice(idx, 1));
+      refreshOutHolds();
+    }
+  });
+}
+
+function outHoldAgeLabel(p) {
+  if (!p || !p.createdAtIso) return '';
+  const days = Math.floor((Date.now() - new Date(p.createdAtIso).getTime()) / 86400000);
+  return days <= 0 ? '오늘' : `${days}일 경과`;
+}
+
+// 보류 저장(출고): 서버에 저장하고 가용재고를 예약한다. 불러온 보류가 있으면 하나로 교체한다.
+function saveOutHoldFromCart() {
+  if (isPendingOperating) return;
+  if (!records.length) {
+    alert('보류할 레코드가 없습니다.');
+    return;
+  }
+  const locationSelect = document.getElementById('location');
+  const adminSelect = document.getElementById('adminSelect');
+  const datetimeInput = document.getElementById('datetime');
+  const whSel = document.getElementById('warehouseSelect');
+  if (!locationSelect || !adminSelect || !datetimeInput) {
+    alert('필수 요소를 찾을 수 없습니다.');
+    return;
+  }
+  const wh = String((whSel && whSel.value) || 'MAIN').toUpperCase();
+  const cloned = JSON.parse(JSON.stringify(records)).map(r => Object.assign(r, { warehouse: wh, sourceWarehouse: wh }));
+  const refs = getCartHoldRefs();
+  const done = lateNote => {
+    isPendingOperating = false;
+    setCartHoldRefs([]);
+    clearPendingOrigin();
+    if (editingRecordIndex !== -1) {
+      exitEditMode();
+      clearForm();
+    }
+    records = [];
+    localStorage.removeItem(typeConfig.out.sessionStorageKey);
+    localStorage.removeItem(typeConfig.out.metadataStorageKey);
+    locationSelect.value = '';
+    adminSelect.value = 'ADMIN';
+    updateTable();
+    toggleScroll();
+    updateTotals();
+    refreshOutHolds();
+    alert('보류가 저장되었습니다.' + (lateNote || '') +
+      '\n(보류 수량은 서버에서 가용재고로 예약되어, 다른 기기의 출고·외부창고 발주도 이 수량을 쓸 수 없습니다.)');
+  };
+  isPendingOperating = true;
+  callServer('saveOutboundHold', [{
+    replace: refs,
+    warehouse: wh,
+    partner: locationSelect.value || '',
+    admin: adminSelect.value || '',
+    holdDate: datetimeInput.value || '',
+    createdLabel: new Date().toLocaleString(),
+    records: cloned
+  }], {
+    key: 'saveOutboundHold',
+    onSuccess: () => done(''),
+    onError: err => {
+      isPendingOperating = false;
+      const msg = (err && err.message) || String(err || '');
+      alert('보류를 저장하지 못했습니다. 장바구니는 그대로 있습니다.\n\n' + msg);
+      offerUnlinkStaleHold(msg);
+      refreshOutHolds();
+    },
+    onLateSuccess: () => done('\n(서버 응답이 늦었지만 저장이 반영되었습니다.)')
+  });
+}
+
+// 장바구니가 연결된 보류가 이미 제출/삭제되었거나 다른 곳에서 다시 불러간 경우: 연결을 끊을지 묻는다.
+function offerUnlinkStaleHold(msg) {
+  if (!/두 번 처리되지 않도록/.test(msg || '') || !getCartHoldRefs().length) return;
+  if (confirm(
+    '이 장바구니가 불러온 보류는 이미 제출·삭제되었거나 다른 곳에서 다시 불러갔습니다.\n\n' +
+    '[확인]: 보류와의 연결을 끊습니다. 장바구니는 일반 출고/새 보류로 다룹니다.\n' +
+    '           (같은 주문이 이미 다른 곳에서 출고됐다면 연결을 끊지 말고 장바구니를 비우세요.)\n' +
+    '[취소]: 그대로 둡니다. 보류 목록에서 상황을 먼저 확인하세요.'
+  )) {
+    setCartHoldRefs([]);
+    showAppToast('🔓 장바구니와 보류의 연결을 끊었습니다.', 2500);
   }
 }
 
@@ -6864,6 +7107,10 @@ function savePending() {
   if (isPendingOperating) return;
   if (!records.length) {
     alert('보류할 레코드가 없습니다.');
+    return;
+  }
+  if (currentType === 'out') {
+    saveOutHoldFromCart();
     return;
   }
   if (currentType === 'in') {
@@ -7025,50 +7272,78 @@ function migrateLegacyPendingIn() {
 function updatePendingCount() {
   migrateLegacyPendingIn();
   const cfg = typeConfig && typeConfig[currentType];
-  const storageKey = cfg ? cfg.pendingStorageKey : null;
-  if (!storageKey) return;
-  let pendingList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingList = JSON.parse(saved);
-  } catch (e) {
-  }
+  if (!cfg || !cfg.pendingStorageKey) return;
+  // 출고 보류는 서버 목록이므로 아직 못 불러왔으면 불러온다(완료 시 다시 이 함수가 불린다).
+  if (currentType === 'out' && !outHoldCache.loaded && !outHoldCache.loading) refreshOutHolds();
   const countSpan = document.getElementById('pendingCount');
-  if (countSpan) countSpan.textContent = Array.isArray(pendingList) ? pendingList.length : 0;
+  if (countSpan) countSpan.textContent = getPendingListFor(currentType).length;
 }
 
 function showPendingModal() {
   if (isPendingOperating) return;
   migrateLegacyPendingIn();
   const cfg = typeConfig && typeConfig[currentType];
-  const storageKey = cfg ? cfg.pendingStorageKey : null;
-  if (!storageKey) return;
-  let pendingList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingList = JSON.parse(saved);
-  } catch (e) {
+  if (!cfg || !cfg.pendingStorageKey) return;
+  const modal = document.getElementById('pendingModal');
+  if (!modal) return;
+  if (currentType === 'out') {
+    // 다른 기기의 보류까지 최신으로 보여 준다. 실패하면 마지막으로 받은 목록으로 열고 알린다.
+    renderPendingModal(-1, '⏳ 서버에서 출고 보류 목록을 불러오는 중...');
+    modal.style.display = 'block';
+    refreshOutHolds((ok, err) => {
+      if (modal.style.display !== 'block') return;
+      renderPendingModal(0, ok ? '' : `⚠️ 최신 목록을 불러오지 못했습니다(${(err && err.message) || err}). 마지막으로 받은 목록입니다.`);
+    });
+    return;
   }
+  renderPendingModal(0, '');
+  modal.style.display = 'block';
+}
+
+// 보류 목록 표 그리기. selectIndex >= 0 이면 그 행을 선택한다(목록이 그보다 짧으면 마지막 행).
+function renderPendingModal(selectIndex, notice) {
+  const pendingList = getPendingListFor(currentType);
   const totalCountSpan = document.getElementById('totalPendingCount');
   const summaryBody = document.getElementById('pendingSummaryBody');
   const detailHeader = document.getElementById('pendingDetailHeader');
   const detailBody = document.getElementById('pendingDetailBody');
-  const modal = document.getElementById('pendingModal');
-  if (!totalCountSpan || !summaryBody || !detailHeader || !detailBody || !modal) return;
+  if (!totalCountSpan || !summaryBody || !detailHeader || !detailBody) return;
 
   setPendingModalButtonsState(false);
   totalCountSpan.textContent = pendingList.length;
-  let summaryHtml = '';
+  const inCart = new Set(currentType === 'out' ? getCartHoldRefs().map(r => r.id) : []);
+  let summaryHtml = notice
+    ? `<tr><td colspan="5" style="text-align: center; color: #64748b; font-size: 8.5pt;">${escapeHtml(notice)}</td></tr>`
+    : '';
   pendingList.forEach((pending, idx) => {
-    const itemCount = new Set(pending.records.map(r => `${r.itemName}_${r.color}`)).size;
-    const isSub = pending.isSubWarehouseOrder;
-    const locBadge = isSub
-      ? `<span style="background: #e0f2fe; color: #0284c7; padding: 2px 7px; border-radius: 4px; font-weight: 700;">🏢 ${escapeHtml(pending.location || '-')} (외부발주)</span>`
-      : escapeHtml(currentType === 'adj' ? `🏢 ${pending.warehouse || 'MAIN'}` : (pending.location || '-'));
+    const itemCount = new Set((pending.records || []).map(r => `${r.itemName}_${r.color}`)).size;
+    let locBadge;
+    if (pending.isSubWarehouseOrder) {
+      locBadge = `<span style="background: #e0f2fe; color: #0284c7; padding: 2px 7px; border-radius: 4px; font-weight: 700;">🏢 ${escapeHtml(pending.location || '-')} (외부발주)</span>`;
+    } else if (currentType === 'adj') {
+      locBadge = escapeHtml(`🏢 ${pending.warehouse || 'MAIN'}`);
+    } else {
+      locBadge = escapeHtml(pending.location || '-');
+    }
+    if (currentType === 'out') {
+      const wh = String(pending.warehouse || 'MAIN').toUpperCase();
+      if (wh !== 'MAIN') locBadge += ` <span style="background: #eff6ff; color: #1d4ed8; padding: 1px 6px; border-radius: 4px; font-size: 8pt; font-weight: 700;">출발 ${escapeHtml(wh)}</span>`;
+      if (pending.legacyLocal) {
+        locBadge += pending.migrateError
+          ? ` <span title="${escapeHtml(pending.migrateError)}" style="background: #fee2e2; color: #b91c1c; padding: 1px 6px; border-radius: 4px; font-size: 8pt; font-weight: 700;">⚠️ 이 기기에만 있음(예약 안 됨) — 불러와서 다시 보류하세요</span>`
+          : ` <span style="background: #f1f5f9; color: #475569; padding: 1px 6px; border-radius: 4px; font-size: 8pt;">⏳ 서버로 옮기는 중</span>`;
+      } else if (inCart.has(pending.serverId)) {
+        locBadge += ` <span style="background: #dcfce7; color: #15803d; padding: 1px 6px; border-radius: 4px; font-size: 8pt; font-weight: 700;">🛒 이 장바구니에서 작업 중</span>`;
+      } else if (pending.loadedBy) {
+        locBadge += ` <span style="background: #fef3c7; color: #b45309; padding: 1px 6px; border-radius: 4px; font-size: 8pt; font-weight: 700;">📂 ${escapeHtml(pending.loadedBy)} 불러감</span>`;
+      }
+    }
+    const age = currentType === 'out' ? outHoldAgeLabel(pending) : '';
+    const ageDays = parseInt(age, 10) || 0;
     summaryHtml += `
       <tr onclick="selectPending(${idx})" id="pendingRow${idx}">
         <td>${idx + 1}</td>
-        <td>${pending.createdAt}</td>
+        <td>${escapeHtml(pending.createdAt || '')}${age ? ` <span style="color: ${ageDays >= 7 ? '#dc2626' : '#64748b'}; font-size: 8pt; font-weight: 700;">(${age})</span>` : ''}</td>
         <td>${locBadge}</td>
         <td>${escapeHtml(pending.admin || '-')}</td>
         <td>${itemCount}</td>
@@ -7079,22 +7354,14 @@ function showPendingModal() {
   detailHeader.innerHTML = `<tr>${typeConfig[currentType].tableHeaders.map(h => `<th>${h}</th>`).join('')}</tr>`;
   detailBody.innerHTML = '';
   selectedPendingIndex = -1;
-  if (pendingList.length > 0) {
-    selectPending(0);
+  if (selectIndex >= 0 && pendingList.length > 0) {
+    selectPending(Math.min(selectIndex, pendingList.length - 1));
   }
-  modal.style.display = 'block';
 }
 
 function selectPending(index) {
   if (isPendingOperating || index < 0) return;
-  const storageKey = typeConfig[currentType].pendingStorageKey;
-  let pendingList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingList = JSON.parse(saved);
-  } catch (e) {
-    return;
-  }
+  const pendingList = getPendingListFor(currentType);
   if (index >= pendingList.length) return;
   selectedPendingIndex = index;
   document.querySelectorAll('#pendingSummaryBody tr').forEach(row => row.classList.remove('selected-row'));
@@ -7135,14 +7402,7 @@ function selectPending(index) {
 
 function navigatePending(direction) {
   if (isPendingOperating) return;
-  const storageKey = typeConfig[currentType].pendingStorageKey;
-  let pendingList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingList = JSON.parse(saved);
-  } catch (e) {
-    return;
-  }
+  const pendingList = getPendingListFor(currentType);
   if (pendingList.length === 0) return;
   let newIndex = selectedPendingIndex;
   if (direction === 'prev') {
@@ -7160,13 +7420,7 @@ function loadPending() {
     return;
   }
   const storageKey = typeConfig[currentType].pendingStorageKey;
-  let pendingList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingList = JSON.parse(saved);
-  } catch (e) {
-    return;
-  }
+  const pendingList = getPendingListFor(currentType);
   if (selectedPendingIndex >= pendingList.length) return;
 
   const targetIndex = selectedPendingIndex;
@@ -7174,6 +7428,12 @@ function loadPending() {
   if (!pendingData || !pendingData.records || pendingData.records.length === 0) {
     alert('유효한 보류 품목이 없습니다.');
     return;
+  }
+  if (currentType === 'out' && pendingData.serverId && pendingData.loadedBy && !getCartHoldRefs().some(r => r.id === pendingData.serverId)) {
+    if (!confirm(
+      `📂 이 보류는 ${pendingData.loadedBy}님이 이미 불러갔습니다.\n\n` +
+      `여기서 불러오면 그쪽 장바구니는 이 보류로 제출·재보류할 수 없게 됩니다(같은 주문 이중 출고 방지).\n그래도 불러오시겠습니까?`
+    )) return;
   }
 
   // 1. 기존 장바구니 품목 보호 분기
@@ -7237,6 +7497,66 @@ function loadPending() {
   isPendingOperating = true;
   setPendingModalButtonsState(true, '⏳ 로드중...');
 
+  // 2-1. 서버 출고 보류: 서버에서 불러온(version이 올라간) 내용으로 담는다. 보류는 서버에 남아 예약을 유지하고,
+  //      제출하면 같은 트랜잭션에서 소진, 다시 보류하면 하나로 교체된다.
+  if (currentType === 'out' && pendingData.serverId) {
+    callServer('loadOutboundHold', [pendingData.serverId, pendingData.version], {
+      key: 'loadOutboundHold',
+      onSuccess: res => {
+        const fresh = mapServerOutHold(res || {});
+        const refs = modeChoice === 'append' ? getCartHoldRefs().filter(r => r.id !== fresh.serverId) : [];
+        refs.push({ id: fresh.serverId, version: fresh.version });
+        setCartHoldRefs(refs);
+        applyLoadedPending(fresh, modeChoice, targetIndex);
+        refreshOutHolds();
+      },
+      onError: err => {
+        isPendingOperating = false;
+        setPendingModalButtonsState(false);
+        alert('보류를 불러오지 못했습니다.\n' + ((err && err.message) || err));
+        showPendingModal();
+      },
+      onLateSuccess: () => {
+        refreshOutHolds();
+        showAppToast('⚠️ 서버 응답이 늦어 장바구니에 담지 못했습니다. 보류 목록에서 다시 불러오세요.', 4000);
+      }
+    });
+    return;
+  }
+
+  // 2-2. 이 기기에 저장된 보류(입고·재고조정, 서버로 아직 못 옮긴 예전 출고 보류): 목록에서 제거하고 담는다.
+  let localList = [];
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) localList = JSON.parse(saved);
+  } catch (e) {
+  }
+  if (!Array.isArray(localList)) localList = [];
+  const localIdx = currentType === 'out'
+    ? localList.findIndex(p => p && p.createdAt === pendingData.createdAt && (p.location || '') === (pendingData.location || ''))
+    : targetIndex;
+  if (localIdx < 0 || localIdx >= localList.length) {
+    isPendingOperating = false;
+    setPendingModalButtonsState(false);
+    alert('보류 목록이 이미 변경되었습니다. 목록을 다시 열어 확인하세요.');
+    return;
+  }
+  localList.splice(localIdx, 1);
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(localList));
+  } catch (e) {
+    isPendingOperating = false;
+    setPendingModalButtonsState(false);
+    alert('보류 데이터 업데이트에 실패했습니다.');
+    return;
+  }
+  // 덮어쓰기면 기존 장바구니가 불러왔던 서버 보류와의 연결도 끊는다(그 보류는 목록에 남아 예약 유지).
+  if (currentType === 'out' && modeChoice === 'replace') setCartHoldRefs([]);
+  applyLoadedPending(pendingData, modeChoice, targetIndex);
+}
+
+// 불러온 보류 내용을 화면(창고·거래처·담당자)과 장바구니에 반영한다.
+function applyLoadedPending(pendingData, modeChoice, targetIndex) {
   // 3. 깊은 복사로 데이터 준비
   const clonedRecords = JSON.parse(JSON.stringify(pendingData.records));
 
@@ -7307,17 +7627,6 @@ function loadPending() {
     }
     if (r.matchRate === undefined) r.matchRate = 100;
   });
-
-  // 5. 보류 목록에서 해당 항목 제거
-  pendingList.splice(targetIndex, 1);
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(pendingList));
-  } catch (e) {
-    isPendingOperating = false;
-    setPendingModalButtonsState(false);
-    alert('보류 데이터 업데이트에 실패했습니다.');
-    return;
-  }
 
   // 6. 장바구니에 반영
   const previousRecords = JSON.parse(JSON.stringify(records));
@@ -7416,17 +7725,49 @@ function deletePending() {
     return;
   }
   const storageKey = typeConfig[currentType].pendingStorageKey;
-  let pendingList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingList = JSON.parse(saved);
-  } catch (e) {
-    return;
-  }
+  const pendingList = getPendingListFor(currentType);
   if (selectedPendingIndex >= pendingList.length) return;
 
   const targetIndex = selectedPendingIndex;
   const target = pendingList[targetIndex];
+  // 서버 출고 보류: 서버에서 지우면 예약도 풀린다(모든 기기 목록에서 사라짐).
+  if (currentType === 'out' && target && target.serverId) {
+    const inMyCart = getCartHoldRefs().some(r => r.id === target.serverId);
+    const who = target.loadedBy && !inMyCart ? `\n\n⚠️ ${target.loadedBy}님이 불러간 보류입니다. 삭제하면 그쪽 장바구니는 이 보류로 제출할 수 없습니다.` : '';
+    const mine = inMyCart ? '\n\n(지금 장바구니에 불러와 있는 보류입니다. 삭제하면 장바구니는 일반 출고로 남습니다.)' : '';
+    if (!confirm(`선택된 출고 보류를 삭제하면 예약된 재고도 풀립니다.\n정말 삭제하시겠습니까?${who}${mine}`)) return;
+    isPendingOperating = true;
+    setPendingModalButtonsState(true, '⏳ 삭제중...');
+    const finish = note => {
+      isPendingOperating = false;
+      setPendingModalButtonsState(false);
+      setCartHoldRefs(getCartHoldRefs().filter(r => r.id !== target.serverId));
+      refreshOutHolds(() => {
+        renderPendingModal(targetIndex, '');
+        updatePendingCount();
+      });
+      alert('보류 데이터가 삭제되었습니다.' + (note || ''));
+    };
+    // 장바구니로 불러온 보류는 장바구니가 가진 version이 최신이다(목록은 불러오기 전 값일 수 있음).
+    const myRef = getCartHoldRefs().find(r => r.id === target.serverId);
+    const version = myRef ? myRef.version : target.version;
+    const started = callServer('deleteOutboundHold', [target.serverId, version], {
+      key: 'deleteOutboundHold',
+      onSuccess: () => finish(''),
+      onError: err => {
+        isPendingOperating = false;
+        setPendingModalButtonsState(false);
+        alert('보류를 삭제하지 못했습니다.\n' + ((err && err.message) || err));
+        showPendingModal();
+      },
+      onLateSuccess: () => finish('\n\n(서버 응답이 늦었지만 삭제가 반영되었습니다.)')
+    });
+    if (!started) {
+      isPendingOperating = false;
+      setPendingModalButtonsState(false);
+    }
+    return;
+  }
   const isSubOrderHold = currentType === 'in' && target && (target.isSubWarehouseOrder || target.sourceWarehouse);
   if (!confirm(isSubOrderHold
     ? '선택된 보류를 삭제하면 외부창고 발주(입고 예정)도 함께 취소됩니다.\n정말 삭제하시겠습니까?'
@@ -7500,29 +7841,10 @@ function finishDeletePending(storageKey, targetIndex, target, extraMsg) {
     return;
   }
 
-  const totalCountSpan = document.getElementById('totalPendingCount');
-  const summaryBody = document.getElementById('pendingSummaryBody');
-  const detailBody = document.getElementById('pendingDetailBody');
-  if (totalCountSpan) totalCountSpan.textContent = pendingList.length;
-  let summaryHtml = '';
-  pendingList.forEach((pending, idx) => {
-    const itemCount = new Set(pending.records.map(r => `${r.itemName}_${r.color}`)).size;
-    summaryHtml += `
-      <tr onclick="selectPending(${idx})" id="pendingRow${idx}">
-        <td>${idx + 1}</td>
-        <td>${pending.createdAt}</td>
-        <td>${escapeHtml(currentType === 'adj' ? `🏢 ${pending.warehouse || 'MAIN'}` : (pending.location || '-'))}</td>
-        <td>${escapeHtml(pending.admin || '-')}</td>
-        <td>${itemCount}</td>
-      </tr>
-    `;
-  });
-  if (summaryBody) summaryBody.innerHTML = summaryHtml;
-  if (detailBody) detailBody.innerHTML = '';
-  selectedPendingIndex = -1;
-  if (pendingList.length > 0) {
-    selectPending(0);
+  if (getPendingListFor(currentType).length > 0) {
+    renderPendingModal(0, '');
   } else {
+    selectedPendingIndex = -1;
     cancelPendingModal();
   }
   updatePendingCount();
@@ -8210,15 +8532,7 @@ function printPendingWorkOrder() {
     alert('선택된 보류 데이터가 없습니다.');
     return;
   }
-  const storageKey = typeConfig[currentType].pendingStorageKey;
-  let pendingList = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) pendingList = JSON.parse(saved);
-  } catch (e) {
-    return;
-  }
-  const pendingData = pendingList[selectedPendingIndex];
+  const pendingData = getPendingListFor(currentType)[selectedPendingIndex];
   if (!pendingData || !pendingData.records || pendingData.records.length === 0) {
     alert('유효한 보류 품목이 없습니다.');
     return;
@@ -12795,6 +13109,14 @@ function findMatrixItem(itemId, codigo, color, boxContent) {
     (!boxContent || Number(it.boxContent) === Number(boxContent))) || null;
 }
 
+// 발주 수량 입력 창의 가용재고 문구: 실보유에서 발주진행·출고보류를 뺀 값
+function subWhAvailText(avail, gross, committed, held) {
+  const parts = [];
+  if (committed > 0) parts.push(`발주진행 ${committed}`);
+  if (held > 0) parts.push(`출고보류 ${held}`);
+  return parts.length ? `${avail} 상자 (실보유 ${gross} - ${parts.join(' - ')})` : `${avail} 상자`;
+}
+
 // 수량 입력 창이 열린 채로 재고가 바뀌면 가용재고·한도를 최신 값으로 맞춘다.
 function refreshOpenSubWhQtyModal() {
   const modal = document.getElementById('subWarehouseQtyModal');
@@ -12805,11 +13127,10 @@ function refreshOpenSubWhQtyModal() {
   const availStock = fresh.stocks ? (fresh.stocks[warehouse] || 0) : 0;
   const grossStock = fresh.grossStocks ? (fresh.grossStocks[warehouse] || 0) : availStock;
   const committed = fresh.committedStocks ? (fresh.committedStocks[warehouse] || 0) : 0;
-  if (availStock === currentSubWhTarget.availStock && committed === currentSubWhTarget.committed) return;
-  currentSubWhTarget = { item: fresh, warehouse, availStock, grossStock, committed };
-  document.getElementById('qtyModalAvailStock').textContent = committed > 0
-    ? `${availStock} 상자 (실보유 ${grossStock} - 발주진행 ${committed}) · 🔄 방금 갱신됨`
-    : `${availStock} 상자 · 🔄 방금 갱신됨`;
+  const held = fresh.heldStocks ? (fresh.heldStocks[warehouse] || 0) : 0;
+  if (availStock === currentSubWhTarget.availStock && committed === currentSubWhTarget.committed && held === (currentSubWhTarget.held || 0)) return;
+  currentSubWhTarget = { item: fresh, warehouse, availStock, grossStock, committed, held };
+  document.getElementById('qtyModalAvailStock').textContent = `${subWhAvailText(availStock, grossStock, committed, held)} · 🔄 방금 갱신됨`;
   document.getElementById('qtyModalEffectiveStock').textContent = `실재고 ${fresh.mainStock} + 이동중 ${fresh.inTransit} = 유효 ${fresh.effectiveStock}상자`;
   const qtyInput = document.getElementById('subWhQtyInput');
   if (qtyInput) qtyInput.max = availStock;
@@ -12867,6 +13188,16 @@ function applyStockChange(detail) {
   // 3) 재고조정 화면의 조정 창고 재고
   if ((currentType === 'adj' || currentType === 'out') && getAdjWarehouse() !== 'MAIN' && touches(getAdjWarehouse())) {
     refreshAdjWarehouseStock(true);
+  }
+
+  // 3-1) 출고 보류(서버) 목록: 다른 기기의 보류 저장·제출·삭제를 가용재고 계산과 보류 개수에 반영
+  if (currentType === 'out' && !onlyLocal) {
+    refreshOutHolds(ok => {
+      if (!ok) return;
+      updateTable();
+      const pm = document.getElementById('pendingModal');
+      if (pm && pm.style.display === 'block' && !isPendingOperating) renderPendingModal(Math.max(selectedPendingIndex, 0), '');
+    });
   }
 
   // 4) 통합 대시보드가 열려 있으면 다시 집계
@@ -13921,10 +14252,12 @@ function appendSubWhCards() {
     warehouses.forEach(wh => {
       const avail = item.stocks ? (item.stocks[wh] || 0) : 0;
       const committed = item.committedStocks ? (item.committedStocks[wh] || 0) : 0;
+      const held = item.heldStocks ? (item.heldStocks[wh] || 0) : 0;
+      const tags = [committed > 0 ? `주문중 ${committed}` : '', held > 0 ? `보류 ${held}` : ''].filter(Boolean).join(' · ');
       if (avail > 0) {
-        chips.push(`<span style="display: inline-block; padding: 3px 8px; border-radius: 4px; background: #ccfbf1; border: 1px solid #5eead4; color: #0f766e; font-weight: 700;">${escapeHtml(wh)} ${avail}${committed > 0 ? ` <span style="color: #c2410c; font-weight: 600;">(주문중 ${committed})</span>` : ''}</span>`);
-      } else if (committed > 0) {
-        chips.push(`<span style="display: inline-block; padding: 3px 8px; border-radius: 4px; background: #fff7ed; border: 1px dashed #fdba74; color: #c2410c; font-weight: 700;">${escapeHtml(wh)} 발주중 ${committed}</span>`);
+        chips.push(`<span style="display: inline-block; padding: 3px 8px; border-radius: 4px; background: #ccfbf1; border: 1px solid #5eead4; color: #0f766e; font-weight: 700;">${escapeHtml(wh)} ${avail}${tags ? ` <span style="color: #c2410c; font-weight: 600;">(${tags})</span>` : ''}</span>`);
+      } else if (committed > 0 || held > 0) {
+        chips.push(`<span style="display: inline-block; padding: 3px 8px; border-radius: 4px; background: #fff7ed; border: 1px dashed #fdba74; color: #c2410c; font-weight: 700;">${escapeHtml(wh)} ${tags}</span>`);
       }
     });
 
@@ -14202,15 +14535,13 @@ function onSubWhCellClick(itemIndex, warehouseName, availStock) {
   const item = subWhFilteredItems[itemIndex];
   const grossStock = item.grossStocks ? (item.grossStocks[warehouseName] || 0) : availStock;
   const committed = item.committedStocks ? (item.committedStocks[warehouseName] || 0) : 0;
-  currentSubWhTarget = { item: item, warehouse: warehouseName, availStock: availStock, grossStock: grossStock, committed: committed };
+  const held = item.heldStocks ? (item.heldStocks[warehouseName] || 0) : 0;
+  currentSubWhTarget = { item: item, warehouse: warehouseName, availStock: availStock, grossStock: grossStock, committed: committed, held: held };
 
   // 모달 데이터 채우기
   document.getElementById('qtyModalWarehouse').textContent = warehouseName;
   document.getElementById('qtyModalItemName').textContent = `${item.codigo} (${item.color})`;
-  const availText = committed > 0 
-    ? `${availStock} 상자 (실보유 ${grossStock} - 발주진행 ${committed})` 
-    : `${availStock} 상자`;
-  document.getElementById('qtyModalAvailStock').textContent = availText;
+  document.getElementById('qtyModalAvailStock').textContent = subWhAvailText(availStock, grossStock, committed, held);
   document.getElementById('qtyModalEffectiveStock').textContent = `실재고 ${item.mainStock} + 이동중 ${item.inTransit} = 유효 ${item.effectiveStock}상자`;
 
   // 기본 수량 세팅 (1상자)

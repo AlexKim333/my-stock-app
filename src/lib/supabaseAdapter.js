@@ -756,11 +756,12 @@ export const serverMethods = {
     return this.processForm(tableData, 'in', admin)
   },
 
-  async processOutForm(tableData, admin) {
-    return this.processForm(tableData, 'out', admin)
+  // opts.holdRefs: 장바구니로 불러온 출고 보류 [{id, version}] — 같은 트랜잭션에서 소진된다.
+  async processOutForm(tableData, admin, opts) {
+    return this.processForm(tableData, 'out', admin, opts)
   },
 
-  async processForm(tableData, mode, admin) {
+  async processForm(tableData, mode, admin, opts) {
     if (!tableData || tableData.length === 0) {
       throw new Error('처리할 데이터가 없습니다.')
     }
@@ -878,8 +879,12 @@ export const serverMethods = {
       itemId: itemsPayload[idx]?.item_id, name: up.name, color: up.color, boxContent: up.boxContent
     })))
 
+    const holdRefs = mode === 'out' && opts && Array.isArray(opts.holdRefs)
+      ? opts.holdRefs.filter(ref => ref && ref.id).map(ref => ({ id: ref.id, version: Number(ref.version) }))
+      : []
+
     const fingerprint = JSON.stringify({
-      txType, sourceWh, partner, itemsPayload, effectiveTargetWarehouse, pendingFromWarehouse
+      txType, sourceWh, partner, itemsPayload, effectiveTargetWarehouse, pendingFromWarehouse, holdRefs
     })
     const idemKey = takeIdempotencyKey('process_transaction', fingerprint)
 
@@ -897,7 +902,8 @@ export const serverMethods = {
         p_items: itemsPayload,
         p_target_warehouse: effectiveTargetWarehouse,
         p_pending_from_warehouse: pendingFromWarehouse,
-        p_idempotency_key: idemKey
+        p_idempotency_key: idemKey,
+        p_hold_refs: holdRefs.length ? holdRefs : null
       })
 
       if (rpcErr) {
@@ -1561,15 +1567,24 @@ export const serverMethods = {
     const whList = (activeWhRows || []).map(w => w.code)
 
     // 1. 전체 유효 재고, 8대 서브창고 재고 및 이동 중(PENDING) 주문 병렬 조회 (sub-50ms)
-    const [allMainItems, subStocks, pendingOrders] = await Promise.all([
+    const [allMainItems, subStocks, pendingOrders, holdRes] = await Promise.all([
       fetchAllRows(() => supabase.from('view_effective_stocks').select('*'), { orderBy: 'item_id' }),
       fetchAllRows(() =>
         supabase.from('inventory_stocks').select('warehouse_code, box_qty, item_id').in('warehouse_code', whList)
       ),
       fetchAllRows(() =>
         supabase.from('pending_orders').select('item_id, from_warehouse, box_qty').eq('to_warehouse', 'MAIN').in('status', ['PENDING', 'IN_TRANSIT'])
-      )
+      ),
+      supabase.rpc('rpc_outbound_hold_reservations')
     ])
+    if (holdRes.error) throw new Error(holdRes.error.message || '출고 보류 예약을 불러오지 못했습니다.')
+
+    // 출고 보류가 예약한 수량(낱개) — 서버 발주 검사와 같이 상자 단위로는 올림해 가용재고에서 뺀다.
+    const heldUnitsMap = new Map() // key: `${item_id}___${warehouse}`
+    ;(holdRes.data || []).forEach(h => {
+      const k = `${h.item_id}___${String(h.warehouse || '').toUpperCase().trim()}`
+      heldUnitsMap.set(k, (heldUnitsMap.get(k) || 0) + Number(h.units || 0))
+    })
 
     // 2. 품목 ID별 서브창고 재고 맵 구성
     const subMap = new Map()
@@ -1598,16 +1613,20 @@ export const serverMethods = {
       const stocks = {} // 가용재고 (실재고 - 발주진행수량)
       const grossStocks = {} // 장부상 실재고
       const committedStocks = {} // 발주 진행 중(In-Transit / PENDING) 수량
+      const heldStocks = {} // 출고 보류 예약 수량(상자, 올림)
+      const pack = Math.max(1, Math.round(Number(row.box_packaging_qty || 1)))
       let totalSubStock = 0
 
       whList.forEach(wh => {
         const gross = sMap[wh] || 0
         const committed = subCommittedMap.get(`${row.item_id}___${wh}`) || 0
-        const avail = Math.max(0, gross - committed)
+        const held = Math.ceil((heldUnitsMap.get(`${row.item_id}___${wh}`) || 0) / pack)
+        const avail = Math.max(0, gross - committed - held)
 
         stocks[wh] = avail
         grossStocks[wh] = gross
         committedStocks[wh] = committed
+        heldStocks[wh] = held
         totalSubStock += avail
       })
 
@@ -1628,6 +1647,7 @@ export const serverMethods = {
         stocks: stocks,
         grossStocks: grossStocks,
         committedStocks: committedStocks,
+        heldStocks: heldStocks,
         totalSubStock: totalSubStock
       }
     })
@@ -1804,6 +1824,99 @@ export const serverMethods = {
       throw err
     }
     return data || { success: true, cancelled_units: 0, added_units: 0, unmatched: [] }
+  },
+
+  /**
+   * 15-3. 출고 보류 (서버 저장 · 모든 기기 공유 · 가용재고 예약)
+   * 보류 수량은 서버에서 그 창고 가용재고(실재고 − 발주 − 다른 보류)를 예약한다. 가용재고를 넘으면 저장되지 않는다.
+   * 불러오면 version이 올라가, 예전에 불러간 장바구니의 제출·재보류는 서버가 거절한다(같은 주문 이중 출고 방지).
+   */
+  async listOutboundHolds() {
+    const { data, error } = await supabase.rpc('rpc_list_outbound_holds')
+    if (error) throw new Error(error.message || '출고 보류 목록을 불러오지 못했습니다.')
+    return Array.isArray(data) ? data : []
+  },
+
+  // hold: { replace:[{id,version}], warehouse, partner, admin, holdDate, createdLabel, records }
+  async saveOutboundHold(hold) {
+    const h = hold || {}
+    const wh = String(h.warehouse || 'MAIN').trim().toUpperCase() || 'MAIN'
+    const records = Array.isArray(h.records) ? h.records : []
+
+    const items = []
+    for (const r of records) {
+      const name = String(r.itemName || '').trim()
+      const color = String(r.color || 'SURTIDO').trim()
+      const boxContent = Number(r.boxContent || 1)
+      const boxQty = Math.abs(Number(r.boxQty || 0))
+      const unitQty = Math.abs(Number(r.individualQty || 0))
+      if (!name || (boxQty === 0 && unitQty === 0)) continue
+
+      const key = `${name}_${color}_${boxContent}`
+      let itemId = itemIdCache.get(key) || null
+      if (!itemId) {
+        const { data: found, error: findErr } = await supabase
+          .from('items')
+          .select('id')
+          .eq('item_name', name)
+          .eq('color', color)
+          .eq('box_packaging_qty', boxContent)
+          .eq('is_active', true)
+          .limit(1)
+        if (findErr) throw findErr
+        itemId = found && found[0] ? found[0].id : null
+        if (itemId) itemIdCache.set(key, itemId)
+      }
+      if (!itemId) throw new Error(`등록되지 않은 상품은 보류할 수 없습니다: ${name} (${color})`)
+      items.push({ item_id: itemId, box_qty: boxQty, unit_qty: unitQty })
+    }
+    if (items.length === 0) throw new Error('보류할 수량이 없습니다.')
+
+    await assertPackQtyUnchanged(records
+      .filter(r => String(r.itemName || '').trim())
+      .map(r => {
+        const key = `${String(r.itemName).trim()}_${String(r.color || 'SURTIDO').trim()}_${Number(r.boxContent || 1)}`
+        return { itemId: itemIdCache.get(key), name: String(r.itemName).trim(), color: String(r.color || 'SURTIDO').trim(), boxContent: Number(r.boxContent || 1) }
+      })
+      .filter(r => r.itemId))
+
+    const replace = (Array.isArray(h.replace) ? h.replace : [])
+      .filter(ref => ref && ref.id)
+      .map(ref => ({ id: ref.id, version: Number(ref.version) }))
+
+    const fingerprint = JSON.stringify({ kind: 'save_out_hold', wh, replace, items, partner: h.partner || '' })
+    const idemKey = takeIdempotencyKey('save_outbound_hold', fingerprint)
+    try {
+      const { data, error } = await supabase.rpc('rpc_save_outbound_hold', {
+        p_replace: replace,
+        p_warehouse: wh,
+        p_partner: String(h.partner || ''),
+        p_admin: String(h.admin || ''),
+        p_hold_date: String(h.holdDate || ''),
+        p_created_label: String(h.createdLabel || ''),
+        p_records: records,
+        p_items: items,
+        p_idempotency_key: idemKey
+      })
+      if (error) throw new Error(error.message || '출고 보류 저장에 실패했습니다.')
+      clearIdempotencyKey('save_outbound_hold')
+      return data
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('save_outbound_hold')
+      throw err
+    }
+  },
+
+  async loadOutboundHold(id, version) {
+    const { data, error } = await supabase.rpc('rpc_load_outbound_hold', { p_id: id, p_version: Number(version) })
+    if (error) throw new Error(error.message || '출고 보류를 불러오지 못했습니다.')
+    return data
+  },
+
+  async deleteOutboundHold(id, version) {
+    const { data, error } = await supabase.rpc('rpc_delete_outbound_hold', { p_id: id, p_version: Number(version) })
+    if (error) throw new Error(error.message || '출고 보류 삭제에 실패했습니다.')
+    return data
   },
 
   /**

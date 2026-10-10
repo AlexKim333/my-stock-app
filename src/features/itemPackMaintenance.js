@@ -21,6 +21,7 @@ let packPreview = null;
 const PACK_BLOCKER_TEXT = {
   DUPLICATE_ITEM: '같은 품명·색상·새 포장수량의 품목이 이미 있어 변경할 수 없습니다.',
   PENDING_ORDERS: '진행 중인 보류/이동 주문(서브창고 발주 등)이 있습니다. 완료 또는 취소한 뒤 다시 시도하세요.',
+  OUTBOUND_HOLDS: '이 품목이 담긴 출고 보류가 있습니다(모든 기기 공유). 보류를 제출하거나 삭제한 뒤 다시 시도하세요.',
   UNIT_QTY_PRESENT: '낱개(개) 단위 수량이 남아 있어 자동 변경할 수 없습니다. 낱개를 상자로 정리(재고조정)한 뒤 다시 시도하세요.',
   CONFIRM_REQUIRED: '아래 확인 체크박스를 선택해야 변경할 수 있습니다.'
 };

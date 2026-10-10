@@ -2,7 +2,7 @@
 // 재고 변경 자동 동기화: 아래 네 가지 신호를 모아(0.5초 단위) 하나의 `wms-stock-changed` 이벤트로 알린다.
 //   1) local     이 탭에서 성공한 쓰기 RPC (브릿지의 `wms-bridge-success` 이벤트)
 //   2) tab       같은 브라우저의 다른 탭/창에서 성공한 쓰기 (BroadcastChannel)
-//   3) realtime  다른 기기·사용자의 변경 (Supabase Realtime: stock_change_signals ← inventory_stocks, pending_orders 트리거)
+//   3) realtime  다른 기기·사용자의 변경 (Supabase Realtime: stock_change_signals ← inventory_stocks, pending_orders, outbound_hold_items 트리거)
 //   4) resume    백그라운드에서 오래 있다 돌아왔거나 Realtime이 재연결됨 → 전체 새로고침
 // 화면 코드는 window.addEventListener('wms-stock-changed', e => ...) 로 받아 필요한 부분만 다시 읽는다.
 //   e.detail = { all, warehouses: string[], itemIds: string[], sources: string[] }
@@ -24,6 +24,9 @@ const WRITE_METHODS = {
   submitSubWarehouseOrderDrafts: () => ['*'],
   cancelPendingInboundOrders: () => ['*'],
   adjustPendingInboundOrders: () => ['*'],
+  saveOutboundHold: () => ['*'],
+  loadOutboundHold: () => ['*'],
+  deleteOutboundHold: () => ['*'],
   registerProduct: () => ['MAIN'],
   executeStockNormalization: () => ['*'],
   executeColorNormalization: () => ['*'],

@@ -4,7 +4,7 @@
  * ---------------------------------------------------------------------------
  * npm run verify(정적 분석)와 달리, 이 스크립트는 실제 프로덕션 Supabase에
  * 로그인해서 입고 → 이동 → 이동복귀 → 출고 → 재고부족 가드 → 서브창고발 출고 →
- * 재고조정까지 실제 RPC를 호출하고 매 단계 재고 수치를 검증한다. 로컬/스테이징 DB가 없는
+ * 출고 보류(예약·제출) → 재고조정까지 실제 RPC를 호출하고 매 단계 재고 수치를 검증한다. 로컬/스테이징 DB가 없는
  * 프로젝트라(memory: stock-app-production-db 참고) 프로덕션 자체를 상대로
  * 돈다 — 그래서 반드시:
  *   1. 전용 테스트 창고(SMOKETEST)와 전용 테스트 품목(__SMOKETEST_ITEM__)만
@@ -91,10 +91,27 @@ async function processTx(db, payload) {
     p_items: payload.items,
     p_target_warehouse: payload.targetWarehouse ?? null,
     p_pending_from_warehouse: null,
-    p_idempotency_key: randomUUID()
+    p_idempotency_key: randomUUID(),
+    p_hold_refs: payload.holdRefs ?? null
   })
   if (error) throw error
   return data
+}
+
+async function listSmokeHolds(db) {
+  const { data, error } = await db.rpc('rpc_list_outbound_holds')
+  if (error) throw error
+  return (data || []).filter(h => (h.records || []).some(r => r.itemName === TEST_ITEM_NAME))
+}
+
+async function expectFailure(fn, pattern, label) {
+  try {
+    await fn()
+  } catch (err) {
+    if (pattern && !pattern.test(err.message || '')) throw new Error(`${label}: 예상과 다른 오류 — ${err.message}`)
+    return
+  }
+  throw new Error(`${label}: 실패해야 하는데 성공했습니다`)
 }
 
 async function main() {
@@ -179,6 +196,13 @@ async function main() {
         `이전 스모크테스트 실행이 비정상 종료됐을 수 있습니다 — 수동으로 확인 후 재실행하세요.`
       )
     }
+    const holds = await listSmokeHolds(db)
+    if (holds.length) {
+      throw new Error(
+        `테스트 품목의 출고 보류가 ${holds.length}건 남아 있습니다 (예약이 다음 실행을 막음). ` +
+        `이전 스모크테스트 실행이 비정상 종료됐을 수 있습니다 — 앱의 출고 보류 목록에서 확인 후 삭제하고 재실행하세요.`
+      )
+    }
   })
 
   await step('TEST 1: 입고(INBOUND) +10상자 → MAIN', async () => {
@@ -259,8 +283,59 @@ async function main() {
     assertEqual(main.box_qty, 0, 'MAIN 박스재고 (변화 없어야 함)')
   })
 
-  await step(`TEST 5-4: 출고(OUTBOUND) -6상자 ← ${TEST_WAREHOUSE_CODE} (0상자로 정리)`, async () => {
-    await processTx(db, { txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 6, unit_qty: 0 }] })
+  // 출고 보류: 서버에 저장되어 그 창고 가용재고를 예약한다. 다른 출고는 예약분을 못 쓰고, 보류를 불러와 제출하면
+  // 같은 트랜잭션에서 소진된다(자기 예약에 막히지 않음). 이 시점 SMOKETEST는 6상자.
+  let hold
+  await step(`TEST 5-H1: 출고 보류 저장 4상자 ← ${TEST_WAREHOUSE_CODE} (가용재고 예약)`, async () => {
+    const { data, error } = await db.rpc('rpc_save_outbound_hold', {
+      p_replace: [],
+      p_warehouse: TEST_WAREHOUSE_CODE,
+      p_partner: '스모크테스트',
+      p_admin: MEMBER_NAME,
+      p_hold_date: '',
+      p_created_label: '스모크테스트',
+      p_records: [{ itemName: TEST_ITEM_NAME, color: TEST_ITEM_COLOR, boxContent: TEST_ITEM_PACK, boxQty: -4, individualQty: 0 }],
+      p_items: [{ item_id: itemId, box_qty: 4, unit_qty: 0 }],
+      p_idempotency_key: randomUUID()
+    })
+    if (error) throw error
+    hold = data
+    assertEqual((await listSmokeHolds(db)).length, 1, '테스트 품목 보류 건수')
+  })
+
+  await step(`TEST 5-H2: 보류 예약 가드 — ${TEST_WAREHOUSE_CODE} 6상자 중 4상자 보류, 다른 출고 3상자는 반드시 실패해야 함`, async () => {
+    await expectFailure(
+      () => processTx(db, { txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 3, unit_qty: 0 }] }),
+      /출고 보류/, '보류 예약 가드'
+    )
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+  })
+
+  await step(`TEST 5-H3: 보류 불러와 제출 -4상자 ← ${TEST_WAREHOUSE_CODE} (보류 소진, 옛 version 재제출은 거절)`, async () => {
+    const { data: loaded, error } = await db.rpc('rpc_load_outbound_hold', { p_id: hold.id, p_version: hold.version })
+    if (error) throw error
+    await expectFailure(
+      () => processTx(db, {
+        txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE,
+        items: [{ item_id: itemId, box_qty: 4, unit_qty: 0 }],
+        holdRefs: [{ id: hold.id, version: hold.version }]
+      }),
+      /두 번 처리되지 않도록/, '옛 version 제출 거절'
+    )
+    const res = await processTx(db, {
+      txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE,
+      items: [{ item_id: itemId, box_qty: 4, unit_qty: 0 }],
+      holdRefs: [{ id: loaded.id, version: loaded.version }]
+    })
+    assertEqual(res.consumed_holds, 1, '소진된 보류 수')
+    assertEqual((await listSmokeHolds(db)).length, 0, '테스트 품목 보류 건수')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 2, `${TEST_WAREHOUSE_CODE} 박스재고`)
+  })
+
+  await step(`TEST 5-4: 출고(OUTBOUND) -2상자 ← ${TEST_WAREHOUSE_CODE} (0상자로 정리)`, async () => {
+    await processTx(db, { txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 2, unit_qty: 0 }] })
     const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
     assertEqual(sub.box_qty, 0, `${TEST_WAREHOUSE_CODE} 박스재고`)
   })
