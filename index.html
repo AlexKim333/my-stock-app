@@ -5375,13 +5375,22 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
   let effectiveIndivStock = item.stockIndividual;
   let reservedBoxes = 0;
   let reservedIndividuals = 0;
+  let committedUnits = 0;
 
   if (currentType === 'out') {
+    // 서브창고는 MAIN행 열린 발주가 먼저 재고를 선점한다(서버 fn_assert_warehouse_atp와 같은 기준: 실재고 − 발주진행).
+    committedUnits = Math.max(0, Number(item.committedUnits) || 0);
+    if (committedUnits > 0) {
+      const bc = Math.max(1, Number(item.boxContent) || 1);
+      const availUnits = Math.max(0, (item.stockBox || 0) * bc + (item.stockIndividual || 0) - committedUnits);
+      effectiveBoxStock = Math.floor(availUnits / bc);
+      effectiveIndivStock = availUnits % bc;
+    }
     const reserved = getReservedQty(item.name, item.color, item.boxContent, editingRecordIndex);
     reservedBoxes = reserved.reservedBoxes;
     reservedIndividuals = reserved.reservedIndividuals;
-    effectiveBoxStock = Math.max(0, item.stockBox - reservedBoxes);
-    effectiveIndivStock = Math.max(0, item.stockIndividual - reservedIndividuals);
+    effectiveBoxStock = Math.max(0, effectiveBoxStock - reservedBoxes);
+    effectiveIndivStock = Math.max(0, effectiveIndivStock - reservedIndividuals);
   }
 
   if (unitType === 'box') {
@@ -5392,7 +5401,8 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
       isSufficient: isSufficient,
       boxStock: effectiveBoxStock,
       rawBoxStock: item.stockBox,
-      reservedBoxes: reservedBoxes
+      reservedBoxes: reservedBoxes,
+      committedUnits
     };
   } else {
     let totalIndividual = effectiveIndivStock;
@@ -5417,6 +5427,7 @@ function checkItemAndStock(itemName, color, boxContent, qty, unitType) {
       rawIndividualStock: item.stockIndividual,
       reservedBoxes: reservedBoxes,
       reservedIndividuals: reservedIndividuals,
+      committedUnits,
       boxesNeeded
     };
   }
@@ -5551,7 +5562,7 @@ function addRecord() {
       qty,
       unitType === 'box' ? stockInfo.boxStock : stockInfo.individualStock,
       unitType === 'box' ? '박스' : '낱개',
-      { reservedBoxes: stockInfo.reservedBoxes, reservedIndividuals: stockInfo.reservedIndividuals },
+      { reservedBoxes: stockInfo.reservedBoxes, reservedIndividuals: stockInfo.reservedIndividuals, committedUnits: stockInfo.committedUnits || 0 },
       stockInfo.item ? {
         itemName: stockInfo.item.name,
         color: stockInfo.item.color || 'SURTIDO',
@@ -5563,6 +5574,7 @@ function addRecord() {
         qty: qty,
         reservedBoxes: stockInfo.reservedBoxes || 0,
         reservedIndividuals: stockInfo.reservedIndividuals || 0,
+        committedUnits: stockInfo.committedUnits || 0,
         warehouse: String(getAdjWarehouse() || 'MAIN').toUpperCase()
       } : null
     );
@@ -5699,6 +5711,10 @@ function showStockWarningModal(orderQty, currentStock, unit, reservedInfo = null
   if (reservedInfo && (reservedInfo.reservedBoxes > 0 || reservedInfo.reservedIndividuals > 0)) {
     message += `\n\n(ℹ️ 보류 목록에 이미 ${reservedInfo.reservedBoxes}상자 / ${reservedInfo.reservedIndividuals}개가 선점 예약되어 있습니다.)`;
   }
+  if (reservedInfo && reservedInfo.committedUnits > 0) {
+    const bc = Math.max(1, Number(quickCtx && quickCtx.boxContent) || 1);
+    message += `\n\n(📦 이 창고에는 MAIN 입고 예정 발주 ${formatUnitsAsBoxes(reservedInfo.committedUnits, bc)}이(가) 잡혀 있어 그만큼은 출고할 수 없습니다. 발주를 줄이거나 취소하면 출고할 수 있습니다.)`;
+  }
   const warningMessageP = document.getElementById('warningMessage');
   const stockWarningModalDiv = document.getElementById('stockWarningModal');
   if (warningMessageP) warningMessageP.textContent = message;
@@ -5715,7 +5731,10 @@ function openQuickAdjustFromWarning() {
   closeStockWarningModal();
   const isBox = ctx.unit !== 'individual';
   // 부족분을 메우도록: 선점 수량 + 이번 요청량 (이미 실재고가 더 많으면 그대로)
-  const need = (isBox ? ctx.reservedBoxes : ctx.reservedIndividuals) + ctx.qty;
+  // 서브창고의 MAIN행 열린 발주도 실재고에서 먼저 빠지므로 목표 수량에 더한다(상자 단위는 올림).
+  const bc = Math.max(1, Number(ctx.boxContent) || 1);
+  const committed = Math.max(0, Number(ctx.committedUnits) || 0);
+  const need = (isBox ? ctx.reservedBoxes : ctx.reservedIndividuals) + ctx.qty + (isBox ? Math.ceil(committed / bc) : committed);
   openQuickAdjustModal(ctx.itemName, ctx.color, ctx.boxContent, ctx.curBox, ctx.curIndiv, ctx.qty, {
     warehouse: ctx.warehouse,
     unit: isBox ? 'box' : 'individual',
@@ -5996,26 +6015,39 @@ function updateTable() {
                    || null;
         const curBox = sInfo ? (sInfo.stockBox || 0) : 0;
         const curIndiv = sInfo ? (sInfo.stockIndividual || 0) : 0;
+        // 출고: 서브창고의 MAIN행 열린 발주는 출고할 수 없으므로 뺀 값을 가용재고로 보여준다(퀵재고는 실재고 기준 그대로).
+        const committedUnits = (currentType === 'out' && sInfo) ? Math.max(0, Number(sInfo.committedUnits) || 0) : 0;
+        let availBox = curBox;
+        let availIndiv = curIndiv;
+        if (committedUnits > 0) {
+          const bc = Math.max(1, Number(rec.boxContent || sInfo.boxContent) || 1);
+          const availUnits = Math.max(0, curBox * bc + curIndiv - committedUnits);
+          availBox = Math.floor(availUnits / bc);
+          availIndiv = availUnits % bc;
+        }
+        const committedTitle = committedUnits > 0
+          ? ` title="실재고 ${curBox}+${curIndiv} 중 MAIN 입고 예정 발주 ${committedUnits}개 제외"`
+          : '';
 
         // "(00+00)" 괄호 안에 숫자의 형식으로만 가용재고(상자+낱개) 표시 (프린트 제외)
-        stockDisplay = `<span class="no-print stock-avail-tag">(${curBox}+${curIndiv})</span>`;
+        stockDisplay = `<span class="no-print stock-avail-tag"${committedTitle}>(${availBox}+${availIndiv})</span>`;
 
         if (currentType === 'out') {
           const reqBox = Math.abs(rec.boxQty || 0);
           const reqIndiv = Math.abs(rec.individualQty || 0);
           const bContent = rec.boxContent || 0;
           const totalReqPieces = (reqBox * bContent) + reqIndiv;
-          const totalCurPieces = (curBox * bContent) + curIndiv;
+          const totalCurPieces = (availBox * bContent) + availIndiv;
           const isShort = (bContent > 0)
             ? (totalReqPieces > totalCurPieces)
-            : (reqBox > curBox || reqIndiv > curIndiv);
+            : (reqBox > availBox || reqIndiv > availIndiv);
 
           if (isShort) {
             shortageRowStyle = 'background-color: #fff1f2;';
-            stockDisplay = `<span class="no-print stock-avail-tag" style="color: #dc2626;">(${curBox}+${curIndiv})</span>`;
+            stockDisplay = `<span class="no-print stock-avail-tag" style="color: #dc2626;"${committedTitle}>(${availBox}+${availIndiv})</span>`;
             const shortPieces = Math.max(0, totalReqPieces - totalCurPieces);
             const shortText = (bContent > 0 && reqBox > 0 && shortPieces >= bContent)
-              ? `재고부족(${curBox}상자)`
+              ? `재고부족(${availBox}상자)`
               : `재고부족(${shortPieces}개 부족)`;
             shortageBadge = `
               <div style="margin-top: 2px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; max-width: 100%;">
@@ -14523,7 +14555,8 @@ function getAdjStockSource() {
   }
   const list = (stockDataCache || []).map(it => {
     const w = map ? map.get(it.key) : null;
-    return { ...it, stockBox: w ? w.stockBox : 0, stockIndividual: w ? w.stockIndividual : 0 };
+    // committedUnits: 이 창고에서 MAIN으로 가는 열린 발주(낱개 환산). 재고 수치는 실재고 그대로 두고 출고 검사에서만 뺀다.
+    return { ...it, stockBox: w ? w.stockBox : 0, stockIndividual: w ? w.stockIndividual : 0, committedUnits: w ? (w.committedUnits || 0) : 0 };
   });
   adjStockSourceMemo = { base: stockDataCache, code, map, list };
   return list;

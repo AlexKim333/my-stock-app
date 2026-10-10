@@ -1292,12 +1292,32 @@ export const serverMethods = {
    */
   async getWarehouseStockList(warehouse) {
     const wh = String(warehouse || 'MAIN').trim().toUpperCase() || 'MAIN'
-    const rows = await fetchAllRows(() =>
-      supabase
-        .from('inventory_stocks')
-        .select('item_id, box_qty, unit_qty, items(item_name, color, box_packaging_qty)')
-        .eq('warehouse_code', wh)
-    )
+    // 서브창고는 MAIN행 열린 발주(PENDING/IN_TRANSIT)가 재고를 선점한다. 출고 화면이 서버(fn_assert_warehouse_atp)와
+    // 같은 기준(실재고 − 발주진행)으로 검사할 수 있게 품목별 발주 수량(낱개 환산)을 함께 돌려준다. 재고 수치는 실재고 그대로.
+    const [rows, openOrders] = await Promise.all([
+      fetchAllRows(() =>
+        supabase
+          .from('inventory_stocks')
+          .select('item_id, box_qty, unit_qty, items(item_name, color, box_packaging_qty)')
+          .eq('warehouse_code', wh)
+      ),
+      wh === 'MAIN'
+        ? Promise.resolve([])
+        : fetchAllRows(() =>
+          supabase
+            .from('pending_orders')
+            .select('item_id, box_qty, unit_qty, items(box_packaging_qty)')
+            .eq('from_warehouse', wh)
+            .eq('to_warehouse', 'MAIN')
+            .in('status', ['PENDING', 'IN_TRANSIT'])
+        )
+    ])
+    const committedMap = new Map()
+    openOrders.forEach(po => {
+      const pack = Math.max(1, Math.round(Number(po.items?.box_packaging_qty || 1)))
+      const units = Number(po.box_qty || 0) * pack + Number(po.unit_qty || 0)
+      committedMap.set(po.item_id, (committedMap.get(po.item_id) || 0) + units)
+    })
     return {
       warehouse: wh,
       items: rows
@@ -1310,7 +1330,8 @@ export const serverMethods = {
             key: `${name}_${color}_${boxContent}`,
             itemId: r.item_id,
             stockBox: Number(r.box_qty || 0),
-            stockIndividual: Number(r.unit_qty || 0)
+            stockIndividual: Number(r.unit_qty || 0),
+            committedUnits: committedMap.get(r.item_id) || 0
           }
         })
     }
