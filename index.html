@@ -7,6 +7,7 @@
   <script type="module" src="/src/wms-entry.js"></script>
   <script type="module" src="/src/features/nodeManagement.js"></script>
   <script type="module" src="/src/features/itemPackMaintenance.js"></script>
+  <script type="module" src="/src/features/itemCatalog.js"></script>
 
 <style id="mobileOptimizationStyle">
 /* 📱 2026 초고속 모바일 반응형 완벽 최적화 (Mobile First & Tablet UX) */
@@ -2259,6 +2260,7 @@
         <button onclick="setPage('출고입력')">📤 출고입력</button>
         <button onclick="setPage('상품등록')">🏷️ 상품등록</button>
         <button onclick="setPage('재고조정')">📋 재고조정</button>
+        <button type="button" onclick="openItemCatalogModal()" id="btnNavItemCatalog" title="오래된·단종·중복 등록 상품을 숨겨 검색 대상에서 제외">🗂️ 상품관리</button>
         <button type="button" onclick="setPage('재고조정'); openMobileStockAdjModal();" id="btnNavMobileAdj" style="background: linear-gradient(135deg, #ede9fe, #e0e7ff); color: #4338ca; border: 1.5px solid #a5b4fc; font-weight: 800; font-size: 8.5pt;" title="현장 실사 모바일 전용 UI 바로 열기">
           📱 모바일실사
         </button>
@@ -16549,6 +16551,83 @@ if (document.readyState === 'loading') {
           <tbody id="partnerHistoryTableBody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- 🗂️ 상품관리 모달: 오래된/단종/중복 상품 숨김(검색 제외) — src/features/itemCatalog.js -->
+  <style>
+    #itemCatalogModal table { width:100%; border-collapse:collapse; font-size:8.5pt; }
+    #itemCatalogModal thead th { position:sticky; top:0; z-index:1; background:#f1f5f9; color:#334155; font-weight:700; padding:7px 8px; border-bottom:1.5px solid #cbd5e1; text-align:left; white-space:nowrap; }
+    #itemCatalogModal tbody td { padding:5px 8px; border-bottom:1px solid #f1f5f9; vertical-align:middle; text-align:left; }
+    #itemCatalogModal tbody tr:hover { background:#f8fafc; }
+    #itemCatalogModal .catalog-badge { display:inline-block; padding:1px 7px; border-radius:10px; font-size:7.4pt; font-weight:700; white-space:nowrap; margin:1px 0; }
+    #itemCatalogModal select, #itemCatalogModal input[type="text"] { padding:6px 8px; font-size:8.6pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box; background:#fff; }
+    #itemCatalogModal button:disabled { opacity:0.45; cursor:not-allowed !important; }
+  </style>
+  <div id="itemCatalogModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.6); z-index:9998; justify-content:center; align-items:center; backdrop-filter:blur(2px);">
+    <div style="background:#ffffff; width:98%; max-width:1300px; height:94vh; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.4);">
+      <div style="padding:10px 16px; background:#0f766e; color:#ffffff; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-shrink:0;">
+        <div>
+          <div style="font-weight:800; font-size:11pt;">🗂️ 상품관리 — 검색 대상 정리</div>
+          <div style="font-size:7.6pt; color:#ccfbf1;">오래된·단종·중복 등록 상품을 숨기면 검색·재고 목록·주문서에서 빠지고 입출고가 차단됩니다. 과거 전표·수불원장은 그대로이며 언제든 복구할 수 있습니다. 재고가 남았거나 진행 중인 발주·보류가 있으면 숨길 수 없습니다. (관리자 전용)</div>
+        </div>
+        <button type="button" onclick="closeItemCatalogModal()" style="background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:5px 12px; cursor:pointer; font-weight:bold; font-size:10pt; flex-shrink:0;">✕ 닫기</button>
+      </div>
+
+      <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:10px 16px; border-bottom:1px solid #e2e8f0; flex-shrink:0;">
+        <input type="text" id="catalogSearchInput" placeholder="품명·색상 검색 (하이픈·공백 무시)" autocomplete="off" oninput="onCatalogSearchInput()" style="flex:1 1 220px; min-width:180px;">
+        <select id="catalogStatusFilter" onchange="renderItemCatalog()" title="상태">
+          <option value="active">활성 상품</option>
+          <option value="hidden">숨긴 상품</option>
+          <option value="all">전체</option>
+        </select>
+        <select id="catalogViewFilter" onchange="renderItemCatalog()" title="보기">
+          <option value="all">모든 상품</option>
+          <option value="hideable">숨김 가능 (재고 0·진행 없음)</option>
+          <option value="dup">중복 등록 의심 (표기만 다른 품명)</option>
+          <option value="notx">거래 내역 없음</option>
+          <option value="stale">180일 이상 거래 없음</option>
+        </select>
+        <select id="catalogSortSelect" onchange="renderItemCatalog()" title="정렬">
+          <option value="name">품명순</option>
+          <option value="lastTx">오래 거래 없는 순</option>
+          <option value="created">최근 등록순</option>
+        </select>
+        <button type="button" onclick="loadItemCatalog()" style="padding:6px 12px; background:#475569; color:#fff; font-weight:700; border:none; border-radius:6px; cursor:pointer; font-size:8.5pt;">🔄 새로고침</button>
+        <div id="catalogSummary" style="flex-basis:100%; font-size:8pt; color:#475569;"></div>
+      </div>
+
+      <div style="flex:1; overflow:auto; min-height:0;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:34px; text-align:center;"><input type="checkbox" id="catalogSelectAll" onchange="toggleCatalogSelectAll(this.checked)" title="보이는 상품 중 선택 가능한 것 모두 선택" style="cursor:pointer;"></th>
+              <th>품명</th>
+              <th>색상</th>
+              <th style="text-align:right;">입수</th>
+              <th style="text-align:right;">MAIN 재고</th>
+              <th>창고별 재고(상자)</th>
+              <th style="text-align:right;">거래</th>
+              <th>최근 거래</th>
+              <th>상태</th>
+            </tr>
+          </thead>
+          <tbody id="catalogTableBody"></tbody>
+        </table>
+      </div>
+
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 16px; border-top:1.5px solid #cbd5e1; background:#f8fafc; flex-shrink:0;">
+        <span id="catalogSelectedCount" style="font-size:8.6pt; font-weight:700; color:#1e293b;">선택한 상품 없음</span>
+        <button type="button" onclick="clearCatalogSelection()" style="padding:4px 10px; background:#fff; color:#475569; border:1px solid #cbd5e1; border-radius:5px; cursor:pointer; font-size:8pt;">선택 해제</button>
+        <input type="text" id="catalogReason" placeholder="사유 (선택, 예: 단종 / SXY-2440과 중복)" autocomplete="off" style="flex:1 1 200px; min-width:160px;">
+        <button type="button" id="catalogHideBtn" onclick="hideSelectedCatalogItems()" disabled style="padding:7px 16px; background:#dc2626; color:#fff; font-weight:800; border:none; border-radius:6px; cursor:pointer; font-size:8.8pt;">🚫 검색에서 숨기기</button>
+        <button type="button" id="catalogShowBtn" onclick="restoreSelectedCatalogItems()" disabled style="padding:7px 16px; background:#16a34a; color:#fff; font-weight:800; border:none; border-radius:6px; cursor:pointer; font-size:8.8pt;">↩️ 다시 활성화</button>
+      </div>
+
+      <details style="border-top:1px solid #e2e8f0; flex-shrink:0;">
+        <summary style="padding:7px 16px; font-size:8.5pt; font-weight:700; color:#334155; cursor:pointer;">🕘 최근 숨김/복구 이력</summary>
+        <div id="catalogHistoryList" style="max-height:160px; overflow-y:auto;"></div>
+      </details>
     </div>
   </div>
 

@@ -386,6 +386,65 @@ export const serverMethods = {
     return data || []
   },
 
+  /**
+   * 2g. 상품관리: 전체 품목 목록 (관리자 전용, 활성+숨김 모두, 창고별 재고·거래 통계 포함)
+   */
+  async listItemCatalog() {
+    const { data, error } = await supabase.rpc('rpc_list_item_catalog')
+    if (error) throw new Error(error.message || '상품 목록을 불러오지 못했습니다.')
+    return (data || []).map(r => ({
+      id: r.id,
+      name: r.name,
+      color: r.color || 'SURTIDO',
+      pack: Number(r.pack || 1),
+      active: r.active !== false,
+      createdAt: r.createdAt,
+      mainBox: Number(r.mainBox || 0),
+      mainUnit: Number(r.mainUnit || 0),
+      stocks: (r.stocks || []).map(s => ({ warehouse: s.wh, box: Number(s.box || 0), unit: Number(s.unit || 0) })),
+      txCount: Number(r.txCount || 0),
+      lastTxAt: r.lastTxAt || null,
+      pendingActive: Number(r.pendingActive || 0),
+      holdCount: Number(r.holdCount || 0)
+    }))
+  },
+
+  /**
+   * 2h. 상품 숨김(검색 제외)/복구 일괄 처리 (관리자 전용, rpc_set_items_active)
+   *  - 숨김은 재고 0·진행 중 발주 없음·출고 보류 없음일 때만. 막힌 품목은 건너뛰고 skipped로 돌려준다.
+   */
+  async setItemsActive(payload) {
+    const p = payload || {}
+    const ids = Array.isArray(p.itemIds) ? p.itemIds.filter(Boolean) : []
+    if (ids.length === 0) throw new Error('대상 품목을 선택하세요.')
+    if (typeof p.active !== 'boolean') throw new Error('숨김/복구 여부가 지정되지 않았습니다.')
+
+    const { data, error } = await supabase.rpc('rpc_set_items_active', {
+      p_item_ids: ids,
+      p_active: p.active,
+      p_reason: p.reason || null
+    })
+    if (error) throw new Error(error.message || '상품 상태를 바꾸지 못했습니다.')
+
+    if (!p.active) {
+      // 숨긴 품목의 id 캐시를 지워, 오래 열린 장바구니가 숨긴 품목 id로 제출되지 않게 한다.
+      const hidden = new Set((data?.changed || []).map(c => c.id))
+      for (const [k, v] of itemIdCache) {
+        if (hidden.has(v)) itemIdCache.delete(k)
+      }
+    }
+    return data
+  },
+
+  /**
+   * 2i. 최근 숨김/복구 이력 (관리자 전용)
+   */
+  async listItemVisibilityChanges(limit) {
+    const { data, error } = await supabase.rpc('rpc_list_item_visibility_changes', { p_limit: Number(limit) || 30 })
+    if (error) throw new Error(error.message || '변경 이력을 불러오지 못했습니다.')
+    return data || []
+  },
+
   async login(memberName, password) {
     const rawName = String(memberName || '').trim()
     let res = await supabase.rpc('rpc_login', {
@@ -1567,8 +1626,10 @@ export const serverMethods = {
     const whList = (activeWhRows || []).map(w => w.code)
 
     // 1. 전체 유효 재고, 8대 서브창고 재고 및 이동 중(PENDING) 주문 병렬 조회 (sub-50ms)
-    const [allMainItems, subStocks, pendingOrders, holdRes] = await Promise.all([
+    const [allMainItems, hiddenRows, subStocks, pendingOrders, holdRes] = await Promise.all([
       fetchAllRows(() => supabase.from('view_effective_stocks').select('*'), { orderBy: 'item_id' }),
+      // view_effective_stocks는 숨김(비활성) 품목도 포함하므로 따로 받아 제외한다.
+      fetchAllRows(() => supabase.from('items').select('id').eq('is_active', false)),
       fetchAllRows(() =>
         supabase.from('inventory_stocks').select('warehouse_code, box_qty, item_id').in('warehouse_code', whList)
       ),
@@ -1608,7 +1669,8 @@ export const serverMethods = {
     })
 
     // 4. WMS 모달 매트릭스 규격으로 포맷팅 (서브창고 실시간 가용재고 ATP 산출)
-    const matrixItems = allMainItems.map(row => {
+    const hiddenIds = new Set(hiddenRows.map(r => r.id))
+    const matrixItems = allMainItems.filter(row => !hiddenIds.has(row.item_id)).map(row => {
       const sMap = subMap.get(row.item_id) || {}
       const stocks = {} // 가용재고 (실재고 - 발주진행수량)
       const grossStocks = {} // 장부상 실재고

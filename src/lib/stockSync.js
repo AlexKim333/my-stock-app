@@ -28,6 +28,7 @@ const WRITE_METHODS = {
   loadOutboundHold: () => ['*'],
   deleteOutboundHold: () => ['*'],
   registerProduct: () => ['MAIN'],
+  setItemsActive: () => ['MAIN'],
   executeStockNormalization: () => ['*'],
   executeColorNormalization: () => ['*'],
   applyRecommendedSafeStockToMaster: () => ['MAIN'],
