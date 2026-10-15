@@ -6022,18 +6022,29 @@ function updateTable() {
                    || null;
         const curBox = sInfo ? (sInfo.stockBox || 0) : 0;
         const curIndiv = sInfo ? (sInfo.stockIndividual || 0) : 0;
-        // 출고: 서브창고의 MAIN행 열린 발주는 출고할 수 없으므로 뺀 값을 가용재고로 보여준다(퀵재고는 실재고 기준 그대로).
+        // 출고: 이 행이 쓸 수 있는 가용재고를 보여준다(퀵재고는 실재고 기준 그대로).
+        //  - 서브창고의 MAIN행 열린 발주
+        //  - 다른 출고 보류(이 장바구니로 불러온 보류는 제외) + 같은 품목의 다른 장바구니 행
+        // 셀 직접 수정은 수량 검사를 거치지 않으므로, 이 표시가 재보류·제출 전 유일한 부족 신호다.
         const committedUnits = (currentType === 'out' && sInfo) ? Math.max(0, Number(sInfo.committedUnits) || 0) : 0;
+        let heldUnits = 0;
+        const bc = Math.max(1, Number(rec.boxContent || (sInfo && sInfo.boxContent)) || 1);
+        if (currentType === 'out' && sInfo) {
+          const reserved = getReservedQty(rec.itemName, rec.color, rec.boxContent, idx);
+          heldUnits = reserved.reservedBoxes * bc + reserved.reservedIndividuals;
+        }
         let availBox = curBox;
         let availIndiv = curIndiv;
-        if (committedUnits > 0) {
-          const bc = Math.max(1, Number(rec.boxContent || sInfo.boxContent) || 1);
-          const availUnits = Math.max(0, curBox * bc + curIndiv - committedUnits);
+        if (committedUnits + heldUnits > 0) {
+          const availUnits = Math.max(0, curBox * bc + curIndiv - committedUnits - heldUnits);
           availBox = Math.floor(availUnits / bc);
           availIndiv = availUnits % bc;
         }
-        const committedTitle = committedUnits > 0
-          ? ` title="실재고 ${curBox}+${curIndiv} 중 MAIN 입고 예정 발주 ${committedUnits}개 제외"`
+        const titleParts = [];
+        if (committedUnits > 0) titleParts.push(`MAIN 입고 예정 발주 ${committedUnits}개`);
+        if (heldUnits > 0) titleParts.push(`다른 보류·장바구니 행 ${heldUnits}개`);
+        const committedTitle = titleParts.length
+          ? ` title="실재고 ${curBox}+${curIndiv} 중 ${titleParts.join(', ')} 제외"`
           : '';
 
         // "(00+00)" 괄호 안에 숫자의 형식으로만 가용재고(상자+낱개) 표시 (프린트 제외)
