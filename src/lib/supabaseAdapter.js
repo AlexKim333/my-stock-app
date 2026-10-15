@@ -2459,6 +2459,65 @@ export const serverMethods = {
   },
 
   /**
+   * 18-1. 기간 보고서 원장 (getPeriodReport)
+   * from/to: 'YYYY-MM-DD' (이 기기의 로컬 날짜, 양끝 포함). 입고·출고·이동 전표를 행 단위로 돌려주고
+   * 집계(일자·거래처·품목·창고·담당자별)는 화면에서 한다. 스모크테스트 창고 전표는 뺀다.
+   */
+  async getPeriodReport(from, to) {
+    const parse = v => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || ''))
+      return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null
+    }
+    const start = parse(from)
+    const endDay = parse(to)
+    if (!start || !endDay) throw new Error('조회 기간(시작일·종료일)을 확인하세요.')
+    if (endDay < start) throw new Error('종료일이 시작일보다 빠릅니다.')
+    const end = new Date(endDay)
+    end.setDate(end.getDate() + 1)
+    if ((end - start) / 86400000 > 186) throw new Error('조회 기간은 최대 6개월(186일)까지입니다.')
+
+    const [txs, items] = await Promise.all([
+      fetchAllRows(() =>
+        supabase.from('stock_transactions')
+          .select('id, item_id, transaction_type, warehouse_code, source_warehouse, target_warehouse, partner_name, handler_name, invoice_no, box_qty, unit_qty, created_at')
+          .in('transaction_type', ['INBOUND', 'OUTBOUND', 'MOVE'])
+          .gte('created_at', start.toISOString())
+          .lt('created_at', end.toISOString())
+      ),
+      fetchAllRows(() => supabase.from('items').select('id, item_name, color, box_packaging_qty'))
+    ])
+
+    const itemMap = new Map(items.map(i => [i.id, i]))
+    const up = v => String(v || '').toUpperCase().trim()
+    const rows = []
+    txs.forEach(tx => {
+      if ([tx.warehouse_code, tx.source_warehouse, tx.target_warehouse].some(w => up(w) === 'SMOKETEST')) return
+      const it = itemMap.get(tx.item_id) || {}
+      const pack = Math.max(1, Number(it.box_packaging_qty || 1))
+      const box = Math.abs(Number(tx.box_qty || 0))
+      const unit = Math.abs(Number(tx.unit_qty || 0))
+      rows.push({
+        date: formatDate(new Date(tx.created_at)).replaceAll('/', '-'),
+        type: tx.transaction_type,
+        wh: up(tx.warehouse_code) || 'MAIN',
+        src: up(tx.source_warehouse),
+        dst: up(tx.target_warehouse),
+        partner: String(tx.partner_name || '').trim(),
+        handler: String(tx.handler_name || '').trim(),
+        invoice: String(tx.invoice_no || ''),
+        itemId: tx.item_id,
+        name: it.item_name || '(삭제된 품목)',
+        color: it.color || 'SURTIDO',
+        pack,
+        box,
+        unit,
+        boxEq: box + unit / pack
+      })
+    })
+    return { success: true, from, to, rows }
+  },
+
+  /**
    * 19. 시스템 종합 설정 불러오기 및 저장
    */
   async getSystemSettings() {
