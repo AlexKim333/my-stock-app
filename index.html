@@ -16104,27 +16104,27 @@ if (document.readyState === 'loading') {
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px;">
           <!-- 총 재고 -->
           <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #3b82f6;">
-            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">📦 본사 가용 총재고</div>
+            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">📦 본사(MAIN) 실재고</div>
             <div style="font-size:16pt; font-weight:900; color:#1e293b;" id="dashKpiTotalStock">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
-            <div style="font-size:7.8pt; color:#64748b; margin-top:2px;">낱개: <span id="dashKpiTotalUnits" style="font-weight:700; color:#2563eb;">0</span> 개</div>
+            <div style="font-size:7.8pt; color:#64748b; margin-top:2px;">낱개 환산: <span id="dashKpiTotalUnits" style="font-weight:700; color:#2563eb;">0</span> 개</div>
           </div>
           <!-- 금일 입고 -->
           <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #10b981;">
             <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">📥 금일 입고 실적</div>
             <div style="font-size:16pt; font-weight:900; color:#065f46;" id="dashKpiTodayIn">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
-            <div style="font-size:7.8pt; color:#10b981; margin-top:2px;">오늘 확정 입고분</div>
+            <div style="font-size:7.8pt; color:#10b981; margin-top:2px;" id="dashKpiTodayInSub">오늘 확정 입고분</div>
           </div>
           <!-- 금일 출고 -->
           <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #f59e0b;">
             <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">📤 금일 출고 실적</div>
             <div style="font-size:16pt; font-weight:900; color:#92400e;" id="dashKpiTodayOut">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
-            <div style="font-size:7.8pt; color:#d97706; margin-top:2px;">지점/거래처 발송분</div>
+            <div style="font-size:7.8pt; color:#d97706; margin-top:2px;" id="dashKpiTodayMove">지점/거래처 발송분</div>
           </div>
           <!-- 이동중/보류 -->
           <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #8b5cf6;">
-            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">🚚 서브창고 이동/보류</div>
+            <div style="font-size:8pt; font-weight:700; color:#64748b; margin-bottom:4px;">🚚 서브창고 → MAIN 이동중</div>
             <div style="font-size:16pt; font-weight:900; color:#5b21b6;" id="dashKpiInTransit">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
-            <div style="font-size:7.8pt; color:#7c3aed; margin-top:2px;">보류 주문서: <span id="dashKpiPendingOrders" style="font-weight:700;">0</span> 건</div>
+            <div style="font-size:7.8pt; color:#7c3aed; margin-top:2px;">발주 진행: <span id="dashKpiPendingOrders" style="font-weight:700;">0</span> 줄</div>
           </div>
           <!-- 결품 위험 -->
           <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-left:4px solid #ef4444;">
@@ -16138,7 +16138,7 @@ if (document.readyState === 'loading') {
         <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <div style="display:flex; align-items:center; gap:6px;">
-              <span style="font-size:11pt; font-weight:800; color:#0f172a;">🚛 8대 서브창고 이동중 수량 & 트럭 적재율 (<span id="dashTruckCapacityLabel">100</span>상자 기준)</span>
+              <span style="font-size:11pt; font-weight:800; color:#0f172a;">🚛 서브창고 이동중 수량 & 트럭 적재율 (<span id="dashTruckCapacityLabel">100</span>상자 기준)</span>
               <span style="font-size:7.5pt; color:#64748b; background:#f1f5f9; padding:2px 6px; border-radius:4px;">실시간 In-Transit 집계</span>
             </div>
             <button type="button" onclick="closeDashboardModal(); openSubWarehouseMatrixModal();" style="font-size:8pt; padding:4px 10px; background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; border-radius:5px; font-weight:700; cursor:pointer;">📝 서브창고 매트릭스 열기 ➔</button>
@@ -16155,7 +16155,7 @@ if (document.readyState === 'loading') {
               <span style="font-size:11pt; font-weight:800; color:#991b1b;">⚠️ 안전재고 미달 품목 Top 10 (결품 방지 긴급 대응)</span>
               <span id="dashLowStockBadge" style="font-size:7.5pt; color:#dc2626; background:#fee2e2; padding:2px 6px; border-radius:4px; font-weight:700;">0건 감지</span>
             </div>
-            <span style="font-size:7.8pt; color:#64748b;">현재고가 기준 안전재고보다 부족한 품목 목록</span>
+            <span style="font-size:7.8pt; color:#64748b;">유효재고(실재고 + 이동중 − 출고 보류)가 안전재고 이하인 품목</span>
           </div>
           <div style="overflow-x:auto;">
             <table style="width:100%; border-collapse:collapse; font-size:8.5pt; text-align:left;">
@@ -16163,7 +16163,7 @@ if (document.readyState === 'loading') {
                 <tr style="background:#f8fafc; border-bottom:1.5px solid #cbd5e1; color:#475569; font-weight:700;">
                   <th style="padding:6px 10px;">품명</th>
                   <th style="padding:6px 10px;">컬러</th>
-                  <th style="padding:6px 10px; text-align:right;">현재고</th>
+                  <th style="padding:6px 10px; text-align:right;">유효재고</th>
                   <th style="padding:6px 10px; text-align:right;">안전재고</th>
                   <th style="padding:6px 10px; text-align:right;">부족수량</th>
                   <th style="padding:6px 10px; text-align:center;">상태</th>
@@ -16182,7 +16182,7 @@ if (document.readyState === 'loading') {
           <!-- 7일 입출고 실적 차트 -->
           <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-              <span style="font-size:10.5pt; font-weight:800; color:#1e293b;">📈 최근 7일 입고 vs 출고 추이 (상자수)</span>
+              <span style="font-size:10.5pt; font-weight:800; color:#1e293b;">📈 최근 7일 입고 vs 출고 추이 (상자 환산, 이동 제외)</span>
               <div style="display:flex; align-items:center; gap:8px; font-size:7.5pt; font-weight:600;">
                 <span style="display:inline-flex; align-items:center; gap:3px;"><span style="width:10px; height:10px; background:#10b981; border-radius:2px; display:inline-block;"></span> 입고</span>
                 <span style="display:inline-flex; align-items:center; gap:3px;"><span style="width:10px; height:10px; background:#f59e0b; border-radius:2px; display:inline-block;"></span> 출고</span>
@@ -16198,7 +16198,7 @@ if (document.readyState === 'loading') {
           <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
               <span style="font-size:10.5pt; font-weight:800; color:#1e293b;">⭐ 최근 7일 베스트셀러 출고 Top 5</span>
-              <span style="font-size:7.5pt; color:#64748b;">주문 빈도 최상위</span>
+              <span style="font-size:7.5pt; color:#64748b;">출고량(상자 환산) 기준</span>
             </div>
             <div id="dashTopSellersList" style="display:flex; flex-direction:column; gap:8px;">
               <div style="color:#94a3b8; font-size:8.5pt; text-align:center; padding:16px;">출고 실적 데이터 수집 중...</div>
@@ -16951,6 +16951,13 @@ if (document.readyState === 'loading') {
       document.getElementById('dashKpiTotalUnits').textContent = Number(k.totalMainUnits || 0).toLocaleString();
       document.getElementById('dashKpiTodayIn').innerHTML = `${Number(k.todayInBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
       document.getElementById('dashKpiTodayOut').innerHTML = `${Number(k.todayOutBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
+      // 낱개는 상자로 환산해 합산된다. 이동(창고 간)은 출고 실적과 따로 보여 준다.
+      const inSubEl = document.getElementById('dashKpiTodayInSub');
+      if (inSubEl) inSubEl.textContent = Number(k.todayInFromSubBoxes || 0) > 0
+        ? `서브창고발 ${Number(k.todayInFromSubBoxes).toLocaleString()}상자 포함`
+        : '오늘 확정 입고분';
+      const moveEl = document.getElementById('dashKpiTodayMove');
+      if (moveEl) moveEl.textContent = `창고 간 이동 ${Number(k.todayMoveBoxes || 0).toLocaleString()}상자는 별도`;
       document.getElementById('dashKpiInTransit').innerHTML = `${Number(k.totalInTransitBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
       document.getElementById('dashKpiPendingOrders').textContent = Number(k.pendingOrderCount || 0).toLocaleString();
       document.getElementById('dashKpiLowStock').innerHTML = `${Number(k.lowStockCount || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">개 품목</span>`;
@@ -16959,7 +16966,7 @@ if (document.readyState === 'loading') {
       if (lowBadge) lowBadge.textContent = `${Number(k.lowStockCount || 0)}건 감지`;
 
       // 2. 8대 서브창고 트럭 적재율 게이지 렌더링
-      renderTruckGauges(res.whInTransitMap || {});
+      renderTruckGauges(res.whInTransitMap || {}, res.subWarehouses);
 
       // 3. 결품 위험 품목 테이블 렌더링
       renderLowStockTable(res.lowStockItems || []);
@@ -16969,7 +16976,7 @@ if (document.readyState === 'loading') {
       renderTopSellers(res.topSellers || []);
     }
 
-    function renderTruckGauges(whMap) {
+    function renderTruckGauges(whMap, subWarehouses) {
       const grid = document.getElementById('dashTruckGaugesGrid');
       if (!grid) return;
 
@@ -16977,10 +16984,12 @@ if (document.readyState === 'loading') {
       const capacityLabel = document.getElementById('dashTruckCapacityLabel');
       if (capacityLabel) capacityLabel.textContent = targetCapacity;
 
+      // 창고 목록은 DB의 활성 서브창고(매트릭스와 같은 기준). 설정에서 끈 창고는 숨긴다.
       const active = currentWmsSettings.activeSubWarehouses;
-      const whList = (Array.isArray(active) && active.length)
-        ? ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR'].filter(wh => active.includes(wh))
+      const baseList = (Array.isArray(subWarehouses) && subWarehouses.length)
+        ? subWarehouses
         : ['PANTACO', 'IKEA', 'LERMA', 'PINO', 'YARE', 'ALMINTER', 'TLANE', 'STAR'];
+      const whList = (Array.isArray(active) && active.length) ? baseList.filter(wh => active.includes(wh)) : baseList;
       let html = '';
 
       whList.forEach(wh => {
@@ -17034,7 +17043,8 @@ if (document.readyState === 'loading') {
         const name = escapeHtml(rawName);
         const rawColor = it.color || 'SURTIDO';
         const color = escapeHtml(rawColor);
-        const stock = Number(it.mainStock !== undefined ? it.mainStock : (it.stock_box || 0));
+        const stock = Number(it.effectiveStock !== undefined ? it.effectiveStock : (it.mainStock || 0));
+        const stockTitle = `실재고 ${Number(it.mainStock) || 0} + 이동중 ${Number(it.inTransit) || 0}${it.held ? ` − 출고보류 ${it.held}` : ''}`;
         const safe = Number(it.safeStock !== undefined ? it.safeStock : (it.safe_stock || 0));
         const deficit = Number(it.shortage !== undefined ? it.shortage : (safe - stock));
 
@@ -17042,7 +17052,7 @@ if (document.readyState === 'loading') {
           <tr style="border-bottom:1px solid #f1f5f9; hover:background:#fef2f2;">
             <td style="padding:7px 10px; font-weight:700; color:#1e293b;">${name}</td>
             <td style="padding:7px 10px; color:#475569;">${color}</td>
-            <td style="padding:7px 10px; text-align:right; font-weight:700; color:#b91c1c;">${stock}</td>
+            <td style="padding:7px 10px; text-align:right; font-weight:700; color:#b91c1c;" title="${stockTitle}">${stock}</td>
             <td style="padding:7px 10px; text-align:right; color:#64748b;">${safe}</td>
             <td style="padding:7px 10px; text-align:right; font-weight:800; color:#dc2626;">-${deficit}</td>
             <td style="padding:7px 10px; text-align:center;">
@@ -17121,7 +17131,7 @@ if (document.readyState === 'loading') {
         const shortDate = d.date.slice(5);
 
         chartHtml += `
-          <div style="flex:1; display:flex; justify-content:center; align-items:flex-end; gap:3px; height:100%; position:relative;" title="${d.date} - 입고: ${d.inBoxes}상자 / 출고: ${d.outBoxes}상자">
+          <div style="flex:1; display:flex; justify-content:center; align-items:flex-end; gap:3px; height:100%; position:relative;" title="${d.date} - 입고: ${d.inBoxes}상자 / 출고: ${d.outBoxes}상자${d.moveBoxes ? ` (창고 간 이동 ${d.moveBoxes}상자 별도)` : ''}">
             <div style="width:10px; height:${inH}px; background:#10b981; border-radius:3px 3px 0 0; transition:height 0.3s ease;"></div>
             <div style="width:10px; height:${outH}px; background:#f59e0b; border-radius:3px 3px 0 0; transition:height 0.3s ease;"></div>
           </div>
@@ -17143,12 +17153,13 @@ if (document.readyState === 'loading') {
         return;
       }
 
-      const maxOut = topList[0]?.boxes || topList[0]?.outBoxes || 1;
+      const sizeOf = it => Number(it.boxEq !== undefined ? it.boxEq : (it.boxes || it.outBoxes || 0));
+      const maxOut = sizeOf(topList[0]) || 1;
 
       container.innerHTML = topList.map((item, idx) => {
         const boxCount = Number(item.boxes !== undefined ? item.boxes : (item.outBoxes || 0));
         const unitCount = Number(item.units !== undefined ? item.units : (item.outUnits || 0));
-        const pct = Math.max(5, Math.round((boxCount / maxOut) * 100));
+        const pct = Math.max(5, Math.round((sizeOf(item) / maxOut) * 100));
         const rankColor = idx === 0 ? '#eab308' : (idx === 1 ? '#94a3b8' : (idx === 2 ? '#b45309' : '#64748b'));
         const colorLabel = item.color ? `<span style="font-size:7.5pt; color:#64748b;">(${escapeHtml(item.color)})</span>` : '';
 

@@ -2282,49 +2282,69 @@ export const serverMethods = {
    * 18. 통합 관제 대시보드 지표 실시간 집계 (getDashboardMetrics)
    */
   async getDashboardMetrics() {
-    const todaySlash = formatDate(new Date())
-    const todayDash = todaySlash.replace(/\//g, '-')
+    // 기간은 모두 이 기기의 로컬 날짜 기준 created_at으로 자른다(오늘 KPI와 7일 추이가 같은 기준).
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const weekStart = new Date(todayStart)
+    weekStart.setDate(weekStart.getDate() - 6)
 
-    const [allStocks, todayTxRows, pendingOrders, recentTxs] = await Promise.all([
+    const [activeWhRows, allStocks, hiddenRows, weekTxs, pendingOrders, holdRes] = await Promise.all([
+      fetchAllRows(() => supabase.from('warehouses').select('code, sort_order').eq('is_hub', false).eq('is_active', true), { orderBy: 'sort_order' }),
       fetchAllRows(
-        () => supabase.from('view_effective_stocks').select('item_id, item_name, color, main_box_qty, box_packaging_qty, safe_stock_boxes, pending_in_boxes'),
+        () => supabase.from('view_effective_stocks').select('item_id, item_name, color, main_box_qty, main_unit_qty, box_packaging_qty, safe_stock_boxes, pending_in_boxes'),
         { orderBy: 'item_id' }
       ),
+      // view_effective_stocks는 숨김(비활성) 품목도 포함하므로 재고·결품 집계에서 뺀다(전표 집계에는 남긴다).
+      fetchAllRows(() => supabase.from('items').select('id').eq('is_active', false)),
+      // 최근 7일 전표 전부(예전에는 최근 1000건만 받아 바쁜 주에는 앞쪽 날짜가 잘렸다).
       fetchAllRows(() =>
         supabase.from('stock_transactions')
-          .select('transaction_type, box_qty, unit_qty, invoice_no')
-          .or(`invoice_no.like.${todaySlash}%,invoice_no.like.${todayDash}%`)
+          .select('id, item_id, transaction_type, warehouse_code, source_warehouse, target_warehouse, box_qty, unit_qty, created_at')
+          .in('transaction_type', ['INBOUND', 'OUTBOUND', 'MOVE'])
+          .gte('created_at', weekStart.toISOString())
       ),
       fetchAllRows(() =>
         supabase.from('pending_orders')
-          .select('item_id, from_warehouse, to_warehouse, box_qty, status')
+          .select('id, item_id, from_warehouse, to_warehouse, box_qty, status')
+          .eq('to_warehouse', 'MAIN')
           .in('status', ['PENDING', 'IN_TRANSIT'])
       ),
-      supabase.from('stock_transactions')
-        .select('item_id, transaction_type, box_qty, unit_qty, created_at, items(item_name, color)')
-        .in('transaction_type', ['INBOUND', 'OUTBOUND', 'MOVE'])
-        .order('created_at', { ascending: false })
-        .limit(1000)
+      supabase.rpc('rpc_outbound_hold_reservations')
     ])
+    if (holdRes.error) throw new Error(holdRes.error.message || '출고 보류 예약을 불러오지 못했습니다.')
 
-    if (recentTxs.error) throw recentTxs.error
+    const subWarehouses = activeWhRows.map(w => w.code)
+    const hiddenIds = new Set(hiddenRows.map(r => r.id))
+    const itemMap = new Map(allStocks.map(r => [r.item_id, r]))
+    const packOf = itemId => Math.max(1, Number(itemMap.get(itemId)?.box_packaging_qty || 1))
+    // 낱개도 상자로 환산해 센다(낱개 출고가 0상자로 사라지지 않게).
+    const boxEq = tx => Math.abs(Number(tx.box_qty || 0)) + Math.abs(Number(tx.unit_qty || 0)) / packOf(tx.item_id)
+    const round1 = n => Math.round(n * 10) / 10
+    const isTestTx = tx => [tx.warehouse_code, tx.source_warehouse, tx.target_warehouse].some(w => String(w || '').toUpperCase() === 'SMOKETEST')
 
-    const recentTxRows = recentTxs.data || []
+    const mainHeldUnits = new Map()
+    ;(holdRes.data || []).forEach(h => {
+      if (String(h.warehouse || '').toUpperCase().trim() !== 'MAIN') return
+      mainHeldUnits.set(h.item_id, (mainHeldUnits.get(h.item_id) || 0) + Number(h.units || 0))
+    })
 
-    // 1. 총 재고 자산 계산
+    // 1. 본사(MAIN) 실재고 합계와 안전재고 미달 품목 (유효재고 = 실재고 + 이동중 − 메인 출고 보류, 매트릭스와 같은 기준)
     let totalMainBoxes = 0
     let totalMainUnits = 0
     const lowStockItems = []
 
     allStocks.forEach(item => {
+      if (hiddenIds.has(item.item_id)) return
       const mb = Number(item.main_box_qty || 0)
+      const mu = Number(item.main_unit_qty || 0)
       const safe = Number(item.safe_stock_boxes || 0)
       const pIn = Number(item.pending_in_boxes || 0)
-      const effective = mb + pIn
-      const boxContent = Number(item.box_packaging_qty || 1)
+      const pack = Math.max(1, Math.round(Number(item.box_packaging_qty || 1)))
+      const held = Math.ceil((mainHeldUnits.get(item.item_id) || 0) / pack)
+      const effective = mb + pIn - held
 
       totalMainBoxes += mb
-      totalMainUnits += (mb * boxContent)
+      totalMainUnits += mb * pack + mu
 
       if (safe > 0 && effective <= safe) {
         lowStockItems.push({
@@ -2333,6 +2353,7 @@ export const serverMethods = {
           color: item.color || 'SURTIDO',
           mainStock: mb,
           inTransit: pIn,
+          held,
           effectiveStock: effective,
           safeStock: safe,
           shortage: Math.max(0, safe - effective)
@@ -2342,19 +2363,70 @@ export const serverMethods = {
 
     lowStockItems.sort((a, b) => b.shortage - a.shortage)
 
-    // 2. 오늘자 입고/출고/이동 합계
+    // 2. 오늘/최근 7일 입고·출고·이동 (이동은 창고 간 재배치라 출고 실적에 넣지 않는다)
+    const dailyMap = {}
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(todayStart)
+      d.setDate(d.getDate() - i)
+      const dStr = formatDate(d).replaceAll('/', '-')
+      dailyMap[dStr] = { date: dStr, label: `${d.getMonth() + 1}/${d.getDate()}`, inBoxes: 0, outBoxes: 0, moveBoxes: 0 }
+    }
+
     let todayInBoxes = 0
+    let todayInFromSubBoxes = 0
     let todayOutBoxes = 0
     let todayMoveBoxes = 0
+    const itemOutMap = new Map()
 
-    todayTxRows.forEach(tx => {
-      const b = Math.abs(Number(tx.box_qty || 0))
-      if (tx.transaction_type === 'INBOUND') todayInBoxes += b
-      else if (tx.transaction_type === 'OUTBOUND') todayOutBoxes += b
-      else if (tx.transaction_type === 'MOVE') todayMoveBoxes += b
+    weekTxs.forEach(tx => {
+      if (!tx.created_at || isTestTx(tx)) return
+      const created = new Date(tx.created_at)
+      const day = dailyMap[formatDate(created).replaceAll('/', '-')]
+      if (!day) return
+      const qty = boxEq(tx)
+      const isToday = created >= todayStart
+
+      if (tx.transaction_type === 'INBOUND') {
+        day.inBoxes += qty
+        if (isToday) {
+          todayInBoxes += qty
+          if (tx.source_warehouse) todayInFromSubBoxes += qty
+        }
+      } else if (tx.transaction_type === 'OUTBOUND') {
+        day.outBoxes += qty
+        if (isToday) todayOutBoxes += qty
+        const cur = itemOutMap.get(tx.item_id) || { boxes: 0, units: 0 }
+        cur.boxes += Math.abs(Number(tx.box_qty || 0))
+        cur.units += Math.abs(Number(tx.unit_qty || 0))
+        itemOutMap.set(tx.item_id, cur)
+      } else if (tx.transaction_type === 'MOVE') {
+        day.moveBoxes += qty
+        if (isToday) todayMoveBoxes += qty
+      }
     })
 
-    // 3. 서브창고별 이동 중(In-Transit) 수량 집계
+    Object.values(dailyMap).forEach(d => {
+      d.inBoxes = round1(d.inBoxes)
+      d.outBoxes = round1(d.outBoxes)
+      d.moveBoxes = round1(d.moveBoxes)
+    })
+
+    // 3. 최근 7일 출고 Top 5 (상자 환산량 기준)
+    const topSellers = Array.from(itemOutMap.entries())
+      .map(([itemId, v]) => {
+        const it = itemMap.get(itemId)
+        return {
+          name: it?.item_name || 'UNKNOWN',
+          color: it?.color || 'SURTIDO',
+          boxes: v.boxes,
+          units: v.units,
+          boxEq: v.boxes + v.units / packOf(itemId)
+        }
+      })
+      .sort((a, b) => b.boxEq - a.boxEq)
+      .slice(0, 5)
+
+    // 4. 서브창고 → MAIN 이동중(발주 진행) 수량
     const whInTransitMap = {}
     let totalInTransitBoxes = 0
     pendingOrders.forEach(po => {
@@ -2364,59 +2436,22 @@ export const serverMethods = {
       totalInTransitBoxes += b
     })
 
-    // 4. 최근 7일 일자별 입/출고 추이 (차트용)
-    const dailyMap = {}
-    const now = new Date()
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now)
-      d.setDate(d.getDate() - i)
-      const dStr = formatDate(d).replaceAll('/', '-')
-      const label = `${d.getMonth() + 1}/${d.getDate()}`
-      dailyMap[dStr] = { date: dStr, label: label, inBoxes: 0, outBoxes: 0 }
-    }
-
-    recentTxRows.forEach(tx => {
-      if (!tx.created_at) return
-      // created_at(UTC)을 라벨과 같은 로컬 날짜로 버킷팅한다.
-      const dStr = formatDate(new Date(tx.created_at)).replaceAll('/', '-')
-      if (dailyMap[dStr]) {
-        const b = Math.abs(Number(tx.box_qty || 0))
-        if (tx.transaction_type === 'INBOUND') dailyMap[dStr].inBoxes += b
-        if (tx.transaction_type === 'OUTBOUND' || tx.transaction_type === 'MOVE') dailyMap[dStr].outBoxes += b
-      }
-    })
-
-    // 5. 최근 최다 출고 베스트셀러 Top 5
-    const itemOutMap = new Map()
-    recentTxRows.forEach(tx => {
-      if (tx.transaction_type === 'OUTBOUND' || tx.transaction_type === 'MOVE') {
-        const b = Math.abs(Number(tx.box_qty || 0))
-        const name = tx.items?.item_name || 'UNKNOWN'
-        const color = tx.items?.color || 'SURTIDO'
-        const key = `${name} (${color})`
-        itemOutMap.set(key, (itemOutMap.get(key) || 0) + b)
-      }
-    })
-
-    const topSellers = Array.from(itemOutMap.entries())
-      .map(([name, boxes]) => ({ name, boxes }))
-      .sort((a, b) => b.boxes - a.boxes)
-      .slice(0, 5)
-
     return {
       success: true,
       updatedAt: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
       kpi: {
         totalMainBoxes,
         totalMainUnits,
-        todayInBoxes,
-        todayOutBoxes,
-        todayMoveBoxes,
+        todayInBoxes: round1(todayInBoxes),
+        todayInFromSubBoxes: round1(todayInFromSubBoxes),
+        todayOutBoxes: round1(todayOutBoxes),
+        todayMoveBoxes: round1(todayMoveBoxes),
         totalInTransitBoxes,
         pendingOrderCount: pendingOrders.length,
         lowStockCount: lowStockItems.length
       },
       lowStockItems: lowStockItems.slice(0, 10),
+      subWarehouses,
       whInTransitMap,
       dailyTrend: Object.values(dailyMap),
       topSellers
