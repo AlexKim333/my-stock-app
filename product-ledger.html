@@ -431,6 +431,7 @@
     .badge-outbound { background: #fef3c7; color: #b45309; }
     .badge-move { background: #ede9fe; color: #6d28d9; }
     .badge-adjust { background: #e0f2fe; color: #0369a1; }
+    .badge-return { background: #ffedd5; color: #c2410c; }
 
     .balance-pill {
       font-weight: 800;
@@ -540,6 +541,7 @@
             <option value="ALL">전체 수불유형</option>
             <option value="INBOUND">📥 입고만</option>
             <option value="OUTBOUND">📤 출고만</option>
+            <option value="RETURN">↩️ 반품만</option>
             <option value="MOVE">🚚 서브창고 이동만</option>
             <option value="ADJUST">⚖️ 재고실사조정만</option>
           </select>
@@ -583,7 +585,7 @@
         </div>
         <div class="kpi-value" id="kpiTotalOut" style="color:#92400e;">0 <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span></div>
         <div class="kpi-sub">
-          출고: <strong id="kpiOutOnly">0</strong>상자 | 이동: <strong id="kpiMoveOnly">0</strong>상자
+          출고: <strong id="kpiOutOnly">0</strong>상자 | 이동: <strong id="kpiMoveOnly">0</strong>상자 | 반품: <strong id="kpiReturnOnly">0</strong>상자
         </div>
       </div>
 
@@ -851,11 +853,12 @@
 
       document.getElementById('kpiTotalIn').innerHTML = `${Number(sum.totalInBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
       document.getElementById('kpiTotalInUnits').textContent = Number(sum.totalInUnits || 0).toLocaleString();
-      document.getElementById('kpiInTxCount').textContent = res.ledger.filter(t => t.transaction_type === 'INBOUND').length;
+      document.getElementById('kpiInTxCount').textContent = res.ledger.filter(t => t.transaction_type === 'INBOUND' && !t.return_of_invoice).length;
 
       document.getElementById('kpiTotalOut').innerHTML = `${(Number(sum.totalOutBoxes || 0) + Number(sum.totalMoveBoxes || 0)).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
       document.getElementById('kpiOutOnly').textContent = Number(sum.totalOutBoxes || 0).toLocaleString();
       document.getElementById('kpiMoveOnly').textContent = Number(sum.totalMoveBoxes || 0).toLocaleString();
+      document.getElementById('kpiReturnOnly').textContent = Number(sum.totalReturnBoxes || 0).toLocaleString();
 
       document.getElementById('kpiDailyVelocity').innerHTML = `${sum.avgDailyOut || '0.0'} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자/일</span>`;
 
@@ -906,7 +909,11 @@
         let sign = '';
         let numColor = '#0f172a';
 
-        if (type === 'INBOUND') {
+        if (type === 'INBOUND' && tx.return_of_invoice) {
+          typeBadge = `<span class="badge-tx badge-return" title="원 출고 전표 ${escapeHtml(tx.return_of_invoice)}">↩️ 반품</span>`;
+          sign = '+';
+          numColor = '#c2410c';
+        } else if (type === 'INBOUND') {
           typeBadge = '<span class="badge-tx badge-inbound">📥 입고</span>';
           sign = '+';
           numColor = '#15803d';

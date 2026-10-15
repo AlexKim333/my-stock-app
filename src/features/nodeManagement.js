@@ -519,7 +519,9 @@ function renderPartnerHistory(partner, rows) {
   if (summary) summary.textContent = `최근 ${rows.length}건 · 박스 합계 ${totalBoxes.toLocaleString()}개`;
 
   tbody.innerHTML = rows.map(r => {
-    const typeLabel = PARTNER_HISTORY_TYPE_LABEL[r.transaction_type] || escapeHtml(r.transaction_type || '-');
+    const typeLabel = r.transaction_type === 'INBOUND' && r.return_of_invoice
+      ? '↩️ 반품'
+      : (PARTNER_HISTORY_TYPE_LABEL[r.transaction_type] || escapeHtml(r.transaction_type || '-'));
     const itemLabel = r.items
       ? `${escapeHtml(r.items.item_name)} <span style="color:#94a3b8;">(${escapeHtml(r.items.color || 'SURTIDO')})</span>`
       : '-';

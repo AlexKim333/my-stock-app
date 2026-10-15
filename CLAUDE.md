@@ -67,6 +67,9 @@ npm run smoke
 - `npm run verify`와 달리 네트워크로 실제 프로덕션에 쓰기 작업을 하므로, 매번 자동으로 돌리는
   게 아니라 입출고/이동/조정 로직을 건드렸을 때만 수동으로 실행합니다.
 - 서브창고발 출고(`SMOKETEST`에서 `OUTBOUND`, 재고부족 가드 포함)도 검증합니다(TEST 5-1~5-4).
+- 반품 입고(`rpc_process_return`: 원 출고 전표 유지, 초과 반품 거절, 반품된 원 전표 축소 거절)도 검증합니다(TEST 4-R1~4-R5).
+  반품은 `transaction_type='INBOUND'` + `stock_transactions.return_of_invoice`(원 출고 전표번호)로 저장되므로,
+  입고 합계를 내는 화면을 새로 만들면 `return_of_invoice`가 있는 행을 반품으로 따로 세세요.
 - 재고는 0으로 돌아오지만 전표(`stock_transactions`)는 테스트 품목 이름으로 남습니다. `npm run smoke`는
   **통과하면 이어서 자동으로 정리**(`scripts/cleanup_smoke.mjs --soft`)합니다. 스모크가 실패하면 정리를
   건너뜁니다(원인 추적 자료를 남기려고). 정리 자체는 Supabase CLI가 로그인/링크된 환경이 필요한데, 연결이

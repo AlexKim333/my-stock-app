@@ -3,7 +3,7 @@
  * 🔥 WMS 핵심 흐름 스모크 테스트 (입고 / 출고 / 이동 / 재고조정)
  * ---------------------------------------------------------------------------
  * npm run verify(정적 분석)와 달리, 이 스크립트는 실제 프로덕션 Supabase에
- * 로그인해서 입고 → 이동 → 이동복귀 → 출고 → 재고부족 가드 → 서브창고발 출고 →
+ * 로그인해서 입고 → 이동 → 이동복귀 → 출고 → 반품 입고(초과 반품·원 전표 축소 가드) → 재고부족 가드 → 서브창고발 출고 →
  * 출고 보류(예약·제출) → 재고조정까지 실제 RPC를 호출하고 매 단계 재고 수치를 검증한다. 로컬/스테이징 DB가 없는
  * 프로젝트라(memory: stock-app-production-db 참고) 프로덕션 자체를 상대로
  * 돈다 — 그래서 반드시:
@@ -233,8 +233,72 @@ async function main() {
     assertEqual(sub.box_qty, 0, `${TEST_WAREHOUSE_CODE} 박스재고`)
   })
 
+  let outInvoice
   await step('TEST 4: 출고(OUTBOUND) -10상자 ← MAIN', async () => {
-    await processTx(db, { txType: 'OUTBOUND', warehouse: 'MAIN', items: [{ item_id: itemId, box_qty: 10, unit_qty: 0 }] })
+    const res = await processTx(db, { txType: 'OUTBOUND', warehouse: 'MAIN', items: [{ item_id: itemId, box_qty: 10, unit_qty: 0 }] })
+    outInvoice = res.invoice_no
+    const main = await readStock(db, itemId, 'MAIN')
+    assertEqual(main.box_qty, 0, 'MAIN 박스재고')
+  })
+
+  // 반품 입고: 원 출고 전표는 남고, 반품은 return_of_invoice로 연결된 새 입고 전표가 된다.
+  const processReturn = (boxQty) => db.rpc('rpc_process_return', {
+    p_orig_invoice: outInvoice,
+    p_warehouse: 'MAIN',
+    p_memo: '스모크테스트 자동 실행 - 반품',
+    p_items: [{ item_id: itemId, box_qty: boxQty, unit_qty: 0 }],
+    p_idempotency_key: randomUUID()
+  }).then(({ data, error }) => { if (error) throw error; return data })
+
+  await step('TEST 4-R1: 반품 입고 +3상자 → MAIN (원 출고 전표는 그대로 남아야 함)', async () => {
+    const res = await processReturn(3)
+    if (res.return_of_invoice !== outInvoice) throw new Error(`원 전표 연결 불일치: ${res.return_of_invoice} ≠ ${outInvoice}`)
+    const main = await readStock(db, itemId, 'MAIN')
+    assertEqual(main.box_qty, 3, 'MAIN 박스재고')
+    const { data: outRows, error } = await db.from('stock_transactions')
+      .select('box_qty').eq('invoice_no', outInvoice).eq('transaction_type', 'OUTBOUND')
+    if (error) throw error
+    assertEqual((outRows || []).reduce((a, r) => a + r.box_qty, 0), 10, '원 출고 전표 수량')
+    const { data: retRows, error: retErr } = await db.from('stock_transactions')
+      .select('transaction_type, return_of_invoice, box_qty').eq('invoice_no', res.invoice_no)
+    if (retErr) throw retErr
+    if (!retRows?.length || retRows.some(r => r.transaction_type !== 'INBOUND' || r.return_of_invoice !== outInvoice)) {
+      throw new Error('반품 전표가 INBOUND + return_of_invoice로 저장되지 않았습니다')
+    }
+  })
+
+  await step('TEST 4-R2: 원 수량 초과 반품 — 10상자 중 3상자 반품 후 8상자 반품은 반드시 실패해야 함', async () => {
+    await expectFailure(() => processReturn(8), /원 출고 수량을 넘습니다/, '초과 반품')
+    const main = await readStock(db, itemId, 'MAIN')
+    assertEqual(main.box_qty, 3, 'MAIN 박스재고 (실패한 시도 후에도 변화 없어야 함)')
+  })
+
+  await step('TEST 4-R3: 반품된 원 출고 전표를 반품 합계(3) 아래(2상자)로 수정은 반드시 실패해야 함', async () => {
+    await expectFailure(async () => {
+      const { error } = await db.rpc('rpc_update_transaction_records', {
+        p_invoice_no: outInvoice,
+        p_tx_type: 'OUTBOUND',
+        p_new_records: [{ item_id: itemId, box_qty: 2, unit_qty: 0, partner_name: '' }],
+        p_admin: MEMBER_NAME,
+        p_expected_signature: null
+      })
+      if (error) throw error
+    }, /원 출고 수량을 넘습니다/, '원 전표 축소')
+    const main = await readStock(db, itemId, 'MAIN')
+    assertEqual(main.box_qty, 3, 'MAIN 박스재고 (실패한 시도 후에도 변화 없어야 함)')
+  })
+
+  await step('TEST 4-R4: 반품 가능 수량 조회 — 남은 7상자', async () => {
+    const { data, error } = await db.rpc('rpc_invoice_returnable', { p_invoice_no: outInvoice })
+    if (error) throw error
+    const line = (data.lines || []).find(l => l.item_id === itemId)
+    if (!line) throw new Error('반품 가능 목록에 테스트 품목이 없습니다')
+    assertEqual(Number(line.returned_units), 3, '반품된 수량')
+    assertEqual(Number(line.remaining_units), 7, '남은 수량')
+  })
+
+  await step('TEST 4-R5: 출고(OUTBOUND) -3상자 ← MAIN (반품분 정리, 0상자 복귀)', async () => {
+    await processTx(db, { txType: 'OUTBOUND', warehouse: 'MAIN', items: [{ item_id: itemId, box_qty: 3, unit_qty: 0 }] })
     const main = await readStock(db, itemId, 'MAIN')
     assertEqual(main.box_qty, 0, 'MAIN 박스재고')
   })

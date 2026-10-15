@@ -610,7 +610,7 @@ export const serverMethods = {
 
     const { data, error } = await supabase
       .from('stock_transactions')
-      .select('id, transaction_type, warehouse_code, source_warehouse, target_warehouse, handler_name, box_qty, unit_qty, invoice_no, memo, created_at, items(item_name, color)')
+      .select('id, transaction_type, warehouse_code, source_warehouse, target_warehouse, handler_name, box_qty, unit_qty, invoice_no, memo, created_at, return_of_invoice, items(item_name, color)')
       .eq('partner_id', partnerId)
       .order('created_at', { ascending: false })
       .limit(limit)
@@ -1188,6 +1188,7 @@ export const serverMethods = {
         handler_name,
         memo,
         created_at,
+        return_of_invoice,
         items (
           id,
           item_name,
@@ -1215,6 +1216,8 @@ export const serverMethods = {
       // 전표 재발행 시 ORIGEN/DESTINO 표기용 (OUTBOUND·MOVE는 출발 창고, INBOUND는 도착 창고)
       warehouse: row.warehouse_code || 'MAIN',
       txType: row.transaction_type,
+      // 반품 입고 전표면 원 출고 전표번호
+      returnOf: row.return_of_invoice || '',
       manufacturer: '',
       verificationStatus: 'PASS',
       afterStock: ''
@@ -1289,6 +1292,53 @@ export const serverMethods = {
     else invoiceSignatures.set(sigKey, newSig.data)
 
     return data || { success: true, message: '전표가 성공적으로 수정되었습니다.' }
+  },
+
+  /**
+   * 12-1. 반품 가능 수량 조회 (원 출고 전표 기준, 낱개 단위)
+   * { invoice_no, partner, warehouse, lines: [{ item_id, item_name, color, pack, out_units, returned_units, remaining_units }], return_invoices }
+   */
+  async getInvoiceReturnable(invoiceNumber) {
+    const { data, error } = await supabase.rpc('rpc_invoice_returnable', {
+      p_invoice_no: normalizeInvoiceNo(invoiceNumber)
+    })
+    if (error) throw new Error(error.message || '반품 가능 수량을 불러오지 못했습니다.')
+    return data
+  },
+
+  /**
+   * 12-2. 반품 입고 — 원 출고 전표는 그대로 두고 반품일 기준의 새 입고 전표로 기록한다.
+   * items: [{ item_id, box_qty, unit_qty }]
+   */
+  async processReturn(origInvoice, warehouse, memo, items) {
+    const payload = (items || [])
+      .map(it => ({
+        item_id: it.item_id,
+        box_qty: Math.max(0, Math.trunc(Number(it.box_qty || 0))),
+        unit_qty: Math.max(0, Math.trunc(Number(it.unit_qty || 0)))
+      }))
+      .filter(it => it.item_id && (it.box_qty > 0 || it.unit_qty > 0))
+    if (!payload.length) throw new Error('반품 수량을 입력하세요.')
+
+    const orig = normalizeInvoiceNo(origInvoice)
+    const wh = String(warehouse || 'MAIN').toUpperCase().trim()
+    const fingerprint = JSON.stringify({ orig, wh, memo: memo || '', payload })
+    const idemKey = takeIdempotencyKey('process_return', fingerprint)
+    try {
+      const { data, error } = await supabase.rpc('rpc_process_return', {
+        p_orig_invoice: orig,
+        p_warehouse: wh,
+        p_memo: String(memo || '').trim() || null,
+        p_items: payload,
+        p_idempotency_key: idemKey
+      })
+      if (error) throw new Error(error.message || '반품 처리에 실패했습니다.')
+      clearIdempotencyKey('process_return')
+      return data
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('process_return')
+      throw err
+    }
   },
 
   /**
@@ -2352,7 +2402,7 @@ export const serverMethods = {
       // 최근 7일 전표 전부(예전에는 최근 1000건만 받아 바쁜 주에는 앞쪽 날짜가 잘렸다).
       fetchAllRows(() =>
         supabase.from('stock_transactions')
-          .select('id, item_id, transaction_type, warehouse_code, source_warehouse, target_warehouse, box_qty, unit_qty, created_at')
+          .select('id, item_id, transaction_type, warehouse_code, source_warehouse, target_warehouse, box_qty, unit_qty, created_at, return_of_invoice')
           .in('transaction_type', ['INBOUND', 'OUTBOUND', 'MOVE'])
           .gte('created_at', weekStart.toISOString())
       ),
@@ -2422,12 +2472,13 @@ export const serverMethods = {
       const d = new Date(todayStart)
       d.setDate(d.getDate() - i)
       const dStr = formatDate(d).replaceAll('/', '-')
-      dailyMap[dStr] = { date: dStr, label: `${d.getMonth() + 1}/${d.getDate()}`, inBoxes: 0, outBoxes: 0, moveBoxes: 0 }
+      dailyMap[dStr] = { date: dStr, label: `${d.getMonth() + 1}/${d.getDate()}`, inBoxes: 0, outBoxes: 0, returnBoxes: 0, moveBoxes: 0 }
     }
 
     let todayInBoxes = 0
     let todayInFromSubBoxes = 0
     let todayOutBoxes = 0
+    let todayReturnBoxes = 0
     let todayMoveBoxes = 0
     const itemOutMap = new Map()
 
@@ -2439,7 +2490,15 @@ export const serverMethods = {
       const qty = boxEq(tx)
       const isToday = created >= todayStart
 
-      if (tx.transaction_type === 'INBOUND') {
+      if (tx.transaction_type === 'INBOUND' && tx.return_of_invoice) {
+        // 반품 입고: 입고 실적이 아니라 출고에서 빼는 양(순출고 = 출고 − 반품)
+        day.returnBoxes += qty
+        if (isToday) todayReturnBoxes += qty
+        const cur = itemOutMap.get(tx.item_id) || { boxes: 0, units: 0 }
+        cur.boxes -= Math.abs(Number(tx.box_qty || 0))
+        cur.units -= Math.abs(Number(tx.unit_qty || 0))
+        itemOutMap.set(tx.item_id, cur)
+      } else if (tx.transaction_type === 'INBOUND') {
         day.inBoxes += qty
         if (isToday) {
           todayInBoxes += qty
@@ -2461,10 +2520,11 @@ export const serverMethods = {
     Object.values(dailyMap).forEach(d => {
       d.inBoxes = round1(d.inBoxes)
       d.outBoxes = round1(d.outBoxes)
+      d.returnBoxes = round1(d.returnBoxes)
       d.moveBoxes = round1(d.moveBoxes)
     })
 
-    // 3. 최근 7일 출고 Top 5 (상자 환산량 기준)
+    // 3. 최근 7일 출고 Top 5 (상자 환산량 기준, 반품을 뺀 순출고)
     const topSellers = Array.from(itemOutMap.entries())
       .map(([itemId, v]) => {
         const it = itemMap.get(itemId)
@@ -2476,6 +2536,7 @@ export const serverMethods = {
           boxEq: v.boxes + v.units / packOf(itemId)
         }
       })
+      .filter(x => x.boxEq > 0)
       .sort((a, b) => b.boxEq - a.boxEq)
       .slice(0, 5)
 
@@ -2498,6 +2559,8 @@ export const serverMethods = {
         todayInBoxes: round1(todayInBoxes),
         todayInFromSubBoxes: round1(todayInFromSubBoxes),
         todayOutBoxes: round1(todayOutBoxes),
+        todayReturnBoxes: round1(todayReturnBoxes),
+        todayNetOutBoxes: round1(todayOutBoxes - todayReturnBoxes),
         todayMoveBoxes: round1(todayMoveBoxes),
         totalInTransitBoxes,
         pendingOrderCount: pendingOrders.length,
@@ -2532,7 +2595,7 @@ export const serverMethods = {
     const [txs, items] = await Promise.all([
       fetchAllRows(() =>
         supabase.from('stock_transactions')
-          .select('id, item_id, transaction_type, warehouse_code, source_warehouse, target_warehouse, partner_name, handler_name, invoice_no, box_qty, unit_qty, created_at')
+          .select('id, item_id, transaction_type, warehouse_code, source_warehouse, target_warehouse, partner_name, handler_name, invoice_no, box_qty, unit_qty, created_at, return_of_invoice')
           .in('transaction_type', ['INBOUND', 'OUTBOUND', 'MOVE'])
           .gte('created_at', start.toISOString())
           .lt('created_at', end.toISOString())
@@ -2551,7 +2614,9 @@ export const serverMethods = {
       const unit = Math.abs(Number(tx.unit_qty || 0))
       rows.push({
         date: formatDate(new Date(tx.created_at)).replaceAll('/', '-'),
-        type: tx.transaction_type,
+        // 반품 입고는 DB에서는 INBOUND지만 보고서에서는 출고와 짝을 이루는 'RETURN'으로 따로 센다.
+        type: tx.transaction_type === 'INBOUND' && tx.return_of_invoice ? 'RETURN' : tx.transaction_type,
+        returnOf: tx.return_of_invoice || '',
         wh: up(tx.warehouse_code) || 'MAIN',
         src: up(tx.source_warehouse),
         dst: up(tx.target_warehouse),
@@ -2946,7 +3011,12 @@ export const serverMethods = {
       const txDate = new Date(tx.created_at)
       if (startDate && txDate < startDate) return false
       if (endDate && txDate > endDate) return false
-      if (filterType && (tx.transaction_type || '').toUpperCase() !== filterType) return false
+      if (filterType) {
+        // 반품 입고는 INBOUND + return_of_invoice. '입고만'에서는 빼고 '반품만'(RETURN)에서 보여 준다.
+        const t = (tx.transaction_type || '').toUpperCase() === 'INBOUND' && tx.return_of_invoice
+          ? 'RETURN' : (tx.transaction_type || '').toUpperCase()
+        if (t !== filterType) return false
+      }
       if (filterPartner) {
         const pName = String(tx.partner_name || tx.warehouse_code || '').toUpperCase()
         if (!pName.includes(filterPartner)) return false
@@ -2963,12 +3033,17 @@ export const serverMethods = {
     let totalMoveUnits = 0
     let totalAdjBoxes = 0
     let totalAdjUnits = 0
+    let totalReturnBoxes = 0
+    let totalReturnUnits = 0
 
     filteredLedger.forEach(tx => {
       const b = Number(tx.box_qty || 0)
       const u = Number(tx.unit_qty || 0)
       const type = (tx.transaction_type || '').toUpperCase()
-      if (type === 'INBOUND') {
+      if (type === 'INBOUND' && tx.return_of_invoice) {
+        totalReturnBoxes += b
+        totalReturnUnits += u
+      } else if (type === 'INBOUND') {
         totalInBoxes += b
         totalInUnits += u
       } else if (type === 'OUTBOUND') {
@@ -3017,11 +3092,12 @@ export const serverMethods = {
     filteredLedger.forEach(tx => {
       const dStr = String(tx.created_at).slice(0, 10)
       if (!dailyMap[dStr]) {
-        dailyMap[dStr] = { date: dStr, inBoxes: 0, outBoxes: 0, moveBoxes: 0, adjBoxes: 0 }
+        dailyMap[dStr] = { date: dStr, inBoxes: 0, outBoxes: 0, returnBoxes: 0, moveBoxes: 0, adjBoxes: 0 }
       }
       const b = Number(tx.box_qty || 0)
       const type = (tx.transaction_type || '').toUpperCase()
-      if (type === 'INBOUND') dailyMap[dStr].inBoxes += b
+      if (type === 'INBOUND' && tx.return_of_invoice) dailyMap[dStr].returnBoxes += b
+      else if (type === 'INBOUND') dailyMap[dStr].inBoxes += b
       else if (type === 'OUTBOUND') dailyMap[dStr].outBoxes += b
       else if (type === 'MOVE') dailyMap[dStr].moveBoxes += b
       else if (type === 'ADJUST') dailyMap[dStr].adjBoxes += b
@@ -3035,11 +3111,11 @@ export const serverMethods = {
     let recent14OutBoxes = 0
     allTxs.forEach(tx => {
       const type = (tx.transaction_type || '').toUpperCase()
-      if ((type === 'OUTBOUND' || type === 'MOVE') && new Date(tx.created_at) >= fourteenDaysAgo) {
-        recent14OutBoxes += Number(tx.box_qty || 0)
-      }
+      if (new Date(tx.created_at) < fourteenDaysAgo) return
+      if (type === 'OUTBOUND' || type === 'MOVE') recent14OutBoxes += Number(tx.box_qty || 0)
+      else if (type === 'INBOUND' && tx.return_of_invoice) recent14OutBoxes -= Number(tx.box_qty || 0)
     })
-    const avgDailyOut = Math.round((recent14OutBoxes / 14) * 10) / 10
+    const avgDailyOut = Math.round((Math.max(0, recent14OutBoxes) / 14) * 10) / 10
     const runwayDays = avgDailyOut > 0 ? Math.round(effectiveBoxes / avgDailyOut) : null
 
     return {
@@ -3071,6 +3147,8 @@ export const serverMethods = {
         totalMoveUnits,
         totalAdjBoxes,
         totalAdjUnits,
+        totalReturnBoxes,
+        totalReturnUnits,
         totalTxs: filteredLedger.length,
         avgDailyOut,
         runwayDays

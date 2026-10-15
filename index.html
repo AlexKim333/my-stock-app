@@ -17101,7 +17101,9 @@ if (document.readyState === 'loading') {
         ? `서브창고발 ${Number(k.todayInFromSubBoxes).toLocaleString()}상자 포함`
         : '오늘 확정 입고분';
       const moveEl = document.getElementById('dashKpiTodayMove');
-      if (moveEl) moveEl.textContent = `창고 간 이동 ${Number(k.todayMoveBoxes || 0).toLocaleString()}상자는 별도`;
+      if (moveEl) moveEl.textContent = (Number(k.todayReturnBoxes || 0) > 0
+        ? `반품 ${Number(k.todayReturnBoxes).toLocaleString()}상자 · 순출고 ${Number(k.todayNetOutBoxes || 0).toLocaleString()}상자 · `
+        : '') + `창고 간 이동 ${Number(k.todayMoveBoxes || 0).toLocaleString()}상자는 별도`;
       document.getElementById('dashKpiInTransit').innerHTML = `${Number(k.totalInTransitBoxes || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">상자</span>`;
       document.getElementById('dashKpiPendingOrders').textContent = Number(k.pendingOrderCount || 0).toLocaleString();
       document.getElementById('dashKpiLowStock').innerHTML = `${Number(k.lowStockCount || 0).toLocaleString()} <span style="font-size:9.5pt; font-weight:600; color:#64748b;">개 품목</span>`;
@@ -17275,7 +17277,7 @@ if (document.readyState === 'loading') {
         const shortDate = d.date.slice(5);
 
         chartHtml += `
-          <div style="flex:1; display:flex; justify-content:center; align-items:flex-end; gap:3px; height:100%; position:relative;" title="${d.date} - 입고: ${d.inBoxes}상자 / 출고: ${d.outBoxes}상자${d.moveBoxes ? ` (창고 간 이동 ${d.moveBoxes}상자 별도)` : ''}">
+          <div style="flex:1; display:flex; justify-content:center; align-items:flex-end; gap:3px; height:100%; position:relative;" title="${d.date} - 입고: ${d.inBoxes}상자 / 출고: ${d.outBoxes}상자${d.returnBoxes ? ` / 반품: ${d.returnBoxes}상자(입고에서 제외)` : ''}${d.moveBoxes ? ` (창고 간 이동 ${d.moveBoxes}상자 별도)` : ''}">
             <div style="width:10px; height:${inH}px; background:#10b981; border-radius:3px 3px 0 0; transition:height 0.3s ease;"></div>
             <div style="width:10px; height:${outH}px; background:#f59e0b; border-radius:3px 3px 0 0; transition:height 0.3s ease;"></div>
           </div>

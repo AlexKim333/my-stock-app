@@ -7,6 +7,8 @@
  *   - isBranchLocation(name)        : 거래처 이름이 내부 창고(지점)인지 (typeof로 가드)
  *
  * 수량은 모두 상자 환산(상자 + 낱개 ÷ 입수)이다. 이동(창고 간)은 출고 실적에 넣지 않고 따로 센다.
+ * 반품 입고(type 'RETURN', DB에서는 INBOUND + return_of_invoice)는 입고에 넣지 않고, 반품일 기준으로
+ * 따로 센다. 순출고 = 출고 − 반품. 판매 속도(일평균·재고 분석)는 순출고를 쓴다.
  * 서버는 전표 행만 돌려주고 집계는 여기서 하므로, 탭·창고 필터·검색을 바꿔도 다시 조회하지 않는다.
  * 재고 분석 탭(소진 예상·안 팔리는 재고·안전재고 점검)은 고른 기간의 출고량을 판매 속도로 쓰고
  * 현재 재고 스냅샷과 비교한다. 창고 필터와 상관없이 전체 출고·전체 재고 기준이다.
@@ -37,6 +39,12 @@ function prRound1(n) {
 
 function prFmt(n) {
   return prRound1(n).toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
+/** 반품률 표시: 반품이 없으면 빈칸 */
+function prRate(ret, out) {
+  if (!(ret > 0)) return '';
+  return out > 0 ? `${(ret / out * 100).toFixed(1)}%` : '출고 없음';
 }
 
 function prDateStr(d) {
@@ -164,7 +172,7 @@ function prDays() {
 
 /** 요약 수치 */
 function prSummary(rows) {
-  const s = { inAll: 0, inFromSub: 0, outAll: 0, move: 0, invoices: new Set(), outItems: new Set(), outPartners: new Set() };
+  const s = { inAll: 0, inFromSub: 0, outAll: 0, ret: 0, move: 0, invoices: new Set(), retInvoices: new Set(), outItems: new Set(), outPartners: new Set() };
   rows.forEach(r => {
     if (r.invoice) s.invoices.add(r.invoice);
     if (r.type === 'INBOUND') {
@@ -174,20 +182,29 @@ function prSummary(rows) {
       s.outAll += r.boxEq;
       s.outItems.add(r.itemId);
       if (r.partner) s.outPartners.add(r.partner);
+    } else if (r.type === 'RETURN') {
+      s.ret += r.boxEq;
+      if (r.invoice) s.retInvoices.add(r.invoice);
     } else if (r.type === 'MOVE') {
       s.move += r.boxEq;
     }
   });
   const dayCount = Math.max(1, prDays().length);
+  const netOut = s.outAll - s.ret;
   return {
     inAll: s.inAll,
     inFromSub: s.inFromSub,
     outAll: s.outAll,
+    ret: s.ret,
+    retInvoiceCount: s.retInvoices.size,
+    netOut,
+    // 같은 기간 출고 대비 반품 비율(반품된 원 출고가 기간 밖일 수도 있으므로 참고치)
+    returnRate: s.outAll > 0 ? s.ret / s.outAll : null,
     outPartnerCount: s.outPartners.size,
     move: s.move,
     invoiceCount: s.invoices.size,
     outItemCount: s.outItems.size,
-    outPerDay: s.outAll / dayCount,
+    outPerDay: netOut / dayCount,
     dayCount
   };
 }
@@ -200,7 +217,7 @@ function prBuildTable(tab, rows) {
   };
 
   if (tab === 'daily') {
-    const map = new Map(prDays().map(d => [d, { date: d, inAll: 0, inFromSub: 0, out: 0, move: 0, inv: new Set() }]));
+    const map = new Map(prDays().map(d => [d, { date: d, inAll: 0, inFromSub: 0, out: 0, ret: 0, move: 0, inv: new Set() }]));
     rows.forEach(r => {
       const g = map.get(r.date);
       if (!g) return;
@@ -209,6 +226,7 @@ function prBuildTable(tab, rows) {
         g.inAll += r.boxEq;
         if (r.src) g.inFromSub += r.boxEq;
       } else if (r.type === 'OUTBOUND') g.out += r.boxEq;
+      else if (r.type === 'RETURN') g.ret += r.boxEq;
       else if (r.type === 'MOVE') g.move += r.boxEq;
     });
     return {
@@ -217,20 +235,23 @@ function prBuildTable(tab, rows) {
         { key: 'inAll', label: '입고', num: true },
         { key: 'inFromSub', label: '└ 서브창고발', num: true },
         { key: 'out', label: '출고', num: true },
+        { key: 'ret', label: '반품', num: true },
+        { key: 'netOut', label: '순출고', num: true },
         { key: 'move', label: '이동', num: true },
         { key: 'invCount', label: '전표 수', num: true }
       ],
-      rows: Array.from(map.values()).map(g => ({ ...g, invCount: g.inv.size }))
+      rows: Array.from(map.values()).map(g => ({ ...g, netOut: g.out - g.ret, invCount: g.inv.size }))
     };
   }
 
   if (tab === 'partner') {
     const map = new Map();
     rows.forEach(r => {
-      if (r.type !== 'INBOUND' && r.type !== 'OUTBOUND') return;
+      if (r.type !== 'INBOUND' && r.type !== 'OUTBOUND' && r.type !== 'RETURN') return;
       const name = r.partner || '(미지정)';
-      const g = add(map, name, () => ({ partner: name, in: 0, out: 0, outInv: new Set(), outItems: new Set() }));
+      const g = add(map, name, () => ({ partner: name, in: 0, out: 0, ret: 0, outInv: new Set(), outItems: new Set() }));
       if (r.type === 'INBOUND') g.in += r.boxEq;
+      else if (r.type === 'RETURN') g.ret += r.boxEq;
       else {
         g.out += r.boxEq;
         if (r.invoice) g.outInv.add(r.invoice);
@@ -242,6 +263,9 @@ function prBuildTable(tab, rows) {
         { key: 'partner', label: '거래처' },
         { key: 'kind', label: '구분' },
         { key: 'out', label: '출고', num: true },
+        { key: 'ret', label: '반품', num: true },
+        { key: 'netOut', label: '순출고', num: true },
+        { key: 'retRate', label: '반품률' },
         { key: 'outInvCount', label: '출고 전표 수', num: true },
         { key: 'outItemCount', label: '출고 품목 수', num: true },
         { key: 'in', label: '입고', num: true }
@@ -250,13 +274,16 @@ function prBuildTable(tab, rows) {
         .map(g => ({
           partner: g.partner,
           // 내부 창고로 가는 출고는 보통 이동(MOVE)으로 기록되지만, 이름이 창고인 거래처는 구분해 둔다.
-          kind: prIsBranch(g.partner) ? '내부 창고' : (g.out > 0 ? '거래처' : '입고처'),
+          kind: prIsBranch(g.partner) ? '내부 창고' : (g.out > 0 || g.ret > 0 ? '거래처' : '입고처'),
           out: g.out,
+          ret: g.ret,
+          netOut: g.out - g.ret,
+          retRate: prRate(g.ret, g.out),
           outInvCount: g.outInv.size,
           outItemCount: g.outItems.size,
           in: g.in
         }))
-        .sort((a, b) => b.out - a.out || b.in - a.in)
+        .sort((a, b) => b.netOut - a.netOut || b.in - a.in)
     };
   }
 
@@ -265,7 +292,7 @@ function prBuildTable(tab, rows) {
     rows.forEach(r => {
       const g = add(map, r.itemId, () => ({
         name: r.name, color: r.color, pack: r.pack,
-        outBox: 0, outUnit: 0, out: 0, outLines: 0, outPartners: new Set(), in: 0, move: 0
+        outBox: 0, outUnit: 0, out: 0, ret: 0, outLines: 0, outPartners: new Set(), in: 0, move: 0
       }));
       if (r.type === 'OUTBOUND') {
         g.outBox += r.box;
@@ -274,6 +301,7 @@ function prBuildTable(tab, rows) {
         g.outLines += 1;
         if (r.partner) g.outPartners.add(r.partner);
       } else if (r.type === 'INBOUND') g.in += r.boxEq;
+      else if (r.type === 'RETURN') g.ret += r.boxEq;
       else if (r.type === 'MOVE') g.move += r.boxEq;
     });
     return {
@@ -284,26 +312,30 @@ function prBuildTable(tab, rows) {
         { key: 'outBox', label: '출고 상자', num: true },
         { key: 'outUnit', label: '출고 낱개', num: true },
         { key: 'out', label: '출고(환산)', num: true },
+        { key: 'ret', label: '반품', num: true },
+        { key: 'netOut', label: '순출고', num: true },
+        { key: 'retRate', label: '반품률' },
         { key: 'outLines', label: '출고 횟수', num: true },
         { key: 'outPartnerCount', label: '출고 거래처 수', num: true },
         { key: 'in', label: '입고', num: true },
         { key: 'move', label: '이동', num: true }
       ],
       rows: Array.from(map.values())
-        .map(g => ({ ...g, outPartnerCount: g.outPartners.size }))
-        .sort((a, b) => b.out - a.out || b.in - a.in)
+        .map(g => ({ ...g, netOut: g.out - g.ret, retRate: prRate(g.ret, g.out), outPartnerCount: g.outPartners.size }))
+        .sort((a, b) => b.netOut - a.netOut || b.in - a.in)
     };
   }
 
   if (tab === 'warehouse') {
     const map = new Map();
-    const get = wh => add(map, wh, () => ({ wh, in: 0, out: 0, toMain: 0, moveOut: 0, moveIn: 0 }));
+    const get = wh => add(map, wh, () => ({ wh, in: 0, out: 0, ret: 0, toMain: 0, moveOut: 0, moveIn: 0 }));
     rows.forEach(r => {
       if (r.type === 'INBOUND') {
         get(r.wh).in += r.boxEq;
         if (r.src) get(r.src).toMain += r.boxEq; // 서브창고 → 본사 입고확정으로 그 창고에서 빠진 양
       }
       else if (r.type === 'OUTBOUND') get(r.wh).out += r.boxEq;
+      else if (r.type === 'RETURN') get(r.wh).ret += r.boxEq; // 반품을 받은 창고
       else if (r.type === 'MOVE') {
         get(r.src || r.wh).moveOut += r.boxEq;
         if (r.dst) get(r.dst).moveIn += r.boxEq;
@@ -314,6 +346,7 @@ function prBuildTable(tab, rows) {
         { key: 'wh', label: '창고' },
         { key: 'in', label: '입고', num: true },
         { key: 'out', label: '출고', num: true },
+        { key: 'ret', label: '반품 받음', num: true },
         { key: 'toMain', label: '본사로 보냄', num: true },
         { key: 'moveOut', label: '이동 나감', num: true },
         { key: 'moveIn', label: '이동 들어옴', num: true }
@@ -326,10 +359,11 @@ function prBuildTable(tab, rows) {
   const map = new Map();
   rows.forEach(r => {
     const name = r.handler || '(미지정)';
-    const g = add(map, name, () => ({ handler: name, in: 0, out: 0, move: 0, inv: new Set() }));
+    const g = add(map, name, () => ({ handler: name, in: 0, out: 0, ret: 0, move: 0, inv: new Set() }));
     if (r.invoice) g.inv.add(r.invoice);
     if (r.type === 'INBOUND') g.in += r.boxEq;
     else if (r.type === 'OUTBOUND') g.out += r.boxEq;
+    else if (r.type === 'RETURN') g.ret += r.boxEq;
     else if (r.type === 'MOVE') g.move += r.boxEq;
   });
   return {
@@ -337,12 +371,13 @@ function prBuildTable(tab, rows) {
       { key: 'handler', label: '담당자' },
       { key: 'in', label: '입고', num: true },
       { key: 'out', label: '출고', num: true },
+      { key: 'ret', label: '반품', num: true },
       { key: 'move', label: '이동', num: true },
       { key: 'invCount', label: '전표 수', num: true }
     ],
     rows: Array.from(map.values())
-      .map(g => ({ handler: g.handler, in: g.in, out: g.out, move: g.move, invCount: g.inv.size }))
-      .sort((a, b) => (b.in + b.out + b.move) - (a.in + a.out + a.move))
+      .map(g => ({ handler: g.handler, in: g.in, out: g.out, ret: g.ret, move: g.move, invCount: g.inv.size }))
+      .sort((a, b) => (b.in + b.out + b.ret + b.move) - (a.in + a.out + a.ret + a.move))
   };
 }
 
@@ -362,6 +397,7 @@ function prAnalysisItems() {
   const outMap = new Map();
   prData.rows.forEach(r => {
     if (r.type === 'OUTBOUND') outMap.set(r.itemId, (outMap.get(r.itemId) || 0) + r.boxEq);
+    else if (r.type === 'RETURN') outMap.set(r.itemId, (outMap.get(r.itemId) || 0) - r.boxEq);
   });
   return prSnapshot.map(it => {
     const main = it.mainUnits / it.pack;
@@ -370,7 +406,7 @@ function prAnalysisItems() {
     // 이동중(서브창고 → MAIN 발주)은 아직 서브창고 재고에 들어 있으므로 전체 재고에 다시 더하지 않는다.
     const mainAvail = Math.max(0, main + it.inTransitBoxes - held);
     const total = Math.max(0, main + sub - held);
-    const out = outMap.get(it.itemId) || 0;
+    const out = Math.max(0, outMap.get(it.itemId) || 0); // 순출고 (반품이 출고보다 많으면 0)
     const avg = out / days;
     return {
       ...it,
@@ -514,8 +550,10 @@ function renderPeriodReport() {
       </div>`;
     summaryEl.innerHTML =
       card('📥 입고', `${prFmt(s.inAll)}<span style="font-size:8.5pt; color:#64748b;"> 상자</span>`, `서브창고발 ${prFmt(s.inFromSub)}상자 포함`, '#10b981') +
-      card('📤 출고', `${prFmt(s.outAll)}<span style="font-size:8.5pt; color:#64748b;"> 상자</span>`, `거래처 ${s.outPartnerCount.toLocaleString()}곳`, '#f59e0b') +
-      card('📆 일평균 출고', `${prFmt(s.outPerDay)}<span style="font-size:8.5pt; color:#64748b;"> 상자</span>`, `${s.dayCount}일 기준 · 출고 품목 ${s.outItemCount.toLocaleString()}개`, '#3b82f6') +
+      card('📤 출고', `${prFmt(s.outAll)}<span style="font-size:8.5pt; color:#64748b;"> 상자</span>`, `거래처 ${s.outPartnerCount.toLocaleString()}곳 · 순출고 ${prFmt(s.netOut)}상자`, '#f59e0b') +
+      card('↩️ 반품', `${prFmt(s.ret)}<span style="font-size:8.5pt; color:#64748b;"> 상자</span>`,
+        s.ret > 0 ? `반품 전표 ${s.retInvoiceCount.toLocaleString()}건 · 출고 대비 ${s.returnRate == null ? '-' : (s.returnRate * 100).toFixed(1) + '%'}` : '기간 중 반품 없음', '#ea580c') +
+      card('📆 일평균 순출고', `${prFmt(s.outPerDay)}<span style="font-size:8.5pt; color:#64748b;"> 상자</span>`, `${s.dayCount}일 기준 · 출고 품목 ${s.outItemCount.toLocaleString()}개`, '#3b82f6') +
       card('🔁 창고 간 이동', `${prFmt(s.move)}<span style="font-size:8.5pt; color:#64748b;"> 상자</span>`, `전표 ${s.invoiceCount.toLocaleString()}건`, '#8b5cf6');
   }
 
@@ -574,13 +612,17 @@ async function downloadPeriodReportXlsx() {
     ['기간 보고서'],
     ['기간', `${prData.from} ~ ${prData.to}`],
     ['창고', wh || '전체'],
-    ['수량 단위', '상자 환산 (상자 + 낱개 ÷ 입수). 이동은 출고에 포함하지 않음'],
+    ['수량 단위', '상자 환산 (상자 + 낱개 ÷ 입수). 이동은 출고에 포함하지 않음. 반품은 입고에 포함하지 않고 따로 셈'],
     [],
     ['입고', r1(s.inAll)],
     ['└ 서브창고발 입고', r1(s.inFromSub)],
     ['출고', r1(s.outAll)],
+    ['반품', r1(s.ret)],
+    ['순출고 (출고 − 반품)', r1(s.netOut)],
+    ['반품률 (출고 대비)', s.returnRate == null ? '' : `${(s.returnRate * 100).toFixed(1)}%`],
+    ['반품 전표 수', s.retInvoiceCount],
     ['출고 거래처 수', s.outPartnerCount],
-    ['일평균 출고', r1(s.outPerDay)],
+    ['일평균 순출고', r1(s.outPerDay)],
     ['창고 간 이동', r1(s.move)],
     ['전표 수', s.invoiceCount],
     ['출고 품목 수', s.outItemCount]
@@ -598,10 +640,10 @@ async function downloadPeriodReportXlsx() {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), t.label.replace(/[·]/g, ''));
   });
 
-  const TYPE_LABEL = { INBOUND: '입고', OUTBOUND: '출고', MOVE: '이동' };
-  const ledger = [['날짜', '구분', '창고', '출발', '도착', '거래처', '담당자', '전표번호', '품명', '컬러', '입수', '상자', '낱개', '상자 환산']];
+  const TYPE_LABEL = { INBOUND: '입고', OUTBOUND: '출고', RETURN: '반품', MOVE: '이동' };
+  const ledger = [['날짜', '구분', '창고', '출발', '도착', '거래처', '담당자', '전표번호', '원 출고 전표', '품명', '컬러', '입수', '상자', '낱개', '상자 환산']];
   rows.forEach(r => ledger.push([
-    r.date, TYPE_LABEL[r.type] || r.type, r.wh, r.src, r.dst, r.partner, r.handler, r.invoice,
+    r.date, TYPE_LABEL[r.type] || r.type, r.wh, r.src, r.dst, r.partner, r.handler, r.invoice, r.returnOf || '',
     r.name, r.color, r.pack, r.box, r.unit, r1(r.boxEq)
   ]));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ledger), '전표원장');
