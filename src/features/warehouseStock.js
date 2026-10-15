@@ -5,7 +5,8 @@
  *   - callServer(fnName, args, opt) : supabaseAdapter 브릿지 호출 (getWarehouseStockList)
  *   - escapeHtml(v)                 : HTML 이스케이프 헬퍼
  *
- * 옵션: 0 재고 포함(화면에서 거름), 숨김(비활성) 품목 포함(서버 조회 조건이라 바꾸면 다시 불러온다).
+ * 옵션: 0 재고 포함(화면에서 거름), 숨김(비활성) 품목 포함(서버 조회 조건이라 바꾸면 다시 불러온다),
+ * 제조사 필터(화면에서 거름, 제조사가 없는 품목은 '(미지정)').
  * 창고를 '전체'로 고르면 창고마다 열을 하나씩 두고 합계를 붙인다. 수량은 장부상 실재고(상자 + 낱개)다.
  * HTML 속성이 호출하는 함수만 파일 하단에서 window에 노출한다.
  */
@@ -30,6 +31,7 @@ function wsOptions() {
     wh: (document.getElementById('wsWh') || {}).value || '',
     includeZero: !!(document.getElementById('wsIncludeZero') || {}).checked,
     includeInactive: !!(document.getElementById('wsIncludeInactive') || {}).checked,
+    mfg: (document.getElementById('wsMfg') || {}).value || '',
     q: String((document.getElementById('wsSearch') || {}).value || '').trim().toUpperCase()
   };
 }
@@ -82,6 +84,17 @@ function wsFillWarehouseSelect() {
   sel.innerHTML = '<option value="">전체 (창고별 열)</option>' +
     wsData.warehouses.map(w => `<option value="${escapeHtml(w.code)}">${escapeHtml(w.code)}${w.name && w.name !== w.code ? ' · ' + escapeHtml(w.name) : ''}</option>`).join('');
   sel.value = wsData.warehouses.some(w => w.code === cur) ? cur : '';
+
+  const mfgSel = document.getElementById('wsMfg');
+  if (mfgSel) {
+    const curMfg = mfgSel.value;
+    const names = Array.from(new Set(wsData.items.map(it => it.manufacturer).filter(Boolean))).sort();
+    const hasNone = wsData.items.some(it => !it.manufacturer);
+    mfgSel.innerHTML = '<option value="">전체 제조사</option>' +
+      names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('') +
+      (hasNone ? '<option value="__NONE__">(미지정)</option>' : '');
+    mfgSel.value = (curMfg === '__NONE__' && hasNone) || names.includes(curMfg) ? curMfg : '';
+  }
 }
 
 function onWarehouseStockOptionChange() {
@@ -96,7 +109,7 @@ function onWarehouseStockOptionChange() {
 /** 화면·인쇄·엑셀이 같이 쓰는 표: { columns: [{ key, label, num }], rows, totals } */
 function wsBuildTable() {
   if (!wsData) return null;
-  const { wh, includeZero, q } = wsOptions();
+  const { wh, includeZero, q, mfg } = wsOptions();
   const whList = wh ? wsData.warehouses.filter(w => w.code === wh) : wsData.warehouses;
   const rows = [];
   const totalsByWh = {}; // 낱개 합계는 입수가 품목마다 달라 합칠 수 없으므로 상자·낱개를 따로 더한다
@@ -105,7 +118,8 @@ function wsBuildTable() {
   let totalUnit = 0;
 
   wsData.items.forEach(it => {
-    if (q && ![it.name, it.color].some(v => String(v || '').toUpperCase().includes(q))) return;
+    if (mfg && (mfg === '__NONE__' ? !!it.manufacturer : it.manufacturer !== mfg)) return;
+    if (q && ![it.name, it.color, it.manufacturer].some(v => String(v || '').toUpperCase().includes(q))) return;
     let units = 0;
     const cells = {};
     whList.forEach(w => {
@@ -156,6 +170,7 @@ function renderWarehouseStock() {
   const numCell = n => (n
     ? td(n.toLocaleString(), true, n < 0 ? ' color:#dc2626; font-weight:700;' : '')
     : td('<span style="color:#cbd5e1;">0</span>', true));
+  const mfgCell = r => td(r.manufacturer ? escapeHtml(r.manufacturer) : '<span style="color:#cbd5e1;">-</span>');
   const nameCell = r => td(`${escapeHtml(r.name)}${r.isActive ? '' : ' <span style="font-size:7pt; background:#e2e8f0; color:#475569; padding:0 4px; border-radius:3px;">숨김</span>'}`);
 
   let head;
@@ -163,19 +178,19 @@ function renderWarehouseStock() {
   let foot;
   if (t.single) {
     const w = t.whList[0];
-    head = th('품명') + th('컬러') + th('입수', true) + th('상자', true) + th('낱개', true) + th('총 낱개', true);
+    head = th('품명') + th('컬러') + th('제조사') + th('입수', true) + th('상자', true) + th('낱개', true) + th('총 낱개', true);
     body = t.rows.map(r => {
       const c = r.cells[w.code];
-      return `<tr style="border-bottom:1px solid #f1f5f9;">${nameCell(r)}${td(escapeHtml(r.color))}${td(r.pack, true)}${numCell(c.box)}${numCell(c.unit)}${td(r.sumUnits.toLocaleString(), true)}</tr>`;
+      return `<tr style="border-bottom:1px solid #f1f5f9;">${nameCell(r)}${td(escapeHtml(r.color))}${mfgCell(r)}${td(r.pack, true)}${numCell(c.box)}${numCell(c.unit)}${td(r.sumUnits.toLocaleString(), true)}</tr>`;
     }).join('');
     const tw = t.totalsByWh[w.code];
-    foot = `<tr style="background:#f8fafc; font-weight:800;">${td('합계')}${td('')}${td('')}${td(tw.box.toLocaleString(), true)}${td(tw.unit.toLocaleString(), true)}${td('')}</tr>`;
+    foot = `<tr style="background:#f8fafc; font-weight:800;">${td('합계')}${td('')}${td('')}${td('')}${td(tw.box.toLocaleString(), true)}${td(tw.unit.toLocaleString(), true)}${td('')}</tr>`;
   } else {
-    head = th('품명') + th('컬러') + th('입수', true) + t.whList.map(w => th(w.code, true)).join('') + th('합계', true);
-    body = t.rows.map(r => `<tr style="border-bottom:1px solid #f1f5f9;">${nameCell(r)}${td(escapeHtml(r.color))}${td(r.pack, true)}` +
+    head = th('품명') + th('컬러') + th('제조사') + th('입수', true) + t.whList.map(w => th(w.code, true)).join('') + th('합계', true);
+    body = t.rows.map(r => `<tr style="border-bottom:1px solid #f1f5f9;">${nameCell(r)}${td(escapeHtml(r.color))}${mfgCell(r)}${td(r.pack, true)}` +
       t.whList.map(w => qtyCell(r.cells[w.code].box, r.cells[w.code].unit)).join('') +
       td(`<b>${escapeHtml(wsQty(r.sumBox, r.sumUnit))}</b>`, true) + '</tr>').join('');
-    foot = `<tr style="background:#f8fafc; font-weight:800;">${td('합계')}${td('')}${td('')}` +
+    foot = `<tr style="background:#f8fafc; font-weight:800;">${td('합계')}${td('')}${td('')}${td('')}` +
       t.whList.map(w => td(escapeHtml(wsQty(t.totalsByWh[w.code].box, t.totalsByWh[w.code].unit)), true)).join('') +
       td(escapeHtml(wsQty(t.totalBox, t.totalUnit)), true) + '</tr>';
   }
@@ -183,9 +198,10 @@ function renderWarehouseStock() {
 }
 
 function wsOptionLabel() {
-  const { wh, includeZero, includeInactive, q } = wsOptions();
+  const { wh, includeZero, includeInactive, q, mfg } = wsOptions();
   return [
     `창고: ${wh || '전체'}`,
+    mfg ? `제조사: ${mfg === '__NONE__' ? '(미지정)' : mfg}` : '',
     `0 재고 ${includeZero ? '포함' : '제외'}`,
     `숨김 품목 ${includeInactive ? '포함' : '제외'}`,
     q ? `검색: ${q}` : ''
@@ -241,7 +257,7 @@ async function downloadWarehouseStockXlsx() {
     return;
   }
   // 엑셀은 계산하기 쉽게 창고마다 상자·낱개 열을 따로 둔다.
-  const header = ['품명', '컬러', '입수', '상태'];
+  const header = ['품명', '컬러', '제조사', '입수', '상태'];
   t.whList.forEach(w => header.push(`${w.code} 상자`, `${w.code} 낱개`));
   header.push('합계 상자', '합계 낱개', '총 낱개');
   const aoa = [
@@ -252,12 +268,12 @@ async function downloadWarehouseStockXlsx() {
     header
   ];
   t.rows.forEach(r => {
-    const row = [r.name, r.color, r.pack, r.isActive ? '' : '숨김'];
+    const row = [r.name, r.color, r.manufacturer, r.pack, r.isActive ? '' : '숨김'];
     t.whList.forEach(w => row.push(r.cells[w.code].box, r.cells[w.code].unit));
     row.push(r.sumBox, r.sumUnit, r.sumUnits);
     aoa.push(row);
   });
-  const totalRow = ['합계', '', '', ''];
+  const totalRow = ['합계', '', '', '', ''];
   t.whList.forEach(w => totalRow.push(t.totalsByWh[w.code].box, t.totalsByWh[w.code].unit));
   totalRow.push(t.totalBox, t.totalUnit, '');
   aoa.push(totalRow);

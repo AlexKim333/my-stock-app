@@ -16624,13 +16624,16 @@ if (document.readyState === 'loading') {
         <select id="wsWh" onchange="onWarehouseStockOptionChange()" style="padding:4px 6px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;">
           <option value="">전체 (창고별 열)</option>
         </select>
+        <select id="wsMfg" onchange="onWarehouseStockOptionChange()" style="padding:4px 6px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;">
+          <option value="">전체 제조사</option>
+        </select>
         <label style="display:inline-flex; align-items:center; gap:4px; font-size:8.5pt; color:#334155; cursor:pointer;">
           <input type="checkbox" id="wsIncludeZero" onchange="onWarehouseStockOptionChange()"> 0 재고 포함
         </label>
         <label style="display:inline-flex; align-items:center; gap:4px; font-size:8.5pt; color:#334155; cursor:pointer;">
           <input type="checkbox" id="wsIncludeInactive" onchange="onWarehouseStockOptionChange()"> 숨김(비활성) 품목 포함
         </label>
-        <input type="text" id="wsSearch" oninput="onWarehouseStockOptionChange()" placeholder="🔍 품명 / 컬러 검색" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; width:180px; max-width:100%;">
+        <input type="text" id="wsSearch" oninput="onWarehouseStockOptionChange()" placeholder="🔍 품명 / 컬러 / 제조사 검색" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; width:180px; max-width:100%;">
         <span style="display:inline-flex; gap:6px; margin-left:auto;">
           <button type="button" onclick="loadWarehouseStock()" style="padding:5px 10px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; font-weight:700; cursor:pointer;">🔄 새로고침</button>
           <button type="button" onclick="printWarehouseStock()" style="padding:5px 12px; background:#334155; color:#ffffff; border:none; border-radius:5px; font-weight:700; font-size:8.5pt; cursor:pointer;">🖨️ 인쇄</button>

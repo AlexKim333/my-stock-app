@@ -777,6 +777,14 @@ export const serverMethods = {
   async registerProduct(payloadList) {
     if (!Array.isArray(payloadList) || payloadList.length === 0) return []
 
+    // 화면에서 고른 제조사(brands.name)를 brand_id로 바꿔 함께 저장한다(예전에는 저장하지 않고 버렸다).
+    const brandIdByName = new Map()
+    if (payloadList.some(p => String(p.manufacturer || '').trim())) {
+      const { data: brandRows, error: brandErr } = await supabase.from('brands').select('id, name')
+      if (brandErr) throw brandErr
+      ;(brandRows || []).forEach(b => brandIdByName.set(String(b.name || '').trim().toUpperCase(), b.id))
+    }
+
     const results = []
     for (const item of payloadList) {
       const name = String(item.itemName || '').trim()
@@ -791,7 +799,8 @@ export const serverMethods = {
         p_box_packaging_qty: boxContent,
         p_initial_boxes: initialStock,
         p_initial_units: 0,
-        p_safe_stock: safeStock
+        p_safe_stock: safeStock,
+        p_brand_id: brandIdByName.get(String(item.manufacturer || '').trim().toUpperCase()) || null
       })
 
       if (itemErr) {
@@ -2574,18 +2583,20 @@ export const serverMethods = {
   /**
    * 18-3. 창고별 현재 재고 목록 (getWarehouseStockList)
    * includeInactive: 숨김(비활성) 품목도 포함할지. 0 재고 포함 여부는 화면에서 거른다(모든 품목 × 활성 창고를 돌려준다).
-   * 스모크테스트 창고·품목은 뺀다. 수량은 장부상 실재고(상자·낱개 그대로)다.
+   * 스모크테스트 창고·품목은 뺀다. 수량은 장부상 실재고(상자·낱개 그대로)다. 제조사는 items.brand_id → brands.name.
    */
   async getWarehouseStockList(includeInactive) {
-    const [whRows, items, stocks] = await Promise.all([
+    const [whRows, items, stocks, brands] = await Promise.all([
       fetchAllRows(() => supabase.from('warehouses').select('code, name, is_hub, sort_order').eq('is_active', true), { orderBy: 'sort_order' }),
       fetchAllRows(() => {
-        let q = supabase.from('items').select('id, item_name, color, box_packaging_qty, is_active')
+        let q = supabase.from('items').select('id, item_name, color, box_packaging_qty, is_active, brand_id')
         if (!includeInactive) q = q.eq('is_active', true)
         return q
       }),
-      fetchAllRows(() => supabase.from('inventory_stocks').select('id, item_id, warehouse_code, box_qty, unit_qty'))
+      fetchAllRows(() => supabase.from('inventory_stocks').select('id, item_id, warehouse_code, box_qty, unit_qty')),
+      fetchAllRows(() => supabase.from('brands').select('id, name'))
     ])
+    const brandName = new Map(brands.map(b => [b.id, b.name]))
 
     const warehouses = whRows
       .filter(w => String(w.code || '').toUpperCase() !== 'SMOKETEST')
@@ -2602,6 +2613,7 @@ export const serverMethods = {
         color: i.color || 'SURTIDO',
         pack: Math.max(1, Number(i.box_packaging_qty || 1)),
         isActive: i.is_active !== false,
+        manufacturer: (i.brand_id && brandName.get(i.brand_id)) || '',
         stocks: {}
       })
     })
