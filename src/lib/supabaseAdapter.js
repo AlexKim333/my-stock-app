@@ -405,7 +405,9 @@ export const serverMethods = {
       txCount: Number(r.txCount || 0),
       lastTxAt: r.lastTxAt || null,
       pendingActive: Number(r.pendingActive || 0),
-      holdCount: Number(r.holdCount || 0)
+      holdCount: Number(r.holdCount || 0),
+      brandId: r.brandId || null,
+      brand: r.brand || ''
     }))
   },
 
@@ -434,6 +436,36 @@ export const serverMethods = {
       }
     }
     return data
+  },
+
+  /**
+   * 2h-2. 상품 제조사 일괄 지정 (관리자 전용, rpc_set_items_brand)
+   *  - brandId가 null이면 "미지정"으로 되돌린다. 이미 같은 제조사인 품목은 unchanged로 센다.
+   */
+  async setItemsBrand(payload) {
+    const p = payload || {}
+    const ids = Array.isArray(p.itemIds) ? p.itemIds.filter(Boolean) : []
+    if (ids.length === 0) throw new Error('대상 품목을 선택하세요.')
+
+    const { data, error } = await supabase.rpc('rpc_set_items_brand', {
+      p_item_ids: ids,
+      p_brand_id: p.brandId || null
+    })
+    if (error) throw new Error(error.message || '제조사를 바꾸지 못했습니다.')
+    return data
+  },
+
+  /**
+   * 2h-3. 제조사 목록(id 포함) — 상품관리 제조사 지정 드롭다운용
+   */
+  async listBrands() {
+    const { data, error } = await supabase
+      .from('brands')
+      .select('id, name')
+      .eq('is_active', true)
+      .order('name', { ascending: true })
+    if (error) throw new Error(error.message || '제조사 목록을 불러오지 못했습니다.')
+    return (data || []).filter(b => b.name)
   },
 
   /**
@@ -629,6 +661,18 @@ export const serverMethods = {
 
     if (error) throw error
     return (data || []).map(b => b.name).filter(Boolean)
+  },
+
+  /**
+   * 5-1. 새 메이커 / 브랜드 추가 (rpc_create_brand, staff 차단)
+   *  - 대소문자만 다른 같은 이름이 있으면 새로 만들지 않고 그 제조사를(비활성이면 다시 활성화해) 돌려준다.
+   */
+  async createManufacturer(name) {
+    const n = String(name || '').trim()
+    if (!n) throw new Error('제조사 이름을 입력하세요.')
+    const { data, error } = await supabase.rpc('rpc_create_brand', { p_name: n })
+    if (error) throw new Error(error.message || '제조사를 추가하지 못했습니다.')
+    return data
   },
 
   /**

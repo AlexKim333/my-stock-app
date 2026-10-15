@@ -8,9 +8,12 @@
  *   - showAppToast(msg, duration)   : 토스트 알림 (typeof로 가드)
  *   - loadStockData(force)          : 재고 캐시·검색 색인 새로고침 (typeof로 가드)
  *   - openProductLedgerModal(name)  : 수불원장 열기 (typeof로 가드)
+ *   - createManufacturerInteractive(onCreated) : 새 제조사 추가 (typeof로 가드)
  *
  * 숨김 = items.is_active=false. 서버(rpc_set_items_active)가 재고·진행 중 발주·출고 보류를 검사해
  * 막힌 품목은 건너뛴다. 이 파일은 같은 조건을 미리 보여 주고(체크 불가), 결과를 알린다.
+ * 제조사(items.brand_id)도 여기서 여러 품목을 골라 한 번에 지정한다(rpc_set_items_brand).
+ * 제조사 지정은 재고와 무관하므로 모든 품목을 선택할 수 있고, 숨김만 차단 사유가 없는 품목에 적용된다.
  * HTML 속성이 호출하는 함수만 파일 하단에서 window에 노출한다.
  */
 
@@ -25,6 +28,8 @@ let catalogItems = [];
 let catalogSelected = new Set();
 let catalogDupKeys = new Map(); // dupKey -> 같은 키 품목 수
 let catalogVisibleIds = [];
+let catalogBrands = []; // [{ id, name }]
+const CATALOG_COLS = 10;
 
 function catalogFmt(n) {
   return Number(n || 0).toLocaleString();
@@ -68,6 +73,7 @@ function openItemCatalogModal() {
   modal.style.display = 'flex';
   loadItemCatalog();
   loadItemVisibilityHistory();
+  loadCatalogBrands();
   const input = document.getElementById('catalogSearchInput');
   if (input) setTimeout(() => input.focus(), 50);
 }
@@ -80,7 +86,7 @@ function closeItemCatalogModal() {
 function loadItemCatalog() {
   const body = document.getElementById('catalogTableBody');
   if (body && catalogItems.length === 0) {
-    body.innerHTML = '<tr><td colspan="9" style="padding:24px; text-align:center; color:#94a3b8;">⏳ 상품 목록을 불러오는 중...</td></tr>';
+    body.innerHTML = `<tr><td colspan="${CATALOG_COLS}" style="padding:24px; text-align:center; color:#94a3b8;">⏳ 상품 목록을 불러오는 중...</td></tr>`;
   }
   callServer('listItemCatalog', [], {
     key: 'itemCatalogLoad',
@@ -98,7 +104,7 @@ function loadItemCatalog() {
       renderItemCatalog();
     },
     onError: err => {
-      if (body) body.innerHTML = `<tr><td colspan="9" style="padding:24px; text-align:center; color:#dc2626;">불러오기 실패: ${escapeHtml(err?.message || String(err))}</td></tr>`;
+      if (body) body.innerHTML = `<tr><td colspan="${CATALOG_COLS}" style="padding:24px; text-align:center; color:#dc2626;">불러오기 실패: ${escapeHtml(err?.message || String(err))}</td></tr>`;
     }
   });
 }
@@ -109,6 +115,7 @@ function readCatalogFilters() {
     q: catalogNormName(val('catalogSearchInput')),
     status: val('catalogStatusFilter') || 'active',
     view: val('catalogViewFilter') || 'all',
+    brand: val('catalogBrandFilter'),
     sort: val('catalogSortSelect') || 'name'
   };
 }
@@ -119,6 +126,8 @@ function filterCatalogItems() {
     if (f.status === 'active' && !it.active) return false;
     if (f.status === 'hidden' && it.active) return false;
     if (f.q && !catalogNormName(`${it.name} ${it.color}`).includes(f.q)) return false;
+    if (f.brand === '__none__' && it.brandId) return false;
+    if (f.brand && f.brand !== '__none__' && it.brandId !== f.brand) return false;
     if (f.view === 'hideable') return it.active && catalogBlockers(it).length === 0;
     if (f.view === 'dup') return (catalogDupKeys.get(catalogDupKey(it)) || 0) > 1;
     if (f.view === 'notx') return it.txCount === 0;
@@ -148,33 +157,35 @@ function renderItemCatalog() {
   const body = document.getElementById('catalogTableBody');
   if (!body) return;
   const list = filterCatalogItems();
-  catalogVisibleIds = list.filter(isCatalogSelectable).map(it => it.id);
+  catalogVisibleIds = list.map(it => it.id);
 
   const activeCount = catalogItems.filter(it => it.active).length;
   const summary = document.getElementById('catalogSummary');
   if (summary) {
     const dupItems = catalogItems.filter(it => (catalogDupKeys.get(catalogDupKey(it)) || 0) > 1).length;
+    const noBrand = catalogItems.filter(it => it.active && !it.brandId).length;
     summary.innerHTML =
       `전체 <b>${catalogFmt(catalogItems.length)}</b> · 활성 <b>${catalogFmt(activeCount)}</b> · ` +
       `숨김 <b style="color:#b91c1c;">${catalogFmt(catalogItems.length - activeCount)}</b> · ` +
-      `중복 의심 <b style="color:#b45309;">${catalogFmt(dupItems)}</b> · 표시 <b>${catalogFmt(list.length)}</b>`;
+      `중복 의심 <b style="color:#b45309;">${catalogFmt(dupItems)}</b> · ` +
+      `제조사 미지정(활성) <b style="color:#7c3aed;">${catalogFmt(noBrand)}</b> · 표시 <b>${catalogFmt(list.length)}</b>`;
   }
 
   if (list.length === 0) {
-    body.innerHTML = '<tr><td colspan="9" style="padding:24px; text-align:center; color:#94a3b8;">조건에 맞는 상품이 없습니다.</td></tr>';
+    body.innerHTML = `<tr><td colspan="${CATALOG_COLS}" style="padding:24px; text-align:center; color:#94a3b8;">조건에 맞는 상품이 없습니다.</td></tr>`;
   } else {
     body.innerHTML = list.map(renderCatalogRow).join('');
   }
   updateCatalogActionBar();
 }
 
-function isCatalogSelectable(it) {
-  return !it.active || catalogBlockers(it).length === 0;
+/** 숨김 버튼의 대상이 될 수 있는지 — 활성이고 재고·진행 중 발주·보류가 없을 때만 */
+function isCatalogHideable(it) {
+  return it.active && catalogBlockers(it).length === 0;
 }
 
 function renderCatalogRow(it) {
   const blockers = it.active ? catalogBlockers(it) : [];
-  const selectable = isCatalogSelectable(it);
   const checked = catalogSelected.has(it.id);
   const dupN = catalogDupKeys.get(catalogDupKey(it)) || 0;
   const days = catalogDaysSince(it.lastTxAt);
@@ -196,11 +207,12 @@ function renderCatalogRow(it) {
   return `
     <tr style="${checked ? 'background:#eff6ff;' : ''} ${it.active ? '' : 'color:#94a3b8;'}">
       <td style="text-align:center;">
-        <input type="checkbox" ${checked ? 'checked' : ''} ${selectable ? '' : 'disabled title="재고·진행 중 발주·출고 보류를 먼저 정리해야 숨길 수 있습니다"'}
-          onchange="toggleCatalogItem(${jsArg(it.id)}, this.checked)" style="cursor:${selectable ? 'pointer' : 'not-allowed'};">
+        <input type="checkbox" ${checked ? 'checked' : ''}
+          onchange="toggleCatalogItem(${jsArg(it.id)}, this.checked)" style="cursor:pointer;">
       </td>
       <td style="font-weight:700; color:${it.active ? '#1e293b' : '#94a3b8'};">${escapeHtml(it.name)} ${ledgerBtn}</td>
       <td>${escapeHtml(it.color)}</td>
+      <td>${it.brand ? escapeHtml(it.brand) : '<span style="color:#a78bfa;">(미지정)</span>'}</td>
       <td style="text-align:right;">${catalogFmt(it.pack)}</td>
       <td style="text-align:right;">${catalogFmt(it.mainBox)}${it.mainUnit ? '<span style="color:#64748b;">+' + catalogFmt(it.mainUnit) + '개</span>' : ''}</td>
       <td style="font-size:7.8pt;">${stockText}</td>
@@ -235,14 +247,17 @@ function selectedCatalogItems() {
 
 function updateCatalogActionBar() {
   const sel = selectedCatalogItems();
-  const toHide = sel.filter(it => it.active);
+  const active = sel.filter(it => it.active);
+  const toHide = active.filter(isCatalogHideable);
   const toShow = sel.filter(it => !it.active);
   const label = document.getElementById('catalogSelectedCount');
   if (label) {
     label.textContent = sel.length
-      ? `선택 ${catalogFmt(sel.length)}개 (활성 ${catalogFmt(toHide.length)} · 숨김 ${catalogFmt(toShow.length)})`
+      ? `선택 ${catalogFmt(sel.length)}개 (활성 ${catalogFmt(active.length)}, 그중 숨김 가능 ${catalogFmt(toHide.length)} · 숨김 ${catalogFmt(toShow.length)})`
       : '선택한 상품 없음';
   }
+  const brandBtn = document.getElementById('catalogBrandBtn');
+  if (brandBtn) brandBtn.disabled = sel.length === 0 || !document.getElementById('catalogBrandSelect')?.value;
   const hideBtn = document.getElementById('catalogHideBtn');
   if (hideBtn) hideBtn.disabled = toHide.length === 0;
   const showBtn = document.getElementById('catalogShowBtn');
@@ -256,7 +271,10 @@ function updateCatalogActionBar() {
 }
 
 function applyCatalogVisibility(active) {
-  const targets = selectedCatalogItems().filter(it => it.active !== active);
+  const candidates = selectedCatalogItems().filter(it => it.active !== active);
+  // 숨김은 재고·진행 중 발주·보류가 없는 품목만. 나머지는 선택돼 있어도 건너뛴다(서버도 다시 검사).
+  const targets = active ? candidates : candidates.filter(isCatalogHideable);
+  const blockedN = candidates.length - targets.length;
   if (targets.length === 0) return;
   const reason = (document.getElementById('catalogReason')?.value || '').trim();
   const preview = targets.slice(0, 12).map(it => `  · ${it.name} (${it.color}, ${it.pack}개입)`).join('\n')
@@ -266,7 +284,9 @@ function applyCatalogVisibility(active) {
     ? `숨김 상품 ${targets.length}개를 다시 활성화합니다.\n검색·재고 목록에 다시 나타나고 입출고할 수 있게 됩니다.\n\n${preview}\n\n계속하시겠습니까?`
     : `⚠️ 상품 ${targets.length}개를 숨깁니다(검색 대상에서 제외).\n` +
       `숨긴 상품은 검색·재고 목록·주문서에서 빠지고 입출고·발주가 차단됩니다.\n` +
-      `과거 전표와 수불원장은 그대로 남고, 언제든 다시 활성화할 수 있습니다.\n\n${preview}\n\n계속하시겠습니까?`;
+      `과거 전표와 수불원장은 그대로 남고, 언제든 다시 활성화할 수 있습니다.\n` +
+      (blockedN ? `(재고·진행 중 발주·보류가 있는 ${blockedN}개는 숨기지 않고 건너뜁니다.)\n` : '') +
+      `\n${preview}\n\n계속하시겠습니까?`;
   if (!confirm(msg)) return;
 
   const btn = document.getElementById(active ? 'catalogShowBtn' : 'catalogHideBtn');
@@ -310,6 +330,76 @@ function hideSelectedCatalogItems() {
 
 function restoreSelectedCatalogItems() {
   applyCatalogVisibility(true);
+}
+
+function loadCatalogBrands(selectId) {
+  callServer('listBrands', [], {
+    key: 'itemCatalogBrands',
+    mode: 'latest',
+    onSuccess: list => {
+      catalogBrands = list || [];
+      const opts = catalogBrands.map(b => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`).join('');
+      const filter = document.getElementById('catalogBrandFilter');
+      if (filter) {
+        const cur = filter.value;
+        filter.innerHTML = '<option value="">모든 제조사</option><option value="__none__">제조사 미지정만</option>' + opts;
+        filter.value = [...filter.options].some(o => o.value === cur) ? cur : '';
+      }
+      const pick = document.getElementById('catalogBrandSelect');
+      if (pick) {
+        const cur = selectId || pick.value;
+        pick.innerHTML = '<option value="">제조사 선택…</option>' + opts + '<option value="__none__">(미지정으로 되돌리기)</option>';
+        pick.value = [...pick.options].some(o => o.value === cur) ? cur : '';
+      }
+      updateCatalogActionBar();
+    },
+    onError: err => {
+      if (typeof showAppToast === 'function') showAppToast('제조사 목록을 불러오지 못했습니다: ' + (err?.message || String(err)), 4000);
+    }
+  });
+}
+
+/** "➕ 새 제조사": 추가 후 목록을 다시 불러와 지정할 제조사로 바로 선택해 둔다. */
+function createCatalogBrand() {
+  if (typeof createManufacturerInteractive !== 'function') return;
+  createManufacturerInteractive(brand => loadCatalogBrands(brand.id));
+}
+
+function applyCatalogBrand() {
+  const value = document.getElementById('catalogBrandSelect')?.value || '';
+  if (!value) return;
+  const brandId = value === '__none__' ? null : value;
+  const brandName = brandId ? (catalogBrands.find(b => b.id === brandId)?.name || '') : '(미지정)';
+  const targets = selectedCatalogItems().filter(it => (it.brandId || null) !== brandId);
+  if (targets.length === 0) {
+    alert(`선택한 상품이 이미 모두 ${brandName}입니다.`);
+    return;
+  }
+  const preview = targets.slice(0, 12).map(it => `  · ${it.name} (${it.color}) ${it.brand || '(미지정)'} → ${brandName}`).join('\n')
+    + (targets.length > 12 ? `\n  … 외 ${targets.length - 12}개` : '');
+  if (!confirm(`상품 ${targets.length}개의 제조사를 "${brandName}"(으)로 지정합니다.\n\n${preview}\n\n계속하시겠습니까?`)) return;
+
+  const btn = document.getElementById('catalogBrandBtn');
+  const oldText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '처리 중...'; }
+
+  callServer('setItemsBrand', [{ itemIds: targets.map(it => it.id), brandId }], {
+    key: 'itemCatalogBrandApply',
+    timeout: 60000,
+    onSuccess: res => {
+      if (typeof showAppToast === 'function') {
+        showAppToast(`✅ ${Number(res?.changed || 0)}개 상품의 제조사를 ${brandName}(으)로 지정했습니다.`, 3500);
+      }
+      // 지정한 품목은 선택에서 빼서, 이어서 다른 제조사 품목을 고르기 쉽게 한다.
+      targets.forEach(it => catalogSelected.delete(it.id));
+      loadItemCatalog();
+    },
+    onError: err => alert('제조사 지정 실패: ' + (err?.message || String(err))),
+    onSettled: () => {
+      if (btn) btn.textContent = oldText;
+      updateCatalogActionBar();
+    }
+  });
 }
 
 function openCatalogLedger(name) {
@@ -363,3 +453,6 @@ window.clearCatalogSelection = clearCatalogSelection;
 window.hideSelectedCatalogItems = hideSelectedCatalogItems;
 window.restoreSelectedCatalogItems = restoreSelectedCatalogItems;
 window.openCatalogLedger = openCatalogLedger;
+window.applyCatalogBrand = applyCatalogBrand;
+window.createCatalogBrand = createCatalogBrand;
+window.updateCatalogActionBar = updateCatalogActionBar;
