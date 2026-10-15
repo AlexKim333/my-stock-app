@@ -9,6 +9,7 @@
   <script type="module" src="/src/features/itemPackMaintenance.js"></script>
   <script type="module" src="/src/features/itemCatalog.js"></script>
   <script type="module" src="/src/features/periodReport.js"></script>
+  <script type="module" src="/src/features/warehouseStock.js"></script>
 
 <style id="mobileOptimizationStyle">
 /* 📱 2026 초고속 모바일 반응형 완벽 최적화 (Mobile First & Tablet UX) */
@@ -2258,6 +2259,7 @@
       <div class="menu">
         <button type="button" onclick="openDashboardModal()" id="btnNavDashboard" style="background: linear-gradient(135deg, #059669, #047857); color: #ffffff; font-weight: 800; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 3px; font-size: 8.5pt;" title="물류 통합 관제 대시보드">📊 대시보드</button>
         <button type="button" onclick="openPeriodReportModal()" id="btnNavPeriodReport" style="background: linear-gradient(135deg, #1e3a8a, #1d4ed8); color: #ffffff; font-weight: 800; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 3px; font-size: 8.5pt;" title="기간별 입고·출고·이동 보고서와 엑셀 다운로드">📑 기간 보고서</button>
+        <button type="button" onclick="openWarehouseStockModal()" id="btnNavWarehouseStock" style="background: linear-gradient(135deg, #0f766e, #0d9488); color: #ffffff; font-weight: 800; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 3px; font-size: 8.5pt;" title="창고별 현재 재고 보기·인쇄·엑셀 (0 재고·숨김 품목 포함 선택)">📦 창고별 재고</button>
         <button onclick="setPage('입고입력')" class="active">📥 입고입력</button>
         <button onclick="setPage('출고입력')">📤 출고입력</button>
         <button onclick="setPage('상품등록')">🏷️ 상품등록</button>
@@ -16608,6 +16610,43 @@ if (document.readyState === 'loading') {
     #itemCatalogModal select, #itemCatalogModal input[type="text"] { padding:6px 8px; font-size:8.6pt; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box; background:#fff; }
     #itemCatalogModal button:disabled { opacity:0.45; cursor:not-allowed !important; }
   </style>
+  <!-- 📦 창고별 현재 재고 모달 (로직: src/features/warehouseStock.js) -->
+  <div id="warehouseStockModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:9998; justify-content:center; align-items:center; backdrop-filter:blur(3px);">
+    <div style="background:#f8fafc; width:96%; max-width:1240px; height:92%; max-height:92vh; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.4); border:1px solid #cbd5e1;">
+      <div style="padding:12px 18px; background:linear-gradient(135deg, #0f766e, #0d9488); color:#ffffff; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-shrink:0;">
+        <div>
+          <h2 style="margin:0; font-size:12pt; font-weight:800; color:#ffffff;">📦 창고별 현재 재고</h2>
+          <span style="font-size:7.5pt; color:#ccfbf1;">창고를 골라 현재 실재고를 보고 인쇄하거나 엑셀로 내려받습니다</span>
+        </div>
+        <button type="button" onclick="closeWarehouseStockModal()" style="background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:6px 14px; cursor:pointer; font-weight:bold; font-size:9.5pt; flex-shrink:0;">✕ 닫기</button>
+      </div>
+      <div style="padding:10px 18px; background:#ffffff; border-bottom:1px solid #e2e8f0; display:flex; flex-wrap:wrap; align-items:center; gap:10px; flex-shrink:0;">
+        <select id="wsWh" onchange="onWarehouseStockOptionChange()" style="padding:4px 6px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;">
+          <option value="">전체 (창고별 열)</option>
+        </select>
+        <label style="display:inline-flex; align-items:center; gap:4px; font-size:8.5pt; color:#334155; cursor:pointer;">
+          <input type="checkbox" id="wsIncludeZero" onchange="onWarehouseStockOptionChange()"> 0 재고 포함
+        </label>
+        <label style="display:inline-flex; align-items:center; gap:4px; font-size:8.5pt; color:#334155; cursor:pointer;">
+          <input type="checkbox" id="wsIncludeInactive" onchange="onWarehouseStockOptionChange()"> 숨김(비활성) 품목 포함
+        </label>
+        <input type="text" id="wsSearch" oninput="onWarehouseStockOptionChange()" placeholder="🔍 품명 / 컬러 검색" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; width:180px; max-width:100%;">
+        <span style="display:inline-flex; gap:6px; margin-left:auto;">
+          <button type="button" onclick="loadWarehouseStock()" style="padding:5px 10px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; font-weight:700; cursor:pointer;">🔄 새로고침</button>
+          <button type="button" onclick="printWarehouseStock()" style="padding:5px 12px; background:#334155; color:#ffffff; border:none; border-radius:5px; font-weight:700; font-size:8.5pt; cursor:pointer;">🖨️ 인쇄</button>
+          <button type="button" onclick="downloadWarehouseStockXlsx()" style="padding:5px 12px; background:#15803d; color:#ffffff; border:none; border-radius:5px; font-weight:700; font-size:8.5pt; cursor:pointer;">⬇️ 엑셀</button>
+        </span>
+      </div>
+      <div style="flex:1; overflow:hidden; padding:10px 18px; display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap:6px;">
+          <div id="wsSummary" style="font-size:9pt; font-weight:800; color:#0f172a;"></div>
+          <div id="wsStatus" style="font-size:8pt; color:#64748b;"></div>
+        </div>
+        <div id="wsTable" style="flex:1; background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; overflow:auto;"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- 📑 기간 보고서 모달 (로직: src/features/periodReport.js) -->
   <div id="periodReportModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:9998; justify-content:center; align-items:center; backdrop-filter:blur(3px);">
     <div style="background:#f8fafc; width:96%; max-width:1240px; height:92%; max-height:92vh; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.4); border:1px solid #cbd5e1;">

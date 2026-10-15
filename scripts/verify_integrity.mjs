@@ -20,6 +20,7 @@ const jsFiles = [
   'src/features/itemPackMaintenance.js',
   'src/features/itemCatalog.js',
   'src/features/periodReport.js',
+  'src/features/warehouseStock.js',
   'src/lib/supabaseAdapter.js',
   'src/lib/supabase.js',
   'src/lib/stockSync.js',

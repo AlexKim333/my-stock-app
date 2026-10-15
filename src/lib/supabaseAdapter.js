@@ -2572,6 +2572,51 @@ export const serverMethods = {
   },
 
   /**
+   * 18-3. 창고별 현재 재고 목록 (getWarehouseStockList)
+   * includeInactive: 숨김(비활성) 품목도 포함할지. 0 재고 포함 여부는 화면에서 거른다(모든 품목 × 활성 창고를 돌려준다).
+   * 스모크테스트 창고·품목은 뺀다. 수량은 장부상 실재고(상자·낱개 그대로)다.
+   */
+  async getWarehouseStockList(includeInactive) {
+    const [whRows, items, stocks] = await Promise.all([
+      fetchAllRows(() => supabase.from('warehouses').select('code, name, is_hub, sort_order').eq('is_active', true), { orderBy: 'sort_order' }),
+      fetchAllRows(() => {
+        let q = supabase.from('items').select('id, item_name, color, box_packaging_qty, is_active')
+        if (!includeInactive) q = q.eq('is_active', true)
+        return q
+      }),
+      fetchAllRows(() => supabase.from('inventory_stocks').select('id, item_id, warehouse_code, box_qty, unit_qty'))
+    ])
+
+    const warehouses = whRows
+      .filter(w => String(w.code || '').toUpperCase() !== 'SMOKETEST')
+      .sort((a, b) => (b.is_hub ? 1 : 0) - (a.is_hub ? 1 : 0) || (a.sort_order || 0) - (b.sort_order || 0))
+      .map(w => ({ code: w.code, name: w.name || w.code, isHub: !!w.is_hub }))
+    const whSet = new Set(warehouses.map(w => w.code))
+
+    const byItem = new Map()
+    items.forEach(i => {
+      if (i.item_name === '__SMOKETEST_ITEM__') return
+      byItem.set(i.id, {
+        itemId: i.id,
+        name: i.item_name,
+        color: i.color || 'SURTIDO',
+        pack: Math.max(1, Number(i.box_packaging_qty || 1)),
+        isActive: i.is_active !== false,
+        stocks: {}
+      })
+    })
+    stocks.forEach(st => {
+      const it = byItem.get(st.item_id)
+      if (!it || !whSet.has(st.warehouse_code)) return
+      it.stocks[st.warehouse_code] = { box: Number(st.box_qty || 0), unit: Number(st.unit_qty || 0) }
+    })
+
+    const list = Array.from(byItem.values())
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(a.color).localeCompare(String(b.color)))
+    return { success: true, warehouses, items: list }
+  },
+
+  /**
    * 19. 시스템 종합 설정 불러오기 및 저장
    */
   async getSystemSettings() {
