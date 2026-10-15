@@ -1695,7 +1695,9 @@ export const serverMethods = {
       const mainStock = Number(row.main_box_qty || 0)
       const safeStock = Number(row.safe_stock_boxes || 0)
       const inTransit = pendingMap.get(row.item_id) || Number(row.pending_in_boxes || 0)
-      const effectiveStock = mainStock + inTransit
+      // 메인창고 출고 보류는 곧 나갈 물건이므로 유효재고(재고 포지션)에서 뺀다.
+      const mainHeld = Math.ceil((heldUnitsMap.get(`${row.item_id}___MAIN`) || 0) / pack)
+      const effectiveStock = mainStock + inTransit - mainHeld
 
       return {
         itemId: row.item_id,
@@ -1704,6 +1706,7 @@ export const serverMethods = {
         mainStock: mainStock,
         safeStock: safeStock,
         inTransit: inTransit,
+        mainHeld: mainHeld,
         effectiveStock: effectiveStock,
         boxContent: Number(row.box_packaging_qty || 1),
         stocks: stocks,

@@ -5133,7 +5133,7 @@ function filterItems(searchText) {
           ${isAliasMatch ? `<span style="font-size:7pt; background:#eff6ff; color:#1d4ed8; padding:1px 4px; border-radius:3px; font-weight:600; border: 1px solid #bfdbfe;">🏷️ 별명(${escapeHtml(aliasInfo.rawAlias)})</span>` : ''}
         </div>
         <div style="font-size:7.8pt; color:#64748b; flex:none; text-align:right;">
-          재고${whTag}: ${stockHtml} <span style="color:#94a3b8;">(${item.boxContent}入)</span>
+          ${currentType === 'out' ? '가용' : '재고'}${whTag}: ${stockHtml} <span style="color:#94a3b8;">(${item.boxContent}入)</span>
         </div>
       `;
       li.onclick = () => selectItem(item.name, item.color, item.boxContent);
@@ -6810,7 +6810,10 @@ function refreshOutHolds(onDone) {
     mode: 'latest',
     onSuccess: list => {
       outHoldCache = { list: (list || []).map(mapServerOutHold), loaded: true, loading: false, loadedAt: Date.now() };
-      if (currentType === 'out') updatePendingCount();
+      if (currentType === 'out') {
+        updatePendingCount();
+        rerenderOpenItemDropdown(); // 품명 목록의 가용재고에 최신 보류 반영
+      }
       migrateLegacyOutHolds();
       if (onDone) onDone(true);
     },
@@ -6821,6 +6824,11 @@ function refreshOutHolds(onDone) {
     }
   });
 }
+
+// 로그인 전에 보류 조회가 실패했으면 로그인 직후 다시 불러와 가용재고·보류 개수에 반영한다.
+window.addEventListener('wms-login', () => {
+  if (currentType === 'out' && !outHoldCache.loading) refreshOutHolds(ok => { if (ok) updateTable(); });
+});
 
 // 예전 기기별 출고 보류를 서버로 옮긴다(한 건씩). 실패한 건은 사유를 붙여 이 기기에 남긴다.
 function migrateLegacyOutHolds() {
@@ -13111,6 +13119,12 @@ function findMatrixItem(itemId, codigo, color, boxContent) {
     (!boxContent || Number(it.boxContent) === Number(boxContent))) || null;
 }
 
+// 유효재고 = 메인 실재고 + 이동중 − 메인 출고 보류
+function effectiveStockText(item) {
+  const held = Number(item.mainHeld) || 0;
+  return `실재고 ${item.mainStock} + 이동중 ${item.inTransit}${held ? ` − 출고보류 ${held}` : ''} = 유효 ${item.effectiveStock}상자`;
+}
+
 // 발주 수량 입력 창의 가용재고 문구: 실보유에서 발주진행·출고보류를 뺀 값
 function subWhAvailText(avail, gross, committed, held) {
   const parts = [];
@@ -13133,7 +13147,7 @@ function refreshOpenSubWhQtyModal() {
   if (availStock === currentSubWhTarget.availStock && committed === currentSubWhTarget.committed && held === (currentSubWhTarget.held || 0)) return;
   currentSubWhTarget = { item: fresh, warehouse, availStock, grossStock, committed, held };
   document.getElementById('qtyModalAvailStock').textContent = `${subWhAvailText(availStock, grossStock, committed, held)} · 🔄 방금 갱신됨`;
-  document.getElementById('qtyModalEffectiveStock').textContent = `실재고 ${fresh.mainStock} + 이동중 ${fresh.inTransit} = 유효 ${fresh.effectiveStock}상자`;
+  document.getElementById('qtyModalEffectiveStock').textContent = effectiveStockText(fresh);
   const qtyInput = document.getElementById('subWhQtyInput');
   if (qtyInput) qtyInput.max = availStock;
   validateQtyInput();
@@ -14271,7 +14285,7 @@ function appendSubWhCards() {
         </div>
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 8px; font-size: 8.5pt; color: #64748b;">
           <div>메인 <b style="font-size: 12pt; color: #1e3a8a;">${Number(item.mainStock) || 0}</b></div>
-          <div>이동중 <b style="font-size: 12pt; color: #c2410c;">${Number(item.inTransit) || 0}</b></div>
+          <div>이동중 <b style="font-size: 12pt; color: #c2410c;">${Number(item.inTransit) || 0}</b>${item.mainHeld ? ` <span style="color: #c2410c;">(보류 -${item.mainHeld})</span>` : ''}</div>
           <div>유효 <b style="font-size: 12pt; color: ${effColor};">${effective}</b></div>
         </div>
         <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; font-size: 8.8pt;">
@@ -14479,7 +14493,7 @@ function renderSubWhTable(items, cartKeyMap) {
     // 5. 유효재고 (Sticky 335px, width 75px)
     const isBelowSafe = item.safeStock > 0 && item.effectiveStock <= item.safeStock;
     html += `
-      <td style="padding: 5px 6px; position: sticky; left: 335px; z-index: 10; background: ${isNeeded ? '#fef3c7' : (isBelowSafe ? '#fff1f2' : '#f0fdf4')}; width: 75px; min-width: 75px; max-width: 75px; border-right: 2px solid #0d9488; text-align: right; font-weight: 800; color: ${item.effectiveStock > 0 ? (isBelowSafe ? '#e11d48' : '#15803d') : '#ef4444'}; font-size: 8.2pt;" title="메인실재고: ${item.mainStock} | 이동중: ${item.inTransit}${item.safeStock ? ' | 안전재고: ' + item.safeStock : ''}">
+      <td style="padding: 5px 6px; position: sticky; left: 335px; z-index: 10; background: ${isNeeded ? '#fef3c7' : (isBelowSafe ? '#fff1f2' : '#f0fdf4')}; width: 75px; min-width: 75px; max-width: 75px; border-right: 2px solid #0d9488; text-align: right; font-weight: 800; color: ${item.effectiveStock > 0 ? (isBelowSafe ? '#e11d48' : '#15803d') : '#ef4444'}; font-size: 8.2pt;" title="메인실재고: ${item.mainStock} | 이동중: ${item.inTransit}${item.mainHeld ? ' | 출고보류: -' + item.mainHeld : ''}${item.safeStock ? ' | 안전재고: ' + item.safeStock : ''}">
         ${item.effectiveStock}
         ${isBelowSafe ? `<span style="display: inline-block; font-size: 6.5pt; background: #f43f5e; color: #fff; padding: 0 3px; border-radius: 2px; margin-left: 2px; font-weight: bold; vertical-align: middle;">안전↓</span>` : ''}
       </td>
@@ -14544,7 +14558,7 @@ function onSubWhCellClick(itemIndex, warehouseName, availStock) {
   document.getElementById('qtyModalWarehouse').textContent = warehouseName;
   document.getElementById('qtyModalItemName').textContent = `${item.codigo} (${item.color})`;
   document.getElementById('qtyModalAvailStock').textContent = subWhAvailText(availStock, grossStock, committed, held);
-  document.getElementById('qtyModalEffectiveStock').textContent = `실재고 ${item.mainStock} + 이동중 ${item.inTransit} = 유효 ${item.effectiveStock}상자`;
+  document.getElementById('qtyModalEffectiveStock').textContent = effectiveStockText(item);
 
   // 기본 수량 세팅 (1상자)
   const qtyInput = document.getElementById('subWhQtyInput');
@@ -14901,12 +14915,28 @@ function getViewStockSource() {
 }
 
 // 품목 하나의 표시용 재고. 서브창고 재고를 아직 못 불러왔으면 MAIN 수치를 대신 보여주지 않고 pending으로 알린다.
+// 출고 탭에서는 출고 검사(checkItemAndStock)와 같은 가용재고를 보여준다:
+// 실재고 − (서브창고) MAIN행 열린 발주 − 출고 보류(모든 기기) − 이 장바구니에 이미 담은 수량.
 function getViewStock(item) {
   const code = getAdjWarehouse();
-  if (code === 'MAIN') return { box: item.stockBox || 0, indiv: item.stockIndividual || 0, pending: false, code };
-  if (!isViewWarehouseStockLoaded()) return { box: 0, indiv: 0, pending: true, code };
-  const w = adjWarehouseStock.map.get(item.key);
-  return { box: w ? w.stockBox : 0, indiv: w ? w.stockIndividual : 0, pending: false, code };
+  let box, indiv, committedUnits = 0;
+  if (code === 'MAIN') {
+    box = item.stockBox || 0;
+    indiv = item.stockIndividual || 0;
+  } else {
+    if (!isViewWarehouseStockLoaded()) return { box: 0, indiv: 0, pending: true, code };
+    const w = adjWarehouseStock.map.get(item.key);
+    box = w ? w.stockBox : 0;
+    indiv = w ? w.stockIndividual : 0;
+    committedUnits = w ? Math.max(0, Number(w.committedUnits) || 0) : 0;
+  }
+  if (currentType !== 'out') return { box, indiv, pending: false, code };
+
+  const bc = Math.max(1, Number(item.boxContent) || 1);
+  const reserved = getReservedQty(item.name, item.color, item.boxContent);
+  const heldUnits = reserved.reservedBoxes * bc + reserved.reservedIndividuals;
+  const availUnits = Math.max(0, box * bc + indiv - committedUnits - heldUnits);
+  return { box: Math.floor(availUnits / bc), indiv: availUnits % bc, pending: false, code };
 }
 
 // 열려 있는 품명 자동완성 목록을 현재 기준 창고 재고로 다시 그린다.
