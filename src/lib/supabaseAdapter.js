@@ -2695,7 +2695,7 @@ export const serverMethods = {
    * 스모크테스트 창고·품목은 뺀다. 수량은 장부상 실재고(상자·낱개 그대로)다. 제조사는 items.brand_id → brands.name.
    */
   async getWarehouseStockList(includeInactive) {
-    const [whRows, items, stocks, brands] = await Promise.all([
+    const [whRows, items, stocks, brands, pendingOrders, holdRes] = await Promise.all([
       fetchAllRows(() => supabase.from('warehouses').select('code, name, is_hub, sort_order').eq('is_active', true), { orderBy: 'sort_order' }),
       fetchAllRows(() => {
         let q = supabase.from('items').select('id, item_name, color, box_packaging_qty, is_active, brand_id')
@@ -2703,8 +2703,17 @@ export const serverMethods = {
         return q
       }),
       fetchAllRows(() => supabase.from('inventory_stocks').select('id, item_id, warehouse_code, box_qty, unit_qty')),
-      fetchAllRows(() => supabase.from('brands').select('id, name'))
+      fetchAllRows(() => supabase.from('brands').select('id, name, is_active')),
+      // 수량 수정 시 예약분(보류·발주)을 미리 보여 주려고 함께 읽는다(서버가 최종 검사).
+      fetchAllRows(() =>
+        supabase.from('pending_orders')
+          .select('id, item_id, from_warehouse, box_qty, unit_qty')
+          .eq('to_warehouse', 'MAIN')
+          .in('status', ['PENDING', 'IN_TRANSIT'])
+      ),
+      supabase.rpc('rpc_outbound_hold_reservations')
     ])
+    if (holdRes.error) throw new Error(holdRes.error.message || '출고 보류 예약을 불러오지 못했습니다.')
     const brandName = new Map(brands.map(b => [b.id, b.name]))
 
     const warehouses = whRows
@@ -2722,8 +2731,11 @@ export const serverMethods = {
         color: i.color || 'SURTIDO',
         pack: Math.max(1, Number(i.box_packaging_qty || 1)),
         isActive: i.is_active !== false,
+        brandId: i.brand_id || '',
         manufacturer: (i.brand_id && brandName.get(i.brand_id)) || '',
-        stocks: {}
+        stocks: {},
+        // 창고별 예약 낱개: { held: 출고 보류, committed: 서브창고 → MAIN 입고 예정 발주 }
+        reserved: {}
       })
     })
     stocks.forEach(st => {
@@ -2731,10 +2743,60 @@ export const serverMethods = {
       if (!it || !whSet.has(st.warehouse_code)) return
       it.stocks[st.warehouse_code] = { box: Number(st.box_qty || 0), unit: Number(st.unit_qty || 0) }
     })
+    const reserve = (itemId, wh) => {
+      const it = byItem.get(itemId)
+      const code = String(wh || '').toUpperCase().trim()
+      if (!it || !whSet.has(code)) return null
+      if (!it.reserved[code]) it.reserved[code] = { held: 0, committed: 0 }
+      return { it, r: it.reserved[code] }
+    }
+    ;(holdRes.data || []).forEach(h => {
+      const x = reserve(h.item_id, h.warehouse)
+      if (x) x.r.held += Number(h.units || 0)
+    })
+    pendingOrders.forEach(po => {
+      const x = reserve(po.item_id, po.from_warehouse)
+      if (x) x.r.committed += Number(po.box_qty || 0) * x.it.pack + Number(po.unit_qty || 0)
+    })
 
     const list = Array.from(byItem.values())
       .sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(a.color).localeCompare(String(b.color)))
-    return { success: true, warehouses, items: list }
+    const brandList = brands
+      .filter(b => b.name && b.is_active !== false)
+      .map(b => ({ id: b.id, name: b.name }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    return { success: true, warehouses, items: list, brands: brandList }
+  },
+
+  /**
+   * 18-4. 창고별 재고 화면의 수량 직접 수정 — 재고조정(치환) 전표로 남긴다.
+   * expected: 화면에 보였던 수량(그 사이 바뀌었으면 서버가 거절), target: 새 실재고.
+   * 출고 보류·입고 예정 발주보다 적게는 서버가 거절한다.
+   */
+  async adjustWarehouseStock(payload) {
+    const p = payload || {}
+    const int = v => Math.max(0, Math.trunc(Number(v || 0)))
+    const req = {
+      p_item_id: p.itemId,
+      p_warehouse: String(p.warehouse || 'MAIN').toUpperCase().trim(),
+      p_expected_box: Math.trunc(Number(p.expected?.box || 0)),
+      p_expected_unit: Math.trunc(Number(p.expected?.unit || 0)),
+      p_target_box: int(p.target?.box),
+      p_target_unit: int(p.target?.unit),
+      p_reason: String(p.reason || '').trim() || null
+    }
+    if (!req.p_item_id) throw new Error('품목이 지정되지 않았습니다.')
+    const fingerprint = JSON.stringify(req)
+    const idemKey = takeIdempotencyKey('adjust_warehouse_stock', fingerprint)
+    try {
+      const { data, error } = await supabase.rpc('rpc_adjust_stock_checked', { ...req, p_idempotency_key: idemKey })
+      if (error) throw new Error(error.message || '재고를 수정하지 못했습니다.')
+      clearIdempotencyKey('adjust_warehouse_stock')
+      return data
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('adjust_warehouse_stock')
+      throw err
+    }
   },
 
   /**

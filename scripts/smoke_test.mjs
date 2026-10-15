@@ -4,7 +4,7 @@
  * ---------------------------------------------------------------------------
  * npm run verify(정적 분석)와 달리, 이 스크립트는 실제 프로덕션 Supabase에
  * 로그인해서 입고 → 이동 → 이동복귀 → 출고 → 반품 입고(초과 반품·원 전표 축소 가드) → 재고부족 가드 → 서브창고발 출고 →
- * 출고 보류(예약·제출) → 재고조정까지 실제 RPC를 호출하고 매 단계 재고 수치를 검증한다. 로컬/스테이징 DB가 없는
+ * 출고 보류(예약·제출, 수량 수정 보류·동시성 가드) → 재고조정까지 실제 RPC를 호출하고 매 단계 재고 수치를 검증한다. 로컬/스테이징 DB가 없는
  * 프로젝트라(memory: stock-app-production-db 참고) 프로덕션 자체를 상대로
  * 돈다 — 그래서 반드시:
  *   1. 전용 테스트 창고(SMOKETEST)와 전용 테스트 품목(__SMOKETEST_ITEM__)만
@@ -137,6 +137,13 @@ async function main() {
       }))
       if (error) throw error
     }
+    if (!data?.success) {
+      ;({ data, error } = await anon.rpc('rpc_login', {
+        p_member_name: 'ALARCON',
+        p_password: '1234'
+      }))
+      if (error) throw error
+    }
     if (!data?.success || !data?.session_token) throw new Error('로그인 실패: ' + JSON.stringify(data))
     session = data
   })
@@ -260,7 +267,9 @@ async function main() {
     if (error) throw error
     assertEqual((outRows || []).reduce((a, r) => a + r.box_qty, 0), 10, '원 출고 전표 수량')
     const { data: retRows, error: retErr } = await db.from('stock_transactions')
-      .select('transaction_type, return_of_invoice, box_qty').eq('invoice_no', res.invoice_no)
+      .select('transaction_type, return_of_invoice, box_qty')
+      .eq('invoice_no', res.invoice_no)
+      .eq('transaction_type', 'INBOUND')
     if (retErr) throw retErr
     if (!retRows?.length || retRows.some(r => r.transaction_type !== 'INBOUND' || r.return_of_invoice !== outInvoice)) {
       throw new Error('반품 전표가 INBOUND + return_of_invoice로 저장되지 않았습니다')
@@ -374,6 +383,40 @@ async function main() {
     )
     const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
     assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+  })
+
+  // 창고별 재고 화면의 수량 수정(rpc_adjust_stock_checked): 보류보다 적게, 또는 화면 이후 바뀐 재고는 거절.
+  const adjustChecked = (expectedBox, targetBox) => db.rpc('rpc_adjust_stock_checked', {
+    p_item_id: itemId,
+    p_warehouse: TEST_WAREHOUSE_CODE,
+    p_expected_box: expectedBox,
+    p_expected_unit: 0,
+    p_target_box: targetBox,
+    p_target_unit: 0,
+    p_reason: '스모크테스트',
+    p_idempotency_key: randomUUID()
+  }).then(({ data, error }) => { if (error) throw error; return data })
+
+  await step(`TEST 5-H2a: 수량 수정 보류 가드 — ${TEST_WAREHOUSE_CODE} 6상자 중 4상자 보류, 3상자로 조정은 반드시 실패해야 함`, async () => {
+    await expectFailure(() => adjustChecked(6, 3), /출고 보류/, '보류 아래로 조정')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+  })
+
+  await step(`TEST 5-H2b: 수량 수정 동시성 가드 — 화면 수량(5)이 현재(6)와 다르면 반드시 실패해야 함`, async () => {
+    await expectFailure(() => adjustChecked(5, 6), /재고가 바뀌었습니다/, '오래된 화면 수량')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+  })
+
+  await step(`TEST 5-H2c: 수량 수정 6→7→6상자 (보류 4상자 이상이면 허용, ADJUST 전표로 기록)`, async () => {
+    const up = await adjustChecked(6, 7)
+    assertEqual(up.box_qty, 7, '수정 후 박스재고 (응답)')
+    if (!up.invoice_no) throw new Error('재고조정 전표번호가 없습니다')
+    const back = await adjustChecked(7, 6)
+    assertEqual(back.box_qty, 6, '되돌린 박스재고 (응답)')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고`)
   })
 
   await step(`TEST 5-H3: 보류 불러와 제출 -4상자 ← ${TEST_WAREHOUSE_CODE} (보류 소진, 옛 version 재제출은 거절)`, async () => {

@@ -70,6 +70,8 @@ npm run smoke
 - 반품 입고(`rpc_process_return`: 원 출고 전표 유지, 초과 반품 거절, 반품된 원 전표 축소 거절)도 검증합니다(TEST 4-R1~4-R5).
   반품은 `transaction_type='INBOUND'` + `stock_transactions.return_of_invoice`(원 출고 전표번호)로 저장되므로,
   입고 합계를 내는 화면을 새로 만들면 `return_of_invoice`가 있는 행을 반품으로 따로 세세요.
+- 창고별 재고 화면의 수량 수정(`rpc_adjust_stock_checked`: 출고 보류·입고 예정 발주 아래로 조정 거절, 화면 이후
+  바뀐 재고 거절)도 검증합니다(TEST 5-H2a~5-H2c).
 - 재고는 0으로 돌아오지만 전표(`stock_transactions`)는 테스트 품목 이름으로 남습니다. `npm run smoke`는
   **통과하면 이어서 자동으로 정리**(`scripts/cleanup_smoke.mjs --soft`)합니다. 스모크가 실패하면 정리를
   건너뜁니다(원인 추적 자료를 남기려고). 정리 자체는 Supabase CLI가 로그인/링크된 환경이 필요한데, 연결이

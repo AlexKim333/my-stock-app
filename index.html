@@ -16678,6 +16678,9 @@ if (document.readyState === 'loading') {
           <input type="checkbox" id="wsIncludeInactive" onchange="onWarehouseStockOptionChange()"> 숨김(비활성) 품목 포함
         </label>
         <input type="text" id="wsSearch" oninput="onWarehouseStockOptionChange()" placeholder="🔍 품명 / 컬러 / 제조사 검색" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; width:180px; max-width:100%;">
+        <label title="제조사를 목록에서 바꾸고, 창고를 하나 고르면 수량을 재고조정 전표로 수정합니다" style="display:inline-flex; align-items:center; gap:4px; font-size:8.5pt; font-weight:800; color:#b45309; background:#fffbeb; border:1px solid #fcd34d; border-radius:5px; padding:3px 8px; cursor:pointer;">
+          <input type="checkbox" id="wsEditMode" onchange="onWarehouseStockOptionChange()"> ✏️ 수정 모드
+        </label>
         <span style="display:inline-flex; gap:6px; margin-left:auto;">
           <button type="button" onclick="loadWarehouseStock()" style="padding:5px 10px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; font-weight:700; cursor:pointer;">🔄 새로고침</button>
           <button type="button" onclick="printWarehouseStock()" style="padding:5px 12px; background:#334155; color:#ffffff; border:none; border-radius:5px; font-weight:700; font-size:8.5pt; cursor:pointer;">🖨️ 인쇄</button>
@@ -16690,6 +16693,25 @@ if (document.readyState === 'loading') {
           <div id="wsStatus" style="font-size:8pt; color:#64748b;"></div>
         </div>
         <div id="wsTable" style="flex:1; background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; overflow:auto;"></div>
+      </div>
+    </div>
+    <!-- 수량 수정 대화상자 (재고조정 전표로 기록) -->
+    <div id="wsAdjustDialog" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.45); z-index:9999; justify-content:center; align-items:flex-start; padding:60px 12px; overflow-y:auto;">
+      <div style="background:#ffffff; width:100%; max-width:440px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,0.3); padding:16px 18px; font-size:9pt; color:#0f172a;">
+        <h3 style="margin:0 0 4px; font-size:11pt; color:#0f766e;">✏️ 재고 수량 수정</h3>
+        <div id="wsAdjTitle" style="font-weight:800; margin-bottom:8px;"></div>
+        <div id="wsAdjInfo" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:8px 10px; line-height:1.7; margin-bottom:10px;"></div>
+        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:8px;">
+          <span style="font-weight:700;">새 실재고 (센 수량)</span>
+          <input type="number" id="wsAdjBox" min="0" step="1" oninput="onWsAdjustInput()" style="width:80px; padding:4px 6px; border:1px solid #cbd5e1; border-radius:5px; text-align:right;"> 상자
+          <input type="number" id="wsAdjUnit" min="0" step="1" oninput="onWsAdjustInput()" style="width:80px; padding:4px 6px; border:1px solid #cbd5e1; border-radius:5px; text-align:right;"> 개
+        </div>
+        <input type="text" id="wsAdjReason" maxlength="100" placeholder="사유 (예: 실사, 파손)" style="width:100%; box-sizing:border-box; padding:4px 8px; border:1px solid #cbd5e1; border-radius:5px; margin-bottom:8px;">
+        <div id="wsAdjStatus" style="min-height:1.3em; font-weight:700; color:#475569;"></div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+          <button type="button" onclick="closeWsAdjustDialog()" style="padding:6px 14px; background:#e2e8f0; border:none; border-radius:6px; font-weight:700; cursor:pointer;">닫기</button>
+          <button type="button" id="wsAdjSave" onclick="saveWsAdjust()" style="padding:6px 14px; background:#0f766e; color:#ffffff; border:none; border-radius:6px; font-weight:700; cursor:pointer;">재고조정 저장</button>
+        </div>
       </div>
     </div>
   </div>

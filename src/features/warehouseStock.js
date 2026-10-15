@@ -8,11 +8,18 @@
  * 옵션: 0 재고 포함(화면에서 거름), 숨김(비활성) 품목 포함(서버 조회 조건이라 바꾸면 다시 불러온다),
  * 제조사 필터(화면에서 거름, 제조사가 없는 품목은 '(미지정)').
  * 창고를 '전체'로 고르면 창고마다 열을 하나씩 두고 합계를 붙인다. 수량은 장부상 실재고(상자 + 낱개)다.
+ *
+ * 수정 모드:
+ *   - 제조사: 목록에서 고르거나 새로 추가한다(setItemsBrand / createManufacturer). 자유 입력은 받지 않는다.
+ *   - 수량: 창고를 하나 골랐을 때만. 퀵 재고조정과 같은 치환 전표(ADJUST)로 남는다(adjustWarehouseStock).
+ *     보류 물건도 같은 선반에 보관하므로 입력값은 실재고(센 수량)다. 출고 보류·입고 예정 발주보다 적게는
+ *     저장할 수 없고, 화면을 연 뒤 재고가 바뀌었으면 서버가 거절한다.
  * HTML 속성이 호출하는 함수만 파일 하단에서 window에 노출한다.
  */
 
-let wsData = null; // { warehouses, items, includeInactive }
+let wsData = null; // { warehouses, items, brands, includeInactive }
 let wsLoading = false;
+let wsAdjust = null; // 수량 수정 대화상자 대상 { item, wh, cur, reserved }
 
 function wsQty(box, unit) {
   if (!box && !unit) return '0';
@@ -32,6 +39,7 @@ function wsOptions() {
     includeZero: !!(document.getElementById('wsIncludeZero') || {}).checked,
     includeInactive: !!(document.getElementById('wsIncludeInactive') || {}).checked,
     mfg: (document.getElementById('wsMfg') || {}).value || '',
+    editMode: !!(document.getElementById('wsEditMode') || {}).checked,
     q: String((document.getElementById('wsSearch') || {}).value || '').trim().toUpperCase()
   };
 }
@@ -65,9 +73,10 @@ function loadWarehouseStock() {
     mode: 'latest',
     onSuccess: res => {
       wsLoading = false;
-      wsData = { warehouses: (res && res.warehouses) || [], items: (res && res.items) || [], includeInactive };
+      wsData = { warehouses: (res && res.warehouses) || [], items: (res && res.items) || [], brands: (res && res.brands) || [], includeInactive };
       wsFillWarehouseSelect();
-      wsSetStatus(`조회 시각 ${new Date().toLocaleString()} · 장부상 실재고(상자+낱개)`);
+      wsData.loadedStatus = `조회 시각 ${new Date().toLocaleString()} · 장부상 실재고(상자+낱개)`;
+      wsSetStatus(wsData.loadedStatus);
       renderWarehouseStock();
     },
     onError: err => {
@@ -160,7 +169,30 @@ function renderWarehouseStock() {
     tableEl.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-size:9pt;">조건에 맞는 품목이 없습니다.</div>';
     return;
   }
+  const { editMode } = wsOptions();
+  if (editMode !== wsData.lastEditMode) {
+    wsData.lastEditMode = editMode;
+    wsSetStatus(!editMode ? wsData.loadedStatus : t.single
+      ? '✏️ 수정 모드 · 제조사는 목록에서 고르고, 수량은 ✏️로 재고조정 전표를 남깁니다'
+      : '✏️ 수정 모드 · 제조사는 목록에서 고르세요. 수량을 고치려면 창고를 하나 고르세요');
+  }
+  tableEl.innerHTML = wsTableHtml(t, editMode);
+}
 
+/** 예약 낱개(출고 보류 + 입고 예정 발주) */
+function wsReserved(item, wh) {
+  const r = (item.reserved && item.reserved[wh]) || { held: 0, committed: 0 };
+  return { held: r.held || 0, committed: r.committed || 0, total: (r.held || 0) + (r.committed || 0) };
+}
+
+function wsUnitsLabel(units, pack) {
+  const s = wsSplit(units, pack);
+  if (pack <= 1 || (s.box === 0 && s.unit !== 0)) return `${units}개`;
+  return `${s.box}상자${s.unit ? ` ${s.unit}개` : ''}`;
+}
+
+/** 표 HTML. editable = 수정 모드(제조사 선택·수량 수정 버튼). 인쇄는 항상 editable=false. */
+function wsTableHtml(t, editable) {
   const th = (label, right) => `<th style="padding:6px 8px; text-align:${right ? 'right' : 'left'}; white-space:nowrap; position:sticky; top:0; background:#f1f5f9; border-bottom:1.5px solid #cbd5e1;">${escapeHtml(label)}</th>`;
   const td = (html, right, extra = '') => `<td style="padding:4px 8px; text-align:${right ? 'right' : 'left'}; white-space:nowrap;${extra}">${html}</td>`;
   const qtyCell = (box, unit) => {
@@ -170,7 +202,15 @@ function renderWarehouseStock() {
   const numCell = n => (n
     ? td(n.toLocaleString(), true, n < 0 ? ' color:#dc2626; font-weight:700;' : '')
     : td('<span style="color:#cbd5e1;">0</span>', true));
-  const mfgCell = r => td(r.manufacturer ? escapeHtml(r.manufacturer) : '<span style="color:#cbd5e1;">-</span>');
+  const brandOptions = editable
+    ? (wsData.brands || []).map(b => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`).join('')
+    : '';
+  const mfgCell = r => {
+    if (!editable) return td(r.manufacturer ? escapeHtml(r.manufacturer) : '<span style="color:#cbd5e1;">-</span>');
+    const opts = r.brandId ? brandOptions.replace(`value="${escapeHtml(r.brandId)}"`, `value="${escapeHtml(r.brandId)}" selected`) : brandOptions;
+    return td(`<select data-ws-item="${escapeHtml(r.itemId)}" data-prev="${escapeHtml(r.brandId || '')}" onchange="onWsBrandChange(this)" style="padding:2px 4px; border:1px solid #fcd34d; border-radius:4px; font-size:8pt; max-width:150px;">` +
+      `<option value="">(미지정)</option>${opts}<option value="__NEW__">＋ 새 제조사…</option></select>`);
+  };
   const nameCell = r => td(`${escapeHtml(r.name)}${r.isActive ? '' : ' <span style="font-size:7pt; background:#e2e8f0; color:#475569; padding:0 4px; border-radius:3px;">숨김</span>'}`);
 
   let head;
@@ -178,13 +218,22 @@ function renderWarehouseStock() {
   let foot;
   if (t.single) {
     const w = t.whList[0];
-    head = th('품명') + th('컬러') + th('제조사') + th('입수', true) + th('상자', true) + th('낱개', true) + th('총 낱개', true);
+    head = th('품명') + th('컬러') + th('제조사') + th('입수', true) + th('상자', true) + th('낱개', true) + th('총 낱개', true) +
+      (editable ? th('보류·발주 예약', true) + th('수정') : '');
     body = t.rows.map(r => {
       const c = r.cells[w.code];
-      return `<tr style="border-bottom:1px solid #f1f5f9;">${nameCell(r)}${td(escapeHtml(r.color))}${mfgCell(r)}${td(r.pack, true)}${numCell(c.box)}${numCell(c.unit)}${td(r.sumUnits.toLocaleString(), true)}</tr>`;
+      let extra = '';
+      if (editable) {
+        const rs = wsReserved(r, w.code);
+        extra = (rs.total
+          ? td(escapeHtml(wsUnitsLabel(rs.total, r.pack)), true, ' color:#b45309; font-weight:700;')
+          : td('<span style="color:#cbd5e1;">-</span>', true)) +
+          td(`<button type="button" onclick="openWsAdjustDialog('${escapeHtml(r.itemId)}')" style="padding:1px 8px; background:#0f766e; color:#ffffff; border:none; border-radius:4px; font-size:8pt; cursor:pointer;">✏️ 수량</button>`);
+      }
+      return `<tr style="border-bottom:1px solid #f1f5f9;">${nameCell(r)}${td(escapeHtml(r.color))}${mfgCell(r)}${td(r.pack, true)}${numCell(c.box)}${numCell(c.unit)}${td(r.sumUnits.toLocaleString(), true)}${extra}</tr>`;
     }).join('');
     const tw = t.totalsByWh[w.code];
-    foot = `<tr style="background:#f8fafc; font-weight:800;">${td('합계')}${td('')}${td('')}${td('')}${td(tw.box.toLocaleString(), true)}${td(tw.unit.toLocaleString(), true)}${td('')}</tr>`;
+    foot = `<tr style="background:#f8fafc; font-weight:800;">${td('합계')}${td('')}${td('')}${td('')}${td(tw.box.toLocaleString(), true)}${td(tw.unit.toLocaleString(), true)}${td('')}${editable ? td('') + td('') : ''}</tr>`;
   } else {
     head = th('품명') + th('컬러') + th('제조사') + th('입수', true) + t.whList.map(w => th(w.code, true)).join('') + th('합계', true);
     body = t.rows.map(r => `<tr style="border-bottom:1px solid #f1f5f9;">${nameCell(r)}${td(escapeHtml(r.color))}${mfgCell(r)}${td(r.pack, true)}` +
@@ -194,7 +243,7 @@ function renderWarehouseStock() {
       t.whList.map(w => td(escapeHtml(wsQty(t.totalsByWh[w.code].box, t.totalsByWh[w.code].unit)), true)).join('') +
       td(escapeHtml(wsQty(t.totalBox, t.totalUnit)), true) + '</tr>';
   }
-  tableEl.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:8.5pt;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table>`;
+  return `<table style="width:100%; border-collapse:collapse; font-size:8.5pt;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table>`;
 }
 
 function wsOptionLabel() {
@@ -214,7 +263,6 @@ function printWarehouseStock() {
     alert('인쇄할 재고가 없습니다.');
     return;
   }
-  const tableEl = document.getElementById('wsTable');
   const win = window.open('', '_blank');
   if (!win) {
     alert('팝업이 차단되어 인쇄 창을 열 수 없습니다. 브라우저에서 팝업을 허용해 주세요.');
@@ -236,7 +284,7 @@ function printWarehouseStock() {
 </style></head><body>
 <h1>📦 창고별 현재 재고</h1>
 <div class="meta">${escapeHtml(wsOptionLabel())}<br>${escapeHtml(summary)} · 출력 ${escapeHtml(new Date().toLocaleString())}</div>
-${tableEl ? tableEl.innerHTML : ''}
+${wsTableHtml(t, false)}
 </body></html>`);
   win.document.close();
   win.focus();
@@ -285,6 +333,189 @@ async function downloadWarehouseStockXlsx() {
   XLSX.writeFile(wb, `창고별재고_${wh || '전체'}_${stamp}.xlsx`);
 }
 
+/* ───────── 수정 모드: 제조사 ───────── */
+
+function onWsBrandChange(sel) {
+  const item = wsData && wsData.items.find(it => it.itemId === sel.dataset.wsItem);
+  if (!item) return;
+
+  if (sel.value !== '__NEW__') {
+    const brand = (wsData.brands || []).find(b => b.id === sel.value);
+    wsApplyBrand(sel, item, sel.value, brand ? brand.name : '');
+    return;
+  }
+
+  const name = String(prompt('새 제조사 이름을 입력하세요') || '').trim();
+  if (!name) {
+    sel.value = sel.dataset.prev || '';
+    return;
+  }
+  // 대소문자만 다른 이름은 새로 만들지 않고 기존 제조사로 지정한다.
+  const dup = (wsData.brands || []).find(b => String(b.name).trim().toUpperCase() === name.toUpperCase());
+  if (dup) {
+    sel.value = dup.id;
+    wsApplyBrand(sel, item, dup.id, dup.name);
+    return;
+  }
+  sel.disabled = true;
+  callServer('createManufacturer', [name], {
+    key: 'wsCreateBrand',
+    onSuccess: res => {
+      if (!res || !res.id) {
+        sel.disabled = false;
+        sel.value = sel.dataset.prev || '';
+        alert('제조사는 추가되었지만 ID를 받지 못했습니다. 새로고침 후 목록에서 고르세요.');
+        return;
+      }
+      if (!(wsData.brands || []).some(b => b.id === res.id)) {
+        wsData.brands = [...(wsData.brands || []), { id: res.id, name: res.name || name }]
+          .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      }
+      renderWarehouseStock(); // 모든 행의 목록에 새 제조사를 넣는다
+      const fresh = document.querySelector(`#wsTable select[data-ws-item="${CSS.escape(item.itemId)}"]`) || sel;
+      fresh.value = res.id;
+      wsApplyBrand(fresh, item, res.id, res.name || name);
+    },
+    onError: err => {
+      sel.disabled = false;
+      sel.value = sel.dataset.prev || '';
+      alert('제조사를 추가하지 못했습니다: ' + ((err && err.message) || err));
+    }
+  });
+}
+
+function wsApplyBrand(sel, item, brandId, brandName) {
+  sel.disabled = true;
+  callServer('setItemsBrand', [{ itemIds: [item.itemId], brandId: brandId || null }], {
+    key: 'wsSetBrand_' + item.itemId,
+    onSuccess: () => {
+      item.brandId = brandId || '';
+      item.manufacturer = brandName || '';
+      sel.dataset.prev = item.brandId;
+      sel.disabled = false;
+      wsSetStatus(`✅ ${item.name} (${item.color}) 제조사 → ${brandName || '(미지정)'}`);
+      wsFillWarehouseSelect(); // 제조사 필터 목록 갱신
+    },
+    onError: err => {
+      sel.disabled = false;
+      sel.value = sel.dataset.prev || '';
+      alert('제조사를 바꾸지 못했습니다: ' + ((err && err.message) || err));
+    }
+  });
+}
+
+/* ───────── 수정 모드: 수량 (재고조정 전표) ───────── */
+
+function openWsAdjustDialog(itemId) {
+  const { wh } = wsOptions();
+  const item = wsData && wsData.items.find(it => it.itemId === itemId);
+  if (!item || !wh) return;
+  const cur = item.stocks[wh] || { box: 0, unit: 0 };
+  const curUnits = cur.box * item.pack + cur.unit;
+  const rs = wsReserved(item, wh);
+  wsAdjust = { item, wh, cur, curUnits, reserved: rs };
+
+  document.getElementById('wsAdjTitle').textContent = `${item.name} (${item.color}) · 입수 ${item.pack} · 창고 ${wh}`;
+  const line = (label, units, color) =>
+    `<div style="display:flex; justify-content:space-between;"><span>${label}</span><b style="color:${color || '#0f172a'};">${escapeHtml(wsUnitsLabel(units, item.pack))}</b></div>`;
+  document.getElementById('wsAdjInfo').innerHTML =
+    line('현재 실재고 (장부)', curUnits) +
+    (rs.held ? line('− 출고 보류', rs.held, '#b45309') : '') +
+    (rs.committed ? line('− MAIN 입고 예정 발주', rs.committed, '#b45309') : '') +
+    line('= 가용재고', curUnits - rs.total, '#0f766e') +
+    (rs.total
+      ? `<div style="margin-top:6px; color:#b45309; font-weight:700;">⚠️ 보류·발주가 ${escapeHtml(wsUnitsLabel(rs.total, item.pack))} 걸려 있어 그보다 적게는 저장할 수 없습니다. 보류 물건도 선반에 있으니 함께 센 수량을 넣으세요.</div>`
+      : '<div style="margin-top:6px; color:#64748b;">걸려 있는 보류·발주가 없습니다.</div>');
+
+  const boxEl = document.getElementById('wsAdjBox');
+  const unitEl = document.getElementById('wsAdjUnit');
+  boxEl.value = cur.box;
+  unitEl.value = cur.unit;
+  boxEl.disabled = item.pack <= 1;
+  if (item.pack <= 1) { boxEl.value = 0; unitEl.value = curUnits; }
+  document.getElementById('wsAdjReason').value = '';
+  document.getElementById('wsAdjustDialog').style.display = 'flex';
+  onWsAdjustInput();
+  setTimeout(() => (item.pack > 1 ? boxEl : unitEl).focus(), 0);
+}
+
+function closeWsAdjustDialog() {
+  document.getElementById('wsAdjustDialog').style.display = 'none';
+  wsAdjust = null;
+}
+
+function wsAdjustTarget() {
+  const int = id => Math.max(0, Math.trunc(Number((document.getElementById(id) || {}).value) || 0));
+  const box = int('wsAdjBox');
+  const unit = int('wsAdjUnit');
+  return { box, unit, units: box * wsAdjust.item.pack + unit };
+}
+
+function onWsAdjustInput() {
+  if (!wsAdjust) return;
+  const t = wsAdjustTarget();
+  const { item, curUnits, reserved } = wsAdjust;
+  const status = document.getElementById('wsAdjStatus');
+  const btn = document.getElementById('wsAdjSave');
+  let ok = true;
+  if (t.units < reserved.total) {
+    ok = false;
+    status.style.color = '#b91c1c';
+    status.textContent = `보류·발주(${wsUnitsLabel(reserved.total, item.pack)})보다 적게 저장할 수 없습니다. 먼저 보류·발주를 줄이세요.`;
+  } else if (t.units === curUnits) {
+    ok = false;
+    status.style.color = '#64748b';
+    status.textContent = '현재 재고와 같습니다.';
+  } else {
+    const d = t.units - curUnits;
+    status.style.color = '#475569';
+    status.textContent = `${wsUnitsLabel(curUnits, item.pack)} → ${wsUnitsLabel(t.units, item.pack)} ` +
+      `(${d > 0 ? '+' : '−'}${wsUnitsLabel(Math.abs(d), item.pack)}) · 가용 ${wsUnitsLabel(t.units - reserved.total, item.pack)}`;
+  }
+  btn.disabled = !ok;
+  btn.style.opacity = ok ? '1' : '0.5';
+}
+
+function saveWsAdjust() {
+  if (!wsAdjust) return;
+  const { item, wh, cur, curUnits, reserved } = wsAdjust;
+  const t = wsAdjustTarget();
+  if (t.units < reserved.total || t.units === curUnits) return;
+  const reason = document.getElementById('wsAdjReason').value.trim();
+  if (!confirm(`${wh} 창고 ${item.name} (${item.color}) 재고를\n${wsUnitsLabel(curUnits, item.pack)} → ${wsUnitsLabel(t.units, item.pack)}로 조정합니다.\n재고조정 전표가 남습니다. 진행할까요?`)) return;
+
+  const btn = document.getElementById('wsAdjSave');
+  const status = document.getElementById('wsAdjStatus');
+  btn.disabled = true;
+  status.style.color = '#475569';
+  status.textContent = '⏳ 저장 중...';
+  // 상자·낱개를 입수로 정리해서 보낸다(예: 낱개 칸에 50, 입수 48 → 1상자 2개).
+  const target = wsSplit(t.units, item.pack);
+  callServer('adjustWarehouseStock', [{ itemId: item.itemId, warehouse: wh, expected: cur, target, reason }], {
+    key: 'adjustWarehouseStock',
+    timeout: 60000,
+    onSuccess: res => {
+      item.stocks[wh] = { box: Number(res && res.box_qty) || 0, unit: Number(res && res.unit_qty) || 0 };
+      closeWsAdjustDialog();
+      renderWarehouseStock();
+      wsSetStatus(`✅ ${item.name} (${item.color}) ${wh} 재고 ${wsUnitsLabel(t.units, item.pack)} · 재고조정 전표 ${(res && res.invoice_no) || ''}`);
+    },
+    onLateSuccess: () => {
+      alert('응답이 늦게 도착했지만 저장되었을 수 있습니다. 다시 누르지 말고 새로고침해서 확인하세요.');
+    },
+    onError: err => {
+      btn.disabled = false;
+      status.style.color = '#b91c1c';
+      status.textContent = '저장 실패: ' + ((err && err.message) || err);
+    }
+  });
+}
+
+window.onWsBrandChange = onWsBrandChange;
+window.openWsAdjustDialog = openWsAdjustDialog;
+window.closeWsAdjustDialog = closeWsAdjustDialog;
+window.onWsAdjustInput = onWsAdjustInput;
+window.saveWsAdjust = saveWsAdjust;
 window.openWarehouseStockModal = openWarehouseStockModal;
 window.closeWarehouseStockModal = closeWarehouseStockModal;
 window.loadWarehouseStock = loadWarehouseStock;
