@@ -2518,6 +2518,60 @@ export const serverMethods = {
   },
 
   /**
+   * 18-2. 재고 분석용 현재 재고 스냅샷 (getStockSnapshot)
+   * 활성 품목별: 메인 실재고·서브창고 합계(낱개 단위), 메인 안전재고(상자), 이동중(상자), 메인 출고 보류(낱개).
+   * 스모크테스트 창고는 뺀다. 판매 속도는 기간 보고서의 출고 전표로 화면에서 계산한다.
+   */
+  async getStockSnapshot() {
+    const [items, stocks, pendingOrders, holdRes] = await Promise.all([
+      fetchAllRows(() => supabase.from('items').select('id, item_name, color, box_packaging_qty, created_at').eq('is_active', true)),
+      fetchAllRows(() => supabase.from('inventory_stocks').select('id, item_id, warehouse_code, box_qty, unit_qty, safe_stock_boxes')),
+      fetchAllRows(() =>
+        supabase.from('pending_orders').select('id, item_id, box_qty').eq('to_warehouse', 'MAIN').in('status', ['PENDING', 'IN_TRANSIT'])
+      ),
+      supabase.rpc('rpc_outbound_hold_reservations')
+    ])
+    if (holdRes.error) throw new Error(holdRes.error.message || '출고 보류 예약을 불러오지 못했습니다.')
+
+    const byItem = new Map(items.map(i => [i.id, {
+      itemId: i.id,
+      name: i.item_name,
+      color: i.color || 'SURTIDO',
+      pack: Math.max(1, Number(i.box_packaging_qty || 1)),
+      createdAt: i.created_at || null,
+      mainUnits: 0,
+      subUnits: 0,
+      safeBoxes: 0,
+      inTransitBoxes: 0,
+      heldUnits: 0
+    }]))
+
+    stocks.forEach(st => {
+      const it = byItem.get(st.item_id)
+      if (!it) return
+      const wh = String(st.warehouse_code || '').toUpperCase().trim()
+      if (wh === 'SMOKETEST') return
+      const units = Number(st.box_qty || 0) * it.pack + Number(st.unit_qty || 0)
+      if (wh === 'MAIN') {
+        it.mainUnits += units
+        it.safeBoxes = Number(st.safe_stock_boxes || 0)
+      } else {
+        it.subUnits += units
+      }
+    })
+    pendingOrders.forEach(po => {
+      const it = byItem.get(po.item_id)
+      if (it) it.inTransitBoxes += Number(po.box_qty || 0)
+    })
+    ;(holdRes.data || []).forEach(h => {
+      const it = byItem.get(h.item_id)
+      if (it && String(h.warehouse || '').toUpperCase().trim() === 'MAIN') it.heldUnits += Number(h.units || 0)
+    })
+
+    return { success: true, items: Array.from(byItem.values()) }
+  },
+
+  /**
    * 19. 시스템 종합 설정 불러오기 및 저장
    */
   async getSystemSettings() {

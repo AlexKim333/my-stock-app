@@ -16640,6 +16640,9 @@ if (document.readyState === 'loading') {
         <div id="prSummary" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px;"></div>
         <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px;">
           <div id="prTabs" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
+          <span id="prLeadWrap" style="display:none; align-items:center; gap:4px; font-size:8pt; color:#475569;" title="권장 안전재고 = 일평균 출고 × 이 일수 (발주부터 입고까지 걸리는 기간 + 여유)">
+            보충 기간 <input type="number" id="prLeadDays" value="14" min="1" max="365" oninput="onPeriodReportFilterChange()" style="width:52px; padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"> 일
+          </span>
           <div id="prSearchWrap" style="display:none; margin-left:auto;">
             <input type="text" id="prSearch" oninput="onPeriodReportFilterChange()" placeholder="🔍 품명 / 컬러 / 거래처 검색" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; width:200px; max-width:100%;">
           </div>
