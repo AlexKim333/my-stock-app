@@ -447,6 +447,115 @@ async function main() {
     assertEqual(sub.box_qty, 0, `${TEST_WAREHOUSE_CODE} 박스재고`)
   })
 
+  // 센트로 구역 줄별 출고창고: 한 출고 전표에 MAIN과 같은 구역 서브창고(SMOKETEST도 CENTRO 구역) 물건이 섞인다.
+  // 수정·반품·보류도 줄마다 자기 창고로 처리돼야 한다. 수정 전표는 메모가 '[전표수정]'으로 바뀌어 정리 스크립트가
+  // 못 지우므로, 마지막에 반품·출고 전표를 빈 수정으로 지워 행을 남기지 않는다.
+  const readBoth = async () => ({
+    main: (await readStock(db, itemId, 'MAIN')).box_qty,
+    sub: (await readStock(db, itemId, TEST_WAREHOUSE_CODE)).box_qty
+  })
+  const assertBoth = async (main, sub, label) => {
+    const now = await readBoth()
+    assertEqual(now.main, main, `${label} MAIN 박스재고`)
+    assertEqual(now.sub, sub, `${label} ${TEST_WAREHOUSE_CODE} 박스재고`)
+  }
+  const line = (warehouse, boxQty) => ({ item_id: itemId, box_qty: boxQty, unit_qty: 0, ...(warehouse ? { warehouse } : {}) })
+  const editInvoice = (invoice, txType, records) => db.rpc('rpc_update_transaction_records', {
+    p_invoice_no: invoice,
+    p_tx_type: txType,
+    p_new_records: records.map(r => ({ ...r, partner_name: '' })),
+    p_admin: MEMBER_NAME,
+    p_expected_signature: null
+  }).then(({ data, error }) => { if (error) throw error; return data })
+
+  await step(`TEST 5-Z1: 입고 +5상자 → MAIN, +5상자 → ${TEST_WAREHOUSE_CODE} (줄별 출고창고 준비)`, async () => {
+    await processTx(db, { txType: 'INBOUND', warehouse: 'MAIN', items: [line(null, 5)] })
+    await processTx(db, { txType: 'INBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [line(null, 5)] })
+    await assertBoth(5, 5, '준비 후')
+  })
+
+  let mixedInvoice
+  await step(`TEST 5-Z2: 혼합 출고 한 전표 — MAIN 3상자 + ${TEST_WAREHOUSE_CODE} 2상자`, async () => {
+    const res = await processTx(db, { txType: 'OUTBOUND', warehouse: 'MAIN', items: [line('MAIN', 3), line(TEST_WAREHOUSE_CODE, 2)] })
+    mixedInvoice = res.invoice_no
+    await assertBoth(2, 3, '혼합 출고 후')
+    const { data: rows, error } = await db.from('stock_transactions')
+      .select('warehouse_code, box_qty').eq('invoice_no', mixedInvoice).eq('transaction_type', 'OUTBOUND')
+    if (error) throw error
+    const byWh = Object.fromEntries((rows || []).map(r => [r.warehouse_code, r.box_qty]))
+    assertEqual(JSON.stringify(byWh), JSON.stringify({ MAIN: 3, [TEST_WAREHOUSE_CODE]: 2 }), '전표 행별 창고')
+  })
+
+  await step('TEST 5-Z3: 다른 구역 창고(PANTACO) 줄은 반드시 실패해야 함', async () => {
+    await expectFailure(
+      () => processTx(db, { txType: 'OUTBOUND', warehouse: 'MAIN', items: [line('PANTACO', 1)] }),
+      /같은 구역/, '다른 구역 줄')
+    await assertBoth(2, 3, '실패한 시도 후')
+  })
+
+  await step(`TEST 5-Z4: 혼합 보류 — MAIN 1 + ${TEST_WAREHOUSE_CODE} 2상자 예약, ${TEST_WAREHOUSE_CODE} 2상자 출고는 반드시 실패해야 함`, async () => {
+    const { data, error } = await db.rpc('rpc_save_outbound_hold', {
+      p_replace: [],
+      p_warehouse: 'MAIN',
+      p_partner: '스모크테스트',
+      p_admin: MEMBER_NAME,
+      p_hold_date: '',
+      p_created_label: '스모크테스트',
+      p_records: [
+        { itemName: TEST_ITEM_NAME, color: TEST_ITEM_COLOR, boxContent: TEST_ITEM_PACK, boxQty: -1, individualQty: 0, sourceWarehouse: 'MAIN' },
+        { itemName: TEST_ITEM_NAME, color: TEST_ITEM_COLOR, boxContent: TEST_ITEM_PACK, boxQty: -2, individualQty: 0, sourceWarehouse: TEST_WAREHOUSE_CODE }
+      ],
+      p_items: [line('MAIN', 1), line(TEST_WAREHOUSE_CODE, 2)],
+      p_idempotency_key: randomUUID()
+    })
+    if (error) throw error
+    assertEqual((await listSmokeHolds(db)).length, 1, '테스트 품목 보류 건수')
+    const { data: res, error: resErr } = await db.rpc('rpc_outbound_hold_reservations')
+    if (resErr) throw resErr
+    const mine = (res || []).filter(r => r.item_id === itemId)
+    const held = Object.fromEntries(mine.map(r => [r.warehouse, Number(r.units)]))
+    assertEqual(held.MAIN, 1, 'MAIN 예약')
+    assertEqual(held[TEST_WAREHOUSE_CODE], 2, `${TEST_WAREHOUSE_CODE} 예약`)
+    await expectFailure(
+      () => processTx(db, { txType: 'OUTBOUND', warehouse: 'MAIN', items: [line(TEST_WAREHOUSE_CODE, 2)] }),
+      /가용재고 부족/, '예약분 출고')
+    const { error: delErr } = await db.rpc('rpc_delete_outbound_hold', { p_id: data.id, p_version: data.version })
+    if (delErr) throw delErr
+    assertEqual((await listSmokeHolds(db)).length, 0, '테스트 품목 보류 건수(삭제 후)')
+  })
+
+  await step(`TEST 5-Z5: 혼합 전표 수정 — ${TEST_WAREHOUSE_CODE} 1 + MAIN 1상자로 (각 줄 자기 창고로 원복·재반영)`, async () => {
+    await editInvoice(mixedInvoice, 'OUTBOUND', [line(TEST_WAREHOUSE_CODE, 1), line('MAIN', 1)])
+    await assertBoth(4, 4, '수정 후')
+  })
+
+  let mixedReturn
+  await step(`TEST 5-Z6: 줄별 반품 — ${TEST_WAREHOUSE_CODE}로 1상자 + 창고 미지정 1상자(두 창고에서 나간 품목이라 MAIN)`, async () => {
+    const { data: rt, error: rtErr } = await db.rpc('rpc_invoice_returnable', { p_invoice_no: mixedInvoice })
+    if (rtErr) throw rtErr
+    const outWhs = ((rt.lines || []).find(l => l.item_id === itemId) || {}).out_warehouses || []
+    assertEqual(outWhs.map(w => w.warehouse).sort().join(','), ['MAIN', TEST_WAREHOUSE_CODE].sort().join(','), '반품 가능 목록의 출고창고')
+    const { data, error } = await db.rpc('rpc_process_return', {
+      p_orig_invoice: mixedInvoice,
+      p_warehouse: 'MAIN',
+      p_memo: '스모크테스트 자동 실행 - 혼합 반품',
+      p_items: [line(TEST_WAREHOUSE_CODE, 1), line(null, 1)],
+      p_idempotency_key: randomUUID()
+    })
+    if (error) throw error
+    mixedReturn = data.invoice_no
+    await assertBoth(5, 5, '반품 후')
+  })
+
+  await step('TEST 5-Z7: 정리 — 반품·혼합 전표 삭제 후 혼합 출고로 0상자 복귀', async () => {
+    await editInvoice(mixedReturn, 'INBOUND', [])
+    await assertBoth(4, 4, '반품 전표 삭제 후')
+    await editInvoice(mixedInvoice, 'OUTBOUND', [])
+    await assertBoth(5, 5, '혼합 전표 삭제 후')
+    await processTx(db, { txType: 'OUTBOUND', warehouse: 'MAIN', items: [line('MAIN', 5), line(TEST_WAREHOUSE_CODE, 5)] })
+    await assertBoth(0, 0, '정리 후')
+  })
+
   let adjustInvoice
   await step('TEST 6: 재고조정(ADJUST) — MAIN을 7상자로 치환', async () => {
     const { data, error } = await db.rpc('rpc_adjust_stock', {

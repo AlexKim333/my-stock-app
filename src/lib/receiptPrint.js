@@ -50,7 +50,12 @@ export function printReceipt(records, type, selectedDate, admin, invoiceNumber, 
   const pages = Math.ceil(records.length / rowsPerPage)
   const locationValue = records.length > 0 ? records[0].location : '미지정'
   const whSelect = document.getElementById('warehouseSelect')
-  const selectedWh = (route && route.warehouse)
+  // 센트로 구역 혼합 출고(줄마다 출고창고가 다름)는 영수증을 MAIN에서 쓰므로 ORIGEN은 MAIN으로 적는다.
+  // 줄별 창고는 영수증에 적지 않고 작업지시서(피킹 목록)에만 적는다.
+  const lineWhs = [...new Set(records.map(r => String(r.warehouse || '').toUpperCase()).filter(Boolean))]
+  const mixedWh = lineWhs.length > 1 ? 'MAIN' : null
+  const selectedWh = mixedWh
+    || (route && route.warehouse)
     || ((records.length > 0 && records[0].warehouse) ? records[0].warehouse : (whSelect ? whSelect.value : 'MAIN'))
     || 'MAIN'
   const isBranchTarget = (route && route.txType)

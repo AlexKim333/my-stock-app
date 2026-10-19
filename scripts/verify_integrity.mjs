@@ -25,6 +25,7 @@ const jsFiles = [
   'src/lib/supabase.js',
   'src/lib/stockSync.js',
   'src/lib/receiptPrint.js',
+  'src/lib/zoneAllocation.js',
   'api/ai-query.js',
   'api/ocr.js'
 ];

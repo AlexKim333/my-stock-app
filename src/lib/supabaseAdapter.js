@@ -511,7 +511,7 @@ export const serverMethods = {
   async getWarehouses() {
     const { data, error } = await supabase
       .from('warehouses')
-      .select('code, name, is_hub, sort_order, truck_capacity_boxes, is_active')
+      .select('*')
       .eq('is_active', true)
       .order('sort_order', { ascending: true })
 
@@ -908,6 +908,9 @@ export const serverMethods = {
     const itemsPayload = []
     const updatedItems = []
     const unresolved = []
+    const lineItem = (itemId, row) => (row.warehouse
+      ? { item_id: itemId, box_qty: row.boxQty, unit_qty: row.unitQty, warehouse: row.warehouse }
+      : { item_id: itemId, box_qty: row.boxQty, unit_qty: row.unitQty })
 
     for (const record of tableData) {
       const name = String(record.itemName || '').trim()
@@ -921,10 +924,12 @@ export const serverMethods = {
         key,
         boxQty: Math.abs(Number(record.boxQty || 0)),
         unitQty: Math.abs(Number(record.individualQty || 0)),
+        // 출고는 줄마다 출고창고를 보낸다(센트로 구역 혼합 출고). 서버가 같은 구역인지 검사한다.
+        warehouse: mode === 'out' ? String(record.sourceWarehouse || record.warehouse || sourceWh).toUpperCase().trim() : null,
         itemId: itemIdCache.get(key) || null
       }
       if (row.itemId) {
-        itemsPayload.push({ item_id: row.itemId, box_qty: row.boxQty, unit_qty: row.unitQty })
+        itemsPayload.push(lineItem(row.itemId, row))
         updatedItems.push({ name, color, boxContent, key })
       } else {
         unresolved.push(row)
@@ -950,7 +955,7 @@ export const serverMethods = {
         const itemId = foundMap.get(row.key)
         if (itemId) {
           itemIdCache.set(row.key, itemId)
-          itemsPayload.push({ item_id: itemId, box_qty: row.boxQty, unit_qty: row.unitQty })
+          itemsPayload.push(lineItem(itemId, row))
           updatedItems.push({ name: row.name, color: row.color, boxContent: row.boxContent, key: row.key })
         } else {
           stillMissing.push(row)
@@ -981,7 +986,7 @@ export const serverMethods = {
             throw new Error(`등록되지 않은 상품입니다: ${row.name} (${row.color})`)
           }
           itemIdCache.set(row.key, itemId)
-          itemsPayload.push({ item_id: itemId, box_qty: row.boxQty, unit_qty: row.unitQty })
+          itemsPayload.push(lineItem(itemId, row))
           updatedItems.push({ name: row.name, color: row.color, boxContent: row.boxContent, key: row.key })
         }
       }
@@ -1267,7 +1272,9 @@ export const serverMethods = {
         box_content: Number(rec.boxContent || rec.box_packaging_qty || 1),
         box_qty: toQty(rec.boxQty ?? rec.box_qty),
         unit_qty: toQty(rec.individualQty ?? rec.unit_qty),
-        partner_name: String(rec.location || rec.partner_name || '').trim()
+        partner_name: String(rec.location || rec.partner_name || '').trim(),
+        // 전표의 줄별 창고(불러온 행은 warehouse_code). 새로 추가한 행은 비워 두면 서버가 같은 품목의 기존 창고·전표 창고를 쓴다.
+        warehouse: rec.warehouse ? String(rec.warehouse).trim().toUpperCase() : null
       })
     }
 
@@ -1308,14 +1315,16 @@ export const serverMethods = {
 
   /**
    * 12-2. 반품 입고 — 원 출고 전표는 그대로 두고 반품일 기준의 새 입고 전표로 기록한다.
-   * items: [{ item_id, box_qty, unit_qty }]
+   * items: [{ item_id, box_qty, unit_qty, warehouse? }]
+   * 줄에 warehouse가 없으면 서버가 그 품목을 출고한 창고(한 곳일 때)로, 아니면 warehouse 인자로 반품받는다.
    */
   async processReturn(origInvoice, warehouse, memo, items) {
     const payload = (items || [])
       .map(it => ({
         item_id: it.item_id,
         box_qty: Math.max(0, Math.trunc(Number(it.box_qty || 0))),
-        unit_qty: Math.max(0, Math.trunc(Number(it.unit_qty || 0)))
+        unit_qty: Math.max(0, Math.trunc(Number(it.unit_qty || 0))),
+        ...(it.warehouse ? { warehouse: String(it.warehouse).toUpperCase().trim() } : {})
       }))
       .filter(it => it.item_id && (it.box_qty > 0 || it.unit_qty > 0))
     if (!payload.length) throw new Error('반품 수량을 입력하세요.')
@@ -2036,7 +2045,9 @@ export const serverMethods = {
         if (itemId) itemIdCache.set(key, itemId)
       }
       if (!itemId) throw new Error(`등록되지 않은 상품은 보류할 수 없습니다: ${name} (${color})`)
-      items.push({ item_id: itemId, box_qty: boxQty, unit_qty: unitQty })
+      // 줄별 출고창고로 예약한다(센트로 구역 혼합 보류). 줄에 창고가 없으면 보류의 출발창고.
+      const lineWh = String(r.sourceWarehouse || r.warehouse || wh).trim().toUpperCase() || wh
+      items.push({ item_id: itemId, box_qty: boxQty, unit_qty: unitQty, warehouse: lineWh })
     }
     if (items.length === 0) throw new Error('보류할 수량이 없습니다.')
 

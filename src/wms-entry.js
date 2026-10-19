@@ -2,6 +2,7 @@ import { installSupabaseBridge, preloadItemIdCache, askAiInventoryBot } from './
 import { supabase, WMS_AUTH_STORAGE_KEY, readWmsSessionToken } from './lib/supabase.js'
 import { initStockSync } from './lib/stockSync.js'
 import { printReceipt } from './lib/receiptPrint.js'
+import { allocateZoneUnits, unitsToBoxUnit } from './lib/zoneAllocation.js'
 import FlexSearch from 'flexsearch'
 
 // 0. ktk-wms-v2 동급 최강 FlexSearch 초고속 검색엔진 전역 등록
@@ -9,6 +10,9 @@ window.FlexSearch = FlexSearch
 window.askAiInventoryBot = askAiInventoryBot
 // 입출고증 인쇄 양식 (index.html · searchmodify.html 공용)
 window.printReceipt = printReceipt
+// 센트로 구역 출고창고 자동 배정 (index.html 출고입력)
+window.allocateZoneUnits = allocateZoneUnits
+window.unitsToBoxUnit = unitsToBoxUnit
 
 
 // 1. Supabase 브릿지 설치

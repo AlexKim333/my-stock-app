@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "verify": "node scripts/verify_integrity.mjs",
-    "test": "npm run verify && npm run test:ai && npm run test:ocr:fallback",
+    "test": "npm run verify && npm run test:ai && npm run test:ocr:fallback && npm run test:zone",
     "test:ai": "node scripts/test_ai_query_stock.mjs",
     "test:ocr": "node scripts/test_ocr.mjs",
     "test:ocr:fallback": "node scripts/test_ocr_fallback.mjs",
@@ -17,7 +17,8 @@
     "smoke:run": "node scripts/smoke_test.mjs",
     "smoke:clean": "node scripts/cleanup_smoke.mjs",
     "update-types": "npx supabase gen types typescript --project-id xfxmodlrczofwylyedjh > src/types/supabase.ts",
-    "sync-db": "npm run update-types"
+    "sync-db": "npm run update-types",
+    "test:zone": "node scripts/test_zone_allocation.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",

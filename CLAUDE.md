@@ -70,6 +70,8 @@ npm run smoke
 - 반품 입고(`rpc_process_return`: 원 출고 전표 유지, 초과 반품 거절, 반품된 원 전표 축소 거절)도 검증합니다(TEST 4-R1~4-R5).
   반품은 `transaction_type='INBOUND'` + `stock_transactions.return_of_invoice`(원 출고 전표번호)로 저장되므로,
   입고 합계를 내는 화면을 새로 만들면 `return_of_invoice`가 있는 행을 반품으로 따로 세세요.
+- 센트로 구역 줄별 출고창고(`warehouses.zone='CENTRO'`인 MAIN·서브창고가 한 출고 전표에 섞임: 혼합 출고, 다른 구역 거절,
+  혼합 보류, 혼합 전표 수정, 줄별 반품 창고)도 검증합니다(TEST 5-Z1~5-Z7). `SMOKETEST`도 이 검증을 위해 CENTRO 구역에 속합니다.
 - 창고별 재고 화면의 수량 수정(`rpc_adjust_stock_checked`: 출고 보류·입고 예정 발주 아래로 조정 거절, 화면 이후
   바뀐 재고 거절)도 검증합니다(TEST 5-H2a~5-H2c).
 - 재고는 0으로 돌아오지만 전표(`stock_transactions`)는 테스트 품목 이름으로 남습니다. `npm run smoke`는
