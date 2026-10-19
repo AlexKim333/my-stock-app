@@ -2,7 +2,7 @@
  * 창고별 현재 재고 출력 UI 컨트롤러 — 창고를 골라 현재 실재고를 보고, 인쇄하거나 엑셀로 내려받는다.
  * ---------------------------------------------------------------------------
  * index.html의 "📦 창고별 재고" 모달 전용 코드다. index.html에서만 로드되며 그 페이지의 인라인 전역에 의존한다:
- *   - callServer(fnName, args, opt) : supabaseAdapter 브릿지 호출 (getWarehouseStockList)
+ *   - callServer(fnName, args, opt) : supabaseAdapter 브릿지 호출 (getWarehouseStockReport)
  *   - escapeHtml(v)                 : HTML 이스케이프 헬퍼
  *
  * 옵션: 0 재고 포함(화면에서 거름), 숨김(비활성) 품목 포함(서버 조회 조건이라 바꾸면 다시 불러온다),
@@ -68,8 +68,8 @@ function loadWarehouseStock() {
   const { includeInactive } = wsOptions();
   wsLoading = true;
   wsSetStatus('⏳ 현재 재고를 불러오는 중...');
-  callServer('getWarehouseStockList', [includeInactive], {
-    key: 'getWarehouseStockList',
+  callServer('getWarehouseStockReport', [includeInactive], {
+    key: 'getWarehouseStockReport',
     mode: 'latest',
     onSuccess: res => {
       wsLoading = false;

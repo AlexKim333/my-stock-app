@@ -212,6 +212,48 @@ async function main() {
     }
   })
 
+  // 이전 등록: SMOKETEST는 신규 서브창고처럼 needs_item_registration이 켜져 있어, 품목별 이전 등록 전에는
+  // 그 창고에서 빼는 모든 경로(출고·이동·보류·전표 수정)가 거절된다. 정리 스크립트가 등록 기록을 지우므로 매 실행 처음엔 미등록이다.
+  const isRegistered = async () => {
+    const { data, error } = await db.rpc('rpc_list_warehouse_item_registrations')
+    if (error) throw error
+    return (data || []).some(r => r.item_id === itemId && r.warehouse === TEST_WAREHOUSE_CODE)
+  }
+  await step(`TEST 0-R1: 이전 등록 전 ${TEST_WAREHOUSE_CODE}발 이동은 반드시 실패해야 함`, async () => {
+    if (await isRegistered()) {
+      console.log('(이전 실행의 등록 기록이 남아 있어 건너뜀 — npm run smoke:clean으로 정리하면 다음 실행에서 검증)')
+      return
+    }
+    await expectFailure(
+      () => processTx(db, { txType: 'MOVE', warehouse: TEST_WAREHOUSE_CODE, targetWarehouse: 'MAIN', items: [{ item_id: itemId, box_qty: 1, unit_qty: 0 }] }),
+      /이전 등록/, '미등록 품목 이동')
+  })
+  await step(`TEST 0-R2: 이전 등록 — ${TEST_WAREHOUSE_CODE}에 0상자로 등록(입수 ${TEST_ITEM_PACK})`, async () => {
+    const { data, error } = await db.rpc('rpc_register_warehouse_item', {
+      p_item_name: TEST_ITEM_NAME,
+      p_color: TEST_ITEM_COLOR,
+      p_pack: TEST_ITEM_PACK,
+      p_warehouse: TEST_WAREHOUSE_CODE,
+      p_box: 0,
+      p_unit: 0,
+      p_memo: '스모크테스트',
+      p_idempotency_key: randomUUID()
+    })
+    if (error) throw error
+    if (data.item_id !== itemId) throw new Error(`다른 품목으로 등록됨: ${data.item_id}`)
+    if (data.created_item) throw new Error('같은 입수 품목인데 새 품목을 만들었습니다')
+    if (!(await isRegistered())) throw new Error('등록 목록에 없습니다')
+  })
+  await step('TEST 0-R3: 이전 등록 대상이 아닌 창고(PANTACO) 등록은 반드시 실패해야 함', async () => {
+    await expectFailure(async () => {
+      const { error } = await db.rpc('rpc_register_warehouse_item', {
+        p_item_name: TEST_ITEM_NAME, p_color: TEST_ITEM_COLOR, p_pack: TEST_ITEM_PACK,
+        p_warehouse: 'PANTACO', p_box: 0, p_unit: 0, p_memo: '스모크테스트', p_idempotency_key: randomUUID()
+      })
+      if (error) throw error
+    }, /이전 등록 대상이 아닙니다/, '대상 아닌 창고 등록')
+  })
+
   await step('TEST 1: 입고(INBOUND) +10상자 → MAIN', async () => {
     await processTx(db, { txType: 'INBOUND', warehouse: 'MAIN', items: [{ item_id: itemId, box_qty: 10, unit_qty: 0 }] })
     const main = await readStock(db, itemId, 'MAIN')

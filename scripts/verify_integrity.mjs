@@ -86,6 +86,8 @@ function collectTopLevelFunctionDecls(ast, filename, lineOffset, isModule) {
   }
 }
 
+const duplicateObjectMethods = [];
+
 function checkSyntaxAndCollect(code, filename, lineOffset = 0, isModule = false) {
   let ast;
   try {
@@ -125,6 +127,19 @@ function checkSyntaxAndCollect(code, filename, lineOffset = 0, isModule = false)
         const line = (node.loc?.start.line || 0) + lineOffset;
         if (!definedFunctions.has(prop.name)) definedFunctions.set(prop.name, []);
         definedFunctions.get(prop.name).push({ file: filename, line });
+      }
+    }
+    // 4-1. 한 객체 안에서 같은 이름의 메서드가 두 번 정의되면 나중 것이 앞의 것을 조용히 덮어쓴다
+    //      (실제 사고: serverMethods.getWarehouseStockList가 보고서용으로 다시 정의되어 출고 화면 서브창고 재고가 끊김).
+    if (node.type === 'ObjectExpression') {
+      const seen = new Map();
+      for (const p of node.properties || []) {
+        if (p.computed || !(p.type === 'ObjectMethod' || (p.type === 'ObjectProperty' && p.value && /Function/.test(p.value.type)))) continue;
+        const key = p.key?.name || p.key?.value;
+        if (!key) continue;
+        const line = (p.loc?.start.line || 0) + lineOffset;
+        if (seen.has(key)) duplicateObjectMethods.push({ file: filename, name: key, lines: [seen.get(key), line] });
+        else seen.set(key, line);
       }
     }
     // 4. 어댑터 serverMethods
@@ -298,6 +313,11 @@ if (ghostFunctions.length > 0) {
 }
 
 // 4) Duplicate Top-Level Function Declarations (Silent Shadowing)
+if (duplicateObjectMethods.length > 0) {
+  console.error(`🚨 [치명적] 같은 객체 안 메서드 중복 정의 ${duplicateObjectMethods.length}건 발견! (나중 정의가 이전 정의를 조용히 덮어씁니다)`);
+  duplicateObjectMethods.forEach(d => console.error(`   ❌ 메서드 [${d.name}] — ${d.file}:${d.lines.join(', ')}`));
+  failed = true;
+}
 const duplicateDecls = [];
 let totalTopLevelFns = 0;
 for (const [scopeKey, scopeMap] of topLevelDecls.entries()) {

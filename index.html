@@ -6237,7 +6237,7 @@ function updateTable() {
           <td>
             <span style="font-weight: 600;">${escapeHtml(rec.itemName)}</span>
             ${stockDisplay}
-            ${zoneMode ? zoneRowWarehouseSelectHtml(rec, idx) : ''}
+            ${zoneMode ? zoneRowWarehouseSelectHtml(rec, idx, !!shortageBadge) : ''}
             ${shortageBadge}
             ${siblingChipsHtml}
           </td>
@@ -6448,6 +6448,12 @@ function submitForm() {
     if (records.some(r => !r.zoneAssigned)) {
       refreshZoneStocks(true);
       alert('센트로 창고별 재고를 불러오는 중이라 출고창고 배정이 끝나지 않았습니다. 잠시 후 다시 제출하세요.');
+      return;
+    }
+    const unreg = records.filter(r => isItemUnregistered(r, findCatalogItemForRow(r), rowWarehouse(r)));
+    if (unreg.length) {
+      alert('이전 등록 전 창고에서 나가는 줄이 있습니다. 줄의 [📦 이전 등록]으로 먼저 등록하세요.\n\n' +
+        unreg.map(r => `- ${rowWarehouse(r)}: ${r.itemName} (${r.color || 'SURTIDO'})`).join('\n'));
       return;
     }
   }
@@ -15046,8 +15052,10 @@ function loadWarehouseMaster(force) {
         code: String(w.code || '').toUpperCase(),
         name: w.name || w.code,
         zone: w.zone || null,
-        sort_order: Number(w.sort_order) || 0
+        sort_order: Number(w.sort_order) || 0,
+        needsReg: !!w.needs_item_registration
       }));
+      if (warehouseMasterList.some(w => w.needsReg)) loadWarehouseRegistrations();
       syncWarehouseSelectOptions();
       if (currentType === 'out') {
         updateZoneWarehouseLabel();
@@ -15120,6 +15128,7 @@ function updateZoneWarehouseLabel() {
 
 function refreshZoneStocks(force) {
   if (!isZoneOutMode()) return;
+  if (getZoneCodes(getAdjWarehouse()).some(c => warehouseNeedsRegistration(c))) loadWarehouseRegistrations(force);
   getZoneCodes(getAdjWarehouse()).filter(c => c !== 'MAIN').forEach(code => {
     const cur = zoneStockMaps[code];
     if (!force && cur && cur.map && Date.now() - cur.loadedAt < 30000) return;
@@ -15137,7 +15146,159 @@ function refreshZoneStocks(force) {
 }
 
 function zoneStocksReady() {
-  return getZoneCodes(getAdjWarehouse()).every(c => c === 'MAIN' || (zoneStockMaps[c] && zoneStockMaps[c].map));
+  const codes = getZoneCodes(getAdjWarehouse());
+  if (codes.some(c => warehouseNeedsRegistration(c)) && !warehouseRegSet) return false;
+  return codes.every(c => c === 'MAIN' || (zoneStockMaps[c] && zoneStockMaps[c].map));
+}
+
+// 🆕 [신규 서브창고 품목별 이전 등록]
+// MANUELDOBLADO·CIRCUNBALAXION·GUATEMALA는 품목별 수량·입수를 모른 채 들어왔다(needs_item_registration).
+// 주문이 들어온 품목만 그 자리에서 세어 등록(rpc_register_warehouse_item)하고, 등록 전에는 그 창고에서 출고하지 않는다
+// (자동 배정에서 빼고, 사람이 고르면 제출을 막는다. 서버도 거절한다). 입수가 다른 상자는 별도 품목으로 등록된다.
+let warehouseRegSet = null; // '품명_컬러_입수|창고' 집합
+const warehouseRegLocal = new Set(); // 이 화면에서 방금 등록한 키(늦게 도착한 목록 응답이 지우지 않도록 합친다)
+let warehouseRegLoading = false;
+
+function warehouseNeedsRegistration(code) {
+  const c = String(code || '').toUpperCase();
+  return !!(warehouseMasterList && warehouseMasterList.some(w => w.code === c && w.needsReg));
+}
+
+function loadWarehouseRegistrations(force) {
+  if (warehouseRegLoading || (warehouseRegSet && !force)) return;
+  warehouseRegLoading = true;
+  callServer('listWarehouseRegistrations', [], {
+    key: 'warehouseRegistrations',
+    mode: 'latest',
+    onSuccess: rows => {
+      warehouseRegSet = new Set([...warehouseRegLocal, ...(rows || []).map(r => `${String(r.item_name || '').trim()}_${String(r.color || 'SURTIDO').trim()}_${Number(r.pack) || 1}|${String(r.warehouse || '').toUpperCase()}`)]);
+      if (currentType === 'out') updateTable();
+    },
+    onError: err => showAppToast(`⚠️ 이전 등록 목록을 불러오지 못했습니다: ${err.message || err}`, 3000),
+    onSettled: () => { warehouseRegLoading = false; }
+  });
+}
+
+function rowItemKey(rec, item) {
+  if (item && item.key) return item.key;
+  return `${String(rec.itemName || '').trim()}_${String(rec.color || 'SURTIDO').trim()}_${Number(rec.boxContent) || 1}`;
+}
+
+// 이 창고에서 이 품목이 아직 이전 등록 전인가
+function isItemUnregistered(rec, item, code) {
+  if (!warehouseNeedsRegistration(code)) return false;
+  if (!warehouseRegSet) return true;
+  return !warehouseRegSet.has(`${rowItemKey(rec, item)}|${String(code).toUpperCase()}`);
+}
+
+function closeWarehouseRegModal() {
+  const el = document.getElementById('warehouseRegModal');
+  if (el) el.remove();
+}
+
+function openWarehouseRegModal(idx, code) {
+  const rec = records[idx];
+  if (!rec) return;
+  closeWarehouseRegModal();
+  const wh = String(code || '').toUpperCase();
+  const pack = Number(rec.boxContent) || '';
+  const div = document.createElement('div');
+  div.id = 'warehouseRegModal';
+  div.style.cssText = 'position: fixed; inset: 0; background: rgba(15,23,42,0.45); z-index: 10050; display: flex; align-items: center; justify-content: center;';
+  div.innerHTML = `
+    <div style="background: #fff; border-radius: 10px; width: 340px; max-width: calc(100vw - 32px); padding: 16px 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); font-size: 9pt;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 10px;">
+        <strong style="color: #0f766e; font-size: 11pt;">📦 이전 등록 — ${escapeHtml(wh)}</strong>
+        <button type="button" onclick="closeWarehouseRegModal()" style="border: none; background: none; font-size: 16pt; cursor: pointer; color: #94a3b8; line-height: 1;">&times;</button>
+      </div>
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px;">
+        <div>품목: <strong>${escapeHtml(rec.itemName || '')}</strong> (${escapeHtml(rec.color || 'SURTIDO')})</div>
+        <div style="color: #64748b; margin-top: 3px;">${escapeHtml(wh)} 창고에서 이 품목을 세어 입력하세요. 등록한 수량으로 그 창고 재고가 정해집니다.</div>
+      </div>
+      <label style="display: block; margin-bottom: 8px;">상자에 적힌 입수(상자당 낱개)
+        <input id="warehouseRegPack" type="number" min="1" value="${pack}" style="width: 100%; box-sizing: border-box; padding: 5px; margin-top: 3px; font-weight: 700;">
+      </label>
+      <div id="warehouseRegPackNote" style="display: none; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 5px 7px; margin-bottom: 8px;"></div>
+      <div style="display: flex; gap: 8px;">
+        <label style="flex: 1;">센 상자 수
+          <input id="warehouseRegBox" type="number" min="0" value="" style="width: 100%; box-sizing: border-box; padding: 5px; margin-top: 3px; font-weight: 700;">
+        </label>
+        <label style="flex: 1;">낱개
+          <input id="warehouseRegUnit" type="number" min="0" value="0" style="width: 100%; box-sizing: border-box; padding: 5px; margin-top: 3px;">
+        </label>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px;">
+        <button type="button" onclick="closeWarehouseRegModal()" style="padding: 6px 12px; border: 1px solid #cbd5e1; background: #fff; border-radius: 4px; cursor: pointer;">취소</button>
+        <button type="button" id="warehouseRegSubmit" onclick="submitWarehouseReg(${idx}, ${jsArg(wh)})" style="padding: 6px 14px; border: none; background: #0f766e; color: #fff; font-weight: 700; border-radius: 4px; cursor: pointer;">등록</button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+  const packInput = document.getElementById('warehouseRegPack');
+  const note = document.getElementById('warehouseRegPackNote');
+  const refreshNote = () => {
+    const p = Number(packInput.value) || 0;
+    const differs = p > 0 && pack && p !== Number(pack);
+    note.style.display = differs ? 'block' : 'none';
+    note.textContent = differs ? `입수 ${p}는 기존 품목(입수 ${pack})과 달라 별도 품목으로 등록되고, 이 출고 줄도 그 품목으로 바뀝니다.` : '';
+  };
+  packInput.addEventListener('input', refreshNote);
+  const boxInput = document.getElementById('warehouseRegBox');
+  if (boxInput) boxInput.focus();
+}
+
+function submitWarehouseReg(idx, code) {
+  const rec = records[idx];
+  if (!rec) { closeWarehouseRegModal(); return; }
+  const pack = Math.trunc(Number(document.getElementById('warehouseRegPack').value) || 0);
+  const boxRaw = String(document.getElementById('warehouseRegBox').value || '').trim();
+  const box = Math.trunc(Number(boxRaw) || 0);
+  const unit = Math.trunc(Number(document.getElementById('warehouseRegUnit').value) || 0);
+  if (pack < 1) { alert('입수(상자당 낱개)를 1 이상으로 입력하세요.'); return; }
+  if (boxRaw === '' || box < 0 || unit < 0) { alert('센 상자 수를 입력하세요(없으면 0).'); return; }
+  const wh = String(code || '').toUpperCase();
+  const oldPack = Number(rec.boxContent) || 0;
+  const msg = `${wh} 창고 ${rec.itemName} (${rec.color || 'SURTIDO'}) 입수 ${pack}: ${box}상자 ${unit}개로 등록할까요?` +
+    (oldPack && pack !== oldPack ? `\n\n입수가 기존 품목(${oldPack})과 달라 별도 품목으로 등록됩니다.` : '');
+  if (!confirm(msg)) return;
+  const btn = document.getElementById('warehouseRegSubmit');
+  if (btn) { btn.disabled = true; btn.textContent = '등록 중...'; }
+  callServer('registerWarehouseItem', [{ itemName: rec.itemName, color: rec.color || 'SURTIDO', pack, warehouse: wh, box, unit }], {
+    key: 'registerWarehouseItem',
+    onSuccess: res => {
+      closeWarehouseRegModal();
+      const key = `${res.item_name}_${res.color}_${Number(res.pack)}`;
+      if (!warehouseRegSet) warehouseRegSet = new Set();
+      warehouseRegSet.add(`${key}|${wh}`);
+      warehouseRegLocal.add(`${key}|${wh}`);
+      // 다시 불러오기 전에 화면 재고를 바로 맞춘다(자동 배정이 옛 수치로 돌지 않도록).
+      if (zoneStockMaps[wh] && zoneStockMaps[wh].map) {
+        zoneStockMaps[wh].map.set(key, { key, stockBox: Number(res.box_qty) || 0, stockIndividual: Number(res.unit_qty) || 0, committedUnits: 0 });
+      }
+      if (!(stockDataCache || []).some(it => it.key === key)) {
+        stockDataCache.push({ key, name: res.item_name, color: res.color, boxContent: Number(res.pack), stockBox: 0, stockIndividual: 0 });
+      }
+      const r = records[idx];
+      if (r) {
+        if (Number(res.pack) !== (Number(r.boxContent) || 0) || String(res.color).toUpperCase() !== String(r.color || 'SURTIDO').toUpperCase()) {
+          // 입수가 다른 별도 품목: 이 줄을 그 품목·그 창고로 바꾼다(상자 수는 그대로).
+          Object.assign(r, { color: res.color, boxContent: Number(res.pack), sourceWarehouse: wh, warehouse: wh, zoneAssigned: true, zoneManual: true, zoneSplit: false });
+        } else {
+          clearZoneFlags(r); // 새 재고로 다시 자동 배정
+        }
+      }
+      saveTableData();
+      updateTable();
+      updateTotals();
+      refreshZoneStocks(true);
+      if (res.created_item) loadStockData(true);
+      const extra = res.created_item ? ' (입수가 달라 별도 품목으로 등록)' : (res.reactivated ? ' (숨김 품목을 다시 표시)' : '');
+      showAppToast(`✅ ${wh} ${res.item_name} 입수 ${res.pack}: ${res.box_qty}상자 ${res.unit_qty}개 이전 등록${extra}`, 3500);
+    },
+    onError: err => {
+      if (btn) { btn.disabled = false; btn.textContent = '등록'; }
+      alert('이전 등록 실패: ' + (err && err.message ? err.message : String(err)));
+    }
+  });
 }
 
 function findCatalogItemForRow(rec) {
@@ -15200,6 +15361,7 @@ function ensureZoneAllocation() {
     // 이미 배정된 행(앞에서 만든 행 + 뒤쪽의 배정 끝난 행)과 보류가 잡은 수량을 뺀 창고별 가용재고
     const calcRows = built.concat(records.slice(i + 1).filter(x => !isPending(x)));
     const candidates = codes.map(code => {
+      if (isItemUnregistered(r, item, code)) return { wh: code, avail: 0 };
       const s = zoneRawStock(item, code);
       const held = getReservedQty(r.itemName, r.color, r.boxContent, -1, code, calcRows);
       const avail = s.box * bc + s.indiv - s.committed - (held.reservedBoxes * bc + held.reservedIndividuals);
@@ -15274,14 +15436,23 @@ function zoneRowStock(rec, idx) {
   return { code, curBox: s.box, curIndiv: s.indiv, committedUnits: s.committed, heldUnits, bc };
 }
 
-function zoneRowWarehouseSelectHtml(rec, idx) {
+function zoneRowWarehouseSelectHtml(rec, idx, isShort) {
   const codes = getZoneCodes(getAdjWarehouse());
   const cur = rowWarehouse(rec);
   const item = findCatalogItemForRow(rec);
+  const unregistered = codes.filter(code => isItemUnregistered(rec, item, code));
   const opts = codes.map(code => {
     const s = zoneRawStock(item, code);
-    return `<option value="${escapeHtml(code)}" ${code === cur ? 'selected' : ''}>${escapeHtml(code)} (${s.box}+${s.indiv})</option>`;
+    const label = unregistered.includes(code) ? `${code} (미확인)` : `${code} (${s.box}+${s.indiv})`;
+    return `<option value="${escapeHtml(code)}" ${code === cur ? 'selected' : ''}>${escapeHtml(label)}</option>`;
   }).join('');
+  const curUnreg = unregistered.includes(cur);
+  const regButtons = (isShort || curUnreg) && unregistered.length
+    ? `<div class="no-print" style="margin-top: 3px; display: flex; flex-wrap: wrap; gap: 3px; align-items: center;">
+        <span style="font-size: 7.2pt; color: ${curUnreg ? '#b91c1c' : '#475569'}; font-weight: 700;">${curUnreg ? '⛔ 이전 등록 전 창고 — 등록해야 출고됩니다:' : '미확인 창고에 있을 수 있음:'}</span>
+        ${unregistered.map(code => `<button type="button" onmousedown="event.stopPropagation()" ondblclick="event.stopPropagation()" onclick="event.stopPropagation(); openWarehouseRegModal(${idx}, ${jsArg(code)})" style="font-size: 7.2pt; padding: 1px 6px; border: 1px solid #0d9488; background: #f0fdfa; color: #0f766e; border-radius: 3px; cursor: pointer; font-weight: 700;">📦 ${escapeHtml(code)} 이전 등록</button>`).join('')}
+      </div>`
+    : '';
   const tag = rec.zoneManual ? '✋' : (rec.zoneSplit ? '✂️' : '🏬');
   const title = rec.zoneManual
     ? '직접 고른 출고창고입니다(자동 배정하지 않음).'
@@ -15292,7 +15463,7 @@ function zoneRowWarehouseSelectHtml(rec, idx) {
   return `<div class="no-print" style="margin-top: 3px; display: inline-flex; align-items: center; gap: 3px;" title="${title}">
       <span style="font-size: 8pt;">${tag}</span>
       <select onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onchange="onZoneRowWarehouseChange(${idx}, this.value)" style="font-size: 7.5pt; font-weight: 700; color: #1e3a8a; border-radius: 3px; padding: 1px 3px; ${style}">${opts}</select>
-    </div>`;
+    </div>${regButtons}`;
 }
 
 // 재고조정 화면의 품목 목록: 품목 카탈로그는 MAIN 캐시를 쓰고, 수량은 선택한 창고 기준으로 바꾼다.

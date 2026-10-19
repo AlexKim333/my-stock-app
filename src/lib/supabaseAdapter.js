@@ -1351,6 +1351,44 @@ export const serverMethods = {
   },
 
   /**
+   * 12-3. 신규 서브창고 품목 이전 등록 — 센 수량과 상자에 적힌 입수로 그 창고 재고를 치환한다.
+   * 같은 품명·컬러·입수 품목이 없으면(입수가 다른 상자) 서버가 별도 품목을 만든다(created_item).
+   * reg: { itemName, color, pack, warehouse, box, unit }
+   */
+  async registerWarehouseItem(reg) {
+    const r = reg || {}
+    const payload = {
+      p_item_name: String(r.itemName || '').trim(),
+      p_color: String(r.color || 'SURTIDO').trim(),
+      p_pack: Math.trunc(Number(r.pack || 0)),
+      p_warehouse: String(r.warehouse || '').trim().toUpperCase(),
+      p_box: Math.max(0, Math.trunc(Number(r.box || 0))),
+      p_unit: Math.max(0, Math.trunc(Number(r.unit || 0))),
+      p_memo: null
+    }
+    const idemKey = takeIdempotencyKey('register_warehouse_item', JSON.stringify(payload))
+    try {
+      const { data, error } = await supabase.rpc('rpc_register_warehouse_item', { ...payload, p_idempotency_key: idemKey })
+      if (error) throw new Error(error.message || '이전 등록에 실패했습니다.')
+      clearIdempotencyKey('register_warehouse_item')
+      if (data && data.item_id) {
+        itemIdCache.set(`${data.item_name}_${data.color}_${Number(data.pack)}`, data.item_id)
+      }
+      return data
+    } catch (err) {
+      if (!shouldKeepIdempotencyKey(err)) clearIdempotencyKey('register_warehouse_item')
+      throw err
+    }
+  },
+
+  /** 12-4. 이전 등록 목록 [{ item_id, item_name, color, pack, warehouse, counted_box, counted_unit, registered_by, registered_at }] */
+  async listWarehouseRegistrations() {
+    const { data, error } = await supabase.rpc('rpc_list_warehouse_item_registrations')
+    if (error) throw new Error(error.message || '이전 등록 목록을 불러오지 못했습니다.')
+    return Array.isArray(data) ? data : []
+  },
+
+  /**
    * 13. 재고조사 일괄 처리 (processStockAdjustmentForm) - 실사 치환/추가 & 인라인 정합성 검증
    */
   async processStockAdjustmentForm(tableData, admin) {
@@ -2701,11 +2739,11 @@ export const serverMethods = {
   },
 
   /**
-   * 18-3. 창고별 현재 재고 목록 (getWarehouseStockList)
+   * 18-3. 창고별 현재 재고 목록 (getWarehouseStockReport — 출고·재고조정 화면용 getWarehouseStockList와 다른 메서드)
    * includeInactive: 숨김(비활성) 품목도 포함할지. 0 재고 포함 여부는 화면에서 거른다(모든 품목 × 활성 창고를 돌려준다).
    * 스모크테스트 창고·품목은 뺀다. 수량은 장부상 실재고(상자·낱개 그대로)다. 제조사는 items.brand_id → brands.name.
    */
-  async getWarehouseStockList(includeInactive) {
+  async getWarehouseStockReport(includeInactive) {
     const [whRows, items, stocks, brands, pendingOrders, holdRes] = await Promise.all([
       fetchAllRows(() => supabase.from('warehouses').select('code, name, is_hub, sort_order').eq('is_active', true), { orderBy: 'sort_order' }),
       fetchAllRows(() => {

@@ -72,6 +72,10 @@ npm run smoke
   입고 합계를 내는 화면을 새로 만들면 `return_of_invoice`가 있는 행을 반품으로 따로 세세요.
 - 센트로 구역 줄별 출고창고(`warehouses.zone='CENTRO'`인 MAIN·서브창고가 한 출고 전표에 섞임: 혼합 출고, 다른 구역 거절,
   혼합 보류, 혼합 전표 수정, 줄별 반품 창고)도 검증합니다(TEST 5-Z1~5-Z7). `SMOKETEST`도 이 검증을 위해 CENTRO 구역에 속합니다.
+- 신규 서브창고 품목별 이전 등록(`warehouses.needs_item_registration`, `rpc_register_warehouse_item`: 등록 전 그 창고에서 빼면
+  거절, 등록 대상 아닌 창고 거절)도 검증합니다(TEST 0-R1~0-R3). `SMOKETEST`도 이 대상이며, 정리 스크립트가 테스트 품목의
+  등록 기록을 지워 다음 실행이 '등록 전 거절'부터 다시 검증합니다. 입수가 다른 별도 품목 생성은 스모크에서 하지 않습니다
+  (테스트 품목이 두 개가 되면 스모크가 품목을 하나로 찾지 못함).
 - 창고별 재고 화면의 수량 수정(`rpc_adjust_stock_checked`: 출고 보류·입고 예정 발주 아래로 조정 거절, 화면 이후
   바뀐 재고 거절)도 검증합니다(TEST 5-H2a~5-H2c).
 - 재고는 0으로 돌아오지만 전표(`stock_transactions`)는 테스트 품목 이름으로 남습니다. `npm run smoke`는

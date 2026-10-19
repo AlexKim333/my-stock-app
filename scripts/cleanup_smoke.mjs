@@ -83,6 +83,19 @@ function main() {
     return
   }
 
+  // 이전 등록 기록도 지운다(다음 실행이 '등록 전 출고 거절'부터 다시 검증하도록). 잔여 재고가 0일 때만 여기까지 온다.
+  if (dryRun) {
+    console.log('(dry-run) 테스트 품목의 이전 등록 기록도 삭제 대상입니다.')
+  } else {
+    const regs = runSql(`
+      DELETE FROM warehouse_item_registrations r
+      USING items i
+      WHERE i.id = r.item_id AND ${itemFilter}
+      RETURNING r.item_id
+    `)
+    if (regs.length) console.log(`✅ 테스트 품목 이전 등록 기록 ${regs.length}건을 지웠습니다.`)
+  }
+
   const summary = runSql(`
     SELECT count(*)::int AS total,
            count(*) FILTER (WHERE t.memo LIKE '${SMOKE_MEMO_PREFIX}%')::int AS smoke
