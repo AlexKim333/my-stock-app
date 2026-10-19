@@ -271,6 +271,25 @@ async function main() {
     assertEqual(sub.box_qty, 10, `${TEST_WAREHOUSE_CODE} 박스재고`)
   })
 
+  // 이동 후 "도착 창고에 원래 없었음" 등록(rpc_register_moved_items). 테스트 품목은 TEST 0-R2에서 이미 등록돼 있어
+  // 재고는 바꾸지 않고 '이미 등록'으로 건너뛰어야 한다. 이전 등록 대상이 아닌 창고는 거절해야 한다.
+  await step(`TEST 2-R: 이동 수량 이전 등록 — 이미 등록된 품목은 건너뜀, 대상 아닌 창고(PANTACO)는 거절`, async () => {
+    const { data, error } = await db.rpc('rpc_register_moved_items', {
+      p_warehouse: TEST_WAREHOUSE_CODE, p_item_ids: [itemId], p_idempotency_key: randomUUID()
+    })
+    if (error) throw error
+    assertEqual(Number(data.already_registered), 1, '이미 등록 건수')
+    assertEqual(Number(data.registered), 0, '새 등록 건수')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 10, `${TEST_WAREHOUSE_CODE} 박스재고 (등록은 재고를 바꾸지 않음)`)
+    await expectFailure(async () => {
+      const { error: e2 } = await db.rpc('rpc_register_moved_items', {
+        p_warehouse: 'PANTACO', p_item_ids: [itemId], p_idempotency_key: randomUUID()
+      })
+      if (e2) throw e2
+    }, /이전 등록 대상이 아닙니다/, '대상 아닌 창고 등록')
+  })
+
   await step(`TEST 3: 이동(MOVE) ${TEST_WAREHOUSE_CODE} → MAIN 10상자 (복귀)`, async () => {
     await processTx(db, {
       txType: 'MOVE', warehouse: TEST_WAREHOUSE_CODE, targetWarehouse: 'MAIN',

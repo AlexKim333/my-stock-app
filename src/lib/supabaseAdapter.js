@@ -161,11 +161,36 @@ export const BRANCH_MAP = {
   STAR: 'STAR', 스타: 'STAR'
 }
 
+// DB 지점 거래처(partners.is_branch → warehouse_code). 고정 목록(BRANCH_MAP)에 없는 신규 창고(MANUELDOBLADO 등)도
+// 지점으로 인식하려고 getPartnersMaster/getOutLocations 결과와 처리 직전 조회로 채운다. 이름 완전 일치만 본다.
+const branchPartnerCodes = new Map()
+function rememberBranchPartners(rows) {
+  ;(rows || []).forEach(p => {
+    if (p && p.is_branch !== false && p.warehouse_code && p.name) {
+      branchPartnerCodes.set(String(p.name).trim().toUpperCase(), String(p.warehouse_code).trim().toUpperCase())
+    }
+  })
+}
+async function resolveBranchCodeFresh(partner) {
+  const direct = resolveBranchCode(partner)
+  if (direct) return direct
+  const clean = String(partner || '').replace(/^🏢\s*(\[지점\]\s*)?/, '').trim()
+  if (!clean) return null
+  const { data, error } = await supabase
+    .from('partners')
+    .select('name, is_branch, warehouse_code')
+    .eq('is_branch', true)
+    .eq('is_active', true)
+  if (!error) rememberBranchPartners(data)
+  return branchPartnerCodes.get(clean.toUpperCase()) || null
+}
+
 export function resolveBranchCode(partner) {
   const raw = String(partner || '').trim()
   if (!raw) return null
   const clean = raw.replace(/^🏢\s*(\[지점\]\s*)?/, '').trim()
-  return BRANCH_MAP[clean.toUpperCase()]
+  return branchPartnerCodes.get(clean.toUpperCase())
+    || BRANCH_MAP[clean.toUpperCase()]
     || BRANCH_MAP[clean]
     || BRANCH_MAP[raw.toUpperCase()]
     || BRANCH_MAP[raw]
@@ -565,6 +590,7 @@ export const serverMethods = {
       .order('name', { ascending: true })
 
     if (error) throw error
+    rememberBranchPartners((data || []).filter(p => p.is_branch))
     return data || []
   },
 
@@ -646,6 +672,7 @@ export const serverMethods = {
       .order('name', { ascending: true })
 
     if (error) throw error
+    rememberBranchPartners((data || []).filter(p => p.is_branch))
     return (data || []).map(p => p.name).filter(Boolean)
   },
 
@@ -883,7 +910,7 @@ export const serverMethods = {
     let targetWh = firstRow.targetWarehouse || null
     const partner = String(firstRow.location || '').trim()
     const handler = String(admin || 'ADMIN').trim()
-    const partnerBranchCode = resolveBranchCode(partner)
+    const partnerBranchCode = await resolveBranchCodeFresh(partner)
 
     let txType = mode === 'in' ? 'INBOUND' : 'OUTBOUND'
     let effectiveTargetWarehouse = targetWh
@@ -1037,6 +1064,23 @@ export const serverMethods = {
     const invoiceNumber = rpcResult?.invoice_no || ''
     const seq = invoiceNumber.includes('-') ? invoiceNumber.split('-').pop() : ''
 
+    // 이전 등록이 필요한 창고로 이동하면서 "도착 창고에 이 품목이 원래 없었음"을 체크했으면 이동 수량으로 등록한다.
+    // 이동은 이미 끝났으므로 등록이 실패해도 이동은 성공으로 돌려주고 사유만 알린다(출고 화면의 이전 등록으로 다시 할 수 있음).
+    let moveRegistration = null
+    if (txType === 'MOVE' && opts && opts.registerDestination && effectiveTargetWarehouse) {
+      try {
+        const { data: regData, error: regErr } = await supabase.rpc('rpc_register_moved_items', {
+          p_warehouse: effectiveTargetWarehouse,
+          p_item_ids: [...new Set(itemsPayload.map(i => i.item_id))],
+          p_idempotency_key: `move-reg-${invoiceNumber}`
+        })
+        if (regErr) throw regErr
+        moveRegistration = { ok: true, ...regData }
+      } catch (regErr) {
+        moveRegistration = { ok: false, message: regErr.message || String(regErr) }
+      }
+    }
+
     // 화면 재고 캐시는 MAIN 기준이므로 출발창고와 무관하게 방금 커밋된 MAIN 재고를 다시 읽는다.
     // 재조회에 실패하면 추정값(0)을 내보내지 않고 빈 목록을 돌려 화면이 전체 재동기화하도록 한다.
     const itemIds = itemsPayload.map(i => i.item_id)
@@ -1065,6 +1109,7 @@ export const serverMethods = {
       sourceWarehouse: sourceWh,
       targetWarehouse: effectiveTargetWarehouse,
       partner: partner,
+      moveRegistration,
       updatedItems: authoritativeItems,
       stockVerified: !freshErr,
       integrity: {

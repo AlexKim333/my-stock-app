@@ -4612,7 +4612,11 @@ const INTERNAL_BRANCH_MAP = {
 function getBranchCodeFromLocation(locStr) {
   if (!locStr) return null;
   const clean = String(locStr).replace(/^🏢\s*(\[지점\]\s*)?/, '').trim();
-  return INTERNAL_BRANCH_MAP[clean.toUpperCase()] || INTERNAL_BRANCH_MAP[clean] || INTERNAL_BRANCH_MAP[locStr.toUpperCase()] || INTERNAL_BRANCH_MAP[locStr] || null;
+  const fixed = INTERNAL_BRANCH_MAP[clean.toUpperCase()] || INTERNAL_BRANCH_MAP[clean] || INTERNAL_BRANCH_MAP[locStr.toUpperCase()] || INTERNAL_BRANCH_MAP[locStr];
+  if (fixed) return fixed;
+  // DB 지점 거래처(신규 서브창고 등): 이름이 정확히 같은 지점 거래처의 창고
+  const p = (typeof partnersMasterMap !== 'undefined' && partnersMasterMap) ? (partnersMasterMap.get(clean) || partnersMasterMap.get(locStr)) : null;
+  return (p && p.is_branch && p.warehouse_code) ? String(p.warehouse_code).toUpperCase() : null;
 }
 
 function isBranchLocation(locStr) {
@@ -5941,7 +5945,7 @@ function updateTable() {
   if (!tbody) return;
   let html = '';
   // 센트로 구역 출고: 새로 담긴 행을 창고별 가용재고로 배정한 뒤 그린다.
-  if (currentType === 'out') ensureZoneAllocation();
+  if (currentType === 'out') { ensureZoneAllocation(); updateZoneWarehouseLabel(); }
   const zoneMode = currentType === 'out' && isZoneOutMode();
 
   // ★ [성능 최적화] updateTable 호출마다 발생하던 O(records × stock × 3) 반복 연산을 O(stock) 1회 Map 생성 + O(1) 조회로 단축
@@ -6471,6 +6475,7 @@ function showConfirmModal() {
   const tbody = document.getElementById('confirmBody');
   const confirmModalDiv = document.getElementById('confirmModal');
   if (!tbody || !confirmModalDiv) return;
+  renderMoveRegisterOption(confirmModalDiv);
   let html = '';
   records.forEach(rec => {
     if (currentType === 'product') {
@@ -6679,7 +6684,9 @@ function confirmSubmitCore() {
   }
   const recordsToPrint = [...records];
   // 출고: 이 장바구니로 불러온 보류를 함께 보내 같은 트랜잭션에서 소진한다(자기 예약에 막히지 않고, 이중 출고도 막힌다).
-  const submitArgs = type === 'out' ? [records, adminValue, { holdRefs: getCartHoldRefs() }] : [records, adminValue];
+  const moveRegBox = document.getElementById('moveRegisterChk');
+  const registerDestination = type === 'out' && !!(moveRegBox && moveRegBox.checked && moveRegBox.closest('#moveRegisterOpt').style.display !== 'none');
+  const submitArgs = type === 'out' ? [records, adminValue, { holdRefs: getCartHoldRefs(), registerDestination }] : [records, adminValue];
   callServer(typeConfig[type].processFunction, submitArgs, {
     key: 'submitForm',
     timeout: 90000, // 다건 전표는 시트 일괄 쓰기가 길어질 수 있다
@@ -15110,7 +15117,16 @@ function getZoneCodes(code) {
 }
 
 function isZoneOutMode() {
-  return currentType === 'out' && getZoneCodes(getAdjWarehouse()).length > 1;
+  return currentType === 'out' && !getMoveTargetWarehouse() && getZoneCodes(getAdjWarehouse()).length > 1;
+}
+
+// 출고 화면에서 출고처가 MAIN이 아닌 지점이면 이동(MOVE) 장바구니다. 도착 창고 코드를 돌려준다.
+function getMoveTargetWarehouse() {
+  if (currentType !== 'out') return null;
+  const locEl = document.getElementById('location');
+  const loc = (locEl && locEl.value) || (records && records[0] && records[0].location) || '';
+  const code = loc ? getBranchCodeFromLocation(loc) : null;
+  return code && code !== 'MAIN' ? code : null;
 }
 
 function updateZoneWarehouseLabel() {
@@ -15464,6 +15480,27 @@ function zoneRowWarehouseSelectHtml(rec, idx, isShort) {
       <span style="font-size: 8pt;">${tag}</span>
       <select onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onchange="onZoneRowWarehouseChange(${idx}, this.value)" style="font-size: 7.5pt; font-weight: 700; color: #1e3a8a; border-radius: 3px; padding: 1px 3px; ${style}">${opts}</select>
     </div>${regButtons}`;
+}
+
+// 이전 등록 창고로 이동할 때 확인창에 "도착 창고에 원래 없었음 → 이동 수량으로 이전 등록" 선택칸을 보여 준다.
+function renderMoveRegisterOption(modal) {
+  let box = document.getElementById('moveRegisterOpt');
+  const target = getMoveTargetWarehouse();
+  const show = !!(target && warehouseNeedsRegistration(target));
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'moveRegisterOpt';
+    box.style.cssText = 'margin: 10px 0 0; padding: 8px 10px; border: 1px solid #99f6e4; border-radius: 6px; background: #f0fdfa; font-size: 9pt; line-height: 1.5;';
+    const buttons = modal.querySelector('#modalButtons');
+    modal.insertBefore(box, buttons);
+  }
+  box.style.display = show ? 'block' : 'none';
+  if (!show) return;
+  box.innerHTML = `<label style="display: flex; gap: 6px; align-items: flex-start; cursor: pointer;">
+      <input type="checkbox" id="moveRegisterChk" style="margin-top: 3px;">
+      <span><strong>${escapeHtml(target)}</strong>에 이 품목들이 원래 없었음 → 이동 수량으로 <strong>이전 등록</strong>
+      <br><span style="color: #64748b;">체크하면 이동 후 바로 ${escapeHtml(target)}에서 출고할 수 있습니다. 원래 있던 상자가 있으면 체크하지 말고, 나중에 합쳐 세어 이전 등록하세요.</span></span>
+    </label>`;
 }
 
 // 재고조정 화면의 품목 목록: 품목 카탈로그는 MAIN 캐시를 쓰고, 수량은 선택한 창고 기준으로 바꾼다.
