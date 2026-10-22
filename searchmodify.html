@@ -632,6 +632,7 @@
                   <th>Individual Quantity</th>
                   <th>Quantity per Box</th>
                   <th>Location</th>
+                  <th id="lineWhHeader" style="display: none;" title="센트로 구역 전표는 줄마다 출고창고를 고를 수 있습니다">창고</th>
                 </tr>
               </thead>
               <tbody id="tableBody"></tbody>
@@ -650,8 +651,8 @@
         <h3 id="returnModalTitle">↩️ 반품 입고</h3>
         <div class="ret-meta" id="returnMeta">불러오는 중...</div>
         <div class="ret-controls">
-          <label for="returnWarehouse">반품받을 창고</label>
-          <select id="returnWarehouse"><option value="MAIN">MAIN</option></select>
+          <label for="returnWarehouse" title="바꾸면 모든 줄의 반품 창고가 이 창고로 바뀝니다">반품받을 창고(전체)</label>
+          <select id="returnWarehouse" onchange="onReturnHeaderWarehouseChange()"><option value="MAIN">MAIN</option></select>
           <label for="returnMemo">메모</label>
           <input type="text" id="returnMemo" maxlength="200" placeholder="반품 사유 (선택)" style="flex:1; min-width:160px;">
         </div>
@@ -659,7 +660,7 @@
           <table>
             <thead>
               <tr>
-                <th>품명</th><th>컬러</th><th>입수</th><th>출고</th><th>반품됨</th><th>남음</th><th>반품 상자</th><th>반품 낱개</th>
+                <th>품명</th><th>컬러</th><th>입수</th><th>출고</th><th>반품됨</th><th>남음</th><th>반품 상자</th><th>반품 낱개</th><th>반품 창고</th>
               </tr>
             </thead>
             <tbody id="returnLines"></tbody>
@@ -1380,6 +1381,58 @@ function searchRecords() {
 
 let loadedReceipt = null;
 
+// 창고 마스터(구역 포함). 센트로 구역 전표에서 줄마다 창고를 고를 때 쓴다.
+let smWarehouses = null;
+function ensureSmWarehouses(onReady) {
+  if (smWarehouses) { if (onReady) onReady(); return; }
+  callServer('getWarehouses', [], {
+    key: 'smWarehouses',
+    mode: 'latest',
+    onSuccess: list => {
+      smWarehouses = (list || [])
+        .map(w => ({ code: String(w.code || '').toUpperCase(), zone: w.zone || null }))
+        .filter(w => w.code);
+      if (onReady) onReady();
+    },
+    onError: err => console.warn('[창고 목록] 조회 실패:', err)
+  });
+}
+
+// 같은 구역(zone)의 창고 코드. 구역이 없으면 그 창고 하나.
+function getZoneWarehouseCodes(code) {
+  const c = String(code || 'MAIN').toUpperCase();
+  const me = (smWarehouses || []).find(w => w.code === c);
+  if (!me || !me.zone) return [c];
+  return smWarehouses.filter(w => w.zone === me.zone).map(w => w.code);
+}
+
+// 출고 전표와 반품 입고 전표는 줄마다 창고가 다를 수 있다(센트로 구역). 그 외 전표는 줄 창고를 보내지 않는다.
+function isLineWarehouseTx(txType, returnOf) {
+  return txType === 'OUTBOUND' || (txType === 'INBOUND' && !!returnOf);
+}
+
+// 전표 수정 화면에서 줄마다 고를 수 있는 창고. 구역 창고가 둘 이상일 때만 선택칸을 보인다.
+function getEditLineWarehouseCodes() {
+  if (!loadedReceipt || !isLineWarehouseTx(loadedReceipt.txType, loadedReceipt.returnOf) || !smWarehouses) return [];
+  const codes = getZoneWarehouseCodes(loadedReceipt.warehouse || 'MAIN');
+  return codes.length > 1 ? codes : [];
+}
+
+function editLineWarehouseSelectHtml(rec, idx, codes) {
+  const cur = rec.warehouse ? String(rec.warehouse).toUpperCase() : '';
+  const list = cur && !codes.includes(cur) ? [cur, ...codes] : codes;
+  const opts = (cur ? '' : '<option value="" selected>자동</option>') +
+    list.map(c => `<option value="${escapeHtml(c)}" ${c === cur ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+  return `<select onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="onEditLineWarehouseChange(${idx}, this.value)" title="자동: 같은 품목의 기존 창고, 없으면 전표 창고" style="font-size: 8.5pt; font-weight: 700; color: #1e3a8a; padding: 1px 3px;">${opts}</select>`;
+}
+
+function onEditLineWarehouseChange(idx, code) {
+  const r = records[idx];
+  if (!r) return;
+  if (code) r.warehouse = String(code).toUpperCase();
+  else delete r.warehouse;
+}
+
 /** 불러온 전표의 창고를 배너에 표시한다. 입고는 도착 창고이므로 DESTINO로 표기. */
 function renderLoadedOrigin() {
   const label = document.getElementById('loadedOriginLabel');
@@ -1414,6 +1467,9 @@ function reprintReceipt() {
 }
 
 function displayRecords(recordsData) {
+  const first = recordsData[0] || {};
+  // 출고·반품 입고 전표는 줄별 창고를 그대로 들고 있어야 수정 저장 때 각 줄이 자기 창고로 다시 반영된다.
+  const keepLineWh = isLineWarehouseTx(first.txType, first.returnOf);
   records = recordsData.map(record => ({
     itemName: record.itemName,
     color: record.color,
@@ -1421,14 +1477,18 @@ function displayRecords(recordsData) {
     individualQty: record.individualQty,
     boxContent: record.boxContent,
     location: record.location,
-    unitType: record.boxQty !== 0 ? 'box' : 'individual'
+    unitType: record.boxQty !== 0 ? 'box' : 'individual',
+    ...(keepLineWh ? { warehouse: String(record.warehouse || 'MAIN').toUpperCase() } : {})
   }));
   originalRecords = JSON.parse(JSON.stringify(records));
   if (loadedReceipt && recordsData.length > 0) {
-    loadedReceipt.warehouse = recordsData[0].warehouse;
-    loadedReceipt.txType = recordsData[0].txType;
-    loadedReceipt.returnOf = recordsData[0].returnOf || '';
+    // 줄마다 창고가 다른 센트로 혼합 전표는 MAIN에서 쓴 영수증이므로 ORIGEN은 MAIN(재발행 양식과 같은 규칙).
+    const lineWhs = [...new Set(recordsData.map(r => String(r.warehouse || 'MAIN').toUpperCase()))];
+    loadedReceipt.warehouse = keepLineWh && lineWhs.length > 1 ? 'MAIN' : first.warehouse;
+    loadedReceipt.txType = first.txType;
+    loadedReceipt.returnOf = first.returnOf || '';
   }
+  if (keepLineWh) ensureSmWarehouses(() => updateTable());
   renderLoadedOrigin();
   renderReturnControls();
   updateTable();
@@ -1481,8 +1541,14 @@ function addRecord() {
   }
 
   if (currentType === 'out' && !stockInfo.isSufficient) {
-    showStockWarningModal(qty, unitType === 'box' ? stockInfo.boxStock : stockInfo.individualStock, unitType === 'box' ? '박스' : '낱개');
-    return;
+    // 센트로 구역 전표는 MAIN에 없어도 다른 구역 창고에서 낼 수 있다. 추가 후 줄의 창고를 고르게 한다.
+    const zoneCodes = getEditLineWarehouseCodes();
+    if (!zoneCodes.length) {
+      showStockWarningModal(qty, unitType === 'box' ? stockInfo.boxStock : stockInfo.individualStock, unitType === 'box' ? '박스' : '낱개');
+      return;
+    }
+    if (!confirm(`MAIN 재고가 부족합니다(주문 ${qty}${unitType === 'box' ? '박스' : '낱개'}, MAIN ${unitType === 'box' ? stockInfo.boxStock : stockInfo.individualStock}).\n` +
+      `${zoneCodes.filter(c => c !== 'MAIN').join(' / ')} 창고에서 낼 거라면 추가한 뒤 그 줄의 [창고]를 바꾸세요.\n\n추가할까요?`)) return;
   }
 
   const formData = {
@@ -1569,6 +1635,9 @@ function handleEditableKeyDown(e, el, idx, field) {
 
 function updateTable() {
   const tbody = document.getElementById('tableBody');
+  const whCodes = getEditLineWarehouseCodes();
+  const whHeader = document.getElementById('lineWhHeader');
+  if (whHeader) whHeader.style.display = whCodes.length ? '' : 'none';
   let html = '';
   records.forEach((rec, idx) => {
     html += `
@@ -1580,6 +1649,7 @@ function updateTable() {
         <td contenteditable="true" tabindex="0" class="editable" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()" onfocus="handleEditableFocus(this, event)" onkeydown="handleEditableKeyDown(event, this, ${idx}, 'individualQty')" onblur="updateRecord(${idx}, 'individualQty', this.textContent)">${qtyForDisplay(rec.individualQty)}</td>
         <td>${rec.boxContent}</td>
         <td>${escapeHtml(rec.location)}</td>
+        ${whCodes.length ? `<td>${editLineWarehouseSelectHtml(rec, idx, whCodes)}</td>` : ''}
       </tr>
     `;
   });
@@ -1684,9 +1754,11 @@ if (invoiceNumber.padStart(3, '0') !== loadedInvoiceNumber) {
 
   // 재고 검증을 위한 임시 재고 캐시 생성
   let tempStockCache = JSON.parse(JSON.stringify(stockDataCache)); // 깊은 복사
+  // 화면 재고(stockDataCache)는 MAIN 재고다. 다른 창고 줄(센트로 서브창고 등)은 서버가 그 창고 재고로 검사한다.
+  const isMainLine = r => !r.warehouse || String(r.warehouse).toUpperCase() === 'MAIN';
   if (typeValue === 'out' && originalRecords.length > 0) {
     // 기존 레코드의 재고 반환 시뮬레이션
-    originalRecords.forEach(record => {
+    originalRecords.filter(isMainLine).forEach(record => {
       const key = `${record.itemName}_${record.color || 'SURTIDO'}_${record.boxContent || 0}`;
       const item = tempStockCache.find(item => item.key === key);
       if (item) {
@@ -1699,7 +1771,7 @@ if (invoiceNumber.padStart(3, '0') !== loadedInvoiceNumber) {
 
   // 새 레코드에 대해 재고 검증
   if (typeValue === 'out') {
-    for (const record of records) {
+    for (const record of records.filter(isMainLine)) {
       const bQty = Math.abs(record.boxQty) || 0;
       const iQty = Math.abs(record.individualQty) || 0;
 
@@ -1902,11 +1974,15 @@ function openReturnModal() {
     key: 'returnWarehouses',
     mode: 'latest',
     onSuccess: list => {
+      smWarehouses = (list || [])
+        .map(w => ({ code: String(w.code || '').toUpperCase(), zone: w.zone || null }))
+        .filter(w => w.code);
       const sel = document.getElementById('returnWarehouse');
-      const codes = (list || []).map(w => String(w.code || '').toUpperCase()).filter(Boolean);
+      const codes = smWarehouses.map(w => w.code);
       if (!codes.includes('MAIN')) codes.unshift('MAIN');
       sel.innerHTML = codes.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       sel.value = 'MAIN';
+      renderReturnLineWarehouses(false);
     },
     onError: err => console.warn('[반품] 창고 목록 조회 실패:', err)
   });
@@ -1961,8 +2037,46 @@ function renderReturnLines() {
       <td><b>${fmtReturnUnits(ln.remaining_units, pack)}</b></td>
       <td><input type="number" min="0" step="1" data-ret-idx="${i}" data-ret-field="box" ${done || pack <= 1 ? 'disabled' : ''} oninput="onReturnQtyInput()"></td>
       <td><input type="number" min="0" step="1" data-ret-idx="${i}" data-ret-field="unit" ${done ? 'disabled' : ''} oninput="onReturnQtyInput()"></td>
+      <td>
+        <select data-ret-wh="${i}" ${done ? 'disabled' : ''} onchange="this.dataset.manual = '1'; onReturnQtyInput()" style="font-weight: 700; color: #1e3a8a;"></select>
+        ${returnOutWarehousesNote(ln, pack)}
+      </td>
     </tr>`;
   }).join('');
+  renderReturnLineWarehouses(false);
+  onReturnQtyInput();
+}
+
+// 품목을 낸 창고가 둘 이상이거나 MAIN이 아니면 줄 아래에 출고 창고별 수량을 적어 준다.
+function returnOutWarehousesNote(ln, pack) {
+  const outs = Array.isArray(ln.out_warehouses) ? ln.out_warehouses : [];
+  if (!outs.length || (outs.length === 1 && String(outs[0].warehouse).toUpperCase() === 'MAIN')) return '';
+  const text = outs.map(o => `${escapeHtml(String(o.warehouse).toUpperCase())} ${fmtReturnUnits(o.units, pack)}`).join(' · ');
+  return `<div style="font-size: 7.5pt; color: #64748b; margin-top: 2px;">출고: ${text}</div>`;
+}
+
+// 줄별 반품 창고 선택칸을 채운다. 고를 수 있는 창고는 전체 반품 창고와 같은 구역의 창고.
+// 기본값은 그 품목을 낸 창고가 한 곳이면 그 창고, 아니면 전체 반품 창고. forceHeader면 모든 줄을 전체 반품 창고로 맞춘다.
+function renderReturnLineWarehouses(forceHeader) {
+  const d = returnCtx && returnCtx.data;
+  if (!d || !smWarehouses) return; // 창고 목록이 오면 다시 불린다(그 전에 제출하면 서버가 출고 창고 기준으로 고른다)
+  const header = (document.getElementById('returnWarehouse').value || 'MAIN').toUpperCase();
+  const codes = getZoneWarehouseCodes(header);
+  document.querySelectorAll('#returnLines select[data-ret-wh]').forEach(sel => {
+    const ln = d.lines[Number(sel.dataset.retWh)];
+    const outs = (ln && Array.isArray(ln.out_warehouses) ? ln.out_warehouses : []).map(o => String(o.warehouse).toUpperCase());
+    const prev = sel.value;
+    let pick = header;
+    if (forceHeader) delete sel.dataset.manual;
+    else if (sel.dataset.manual && codes.includes(prev)) pick = prev;
+    else if (outs.length === 1 && codes.includes(outs[0])) pick = outs[0];
+    sel.innerHTML = codes.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+    sel.value = pick;
+  });
+}
+
+function onReturnHeaderWarehouseChange() {
+  renderReturnLineWarehouses(true);
   onReturnQtyInput();
 }
 
@@ -1983,8 +2097,10 @@ function collectReturnItems() {
     if (!ln || (q.box === 0 && q.unit === 0)) return;
     const pack = Math.max(1, Number(ln.pack) || 1);
     const units = q.box * pack + q.unit;
+    const whSel = document.querySelector(`#returnLines select[data-ret-wh="${i}"]`);
     items.push({
       item_id: ln.item_id, box_qty: q.box, unit_qty: q.unit, units,
+      warehouse: (whSel && whSel.value) || '',
       name: ln.item_name, color: ln.color, pack,
       over: units > Number(ln.remaining_units || 0)
     });
@@ -2013,20 +2129,23 @@ function submitReturn() {
   if (!items.length || items.some(it => it.over)) return;
   const wh = document.getElementById('returnWarehouse').value || 'MAIN';
   const memo = document.getElementById('returnMemo').value.trim();
-  const summary = items.map(it => `- ${it.name} (${it.color}): ${fmtReturnUnits(it.units, it.pack)}`).join('\n');
-  if (!confirm(`원 출고 전표 ${d.invoice_no} (${d.partner || '-'})의 반품을 ${wh} 창고로 입고합니다.\n\n${summary}\n\n진행할까요?`)) return;
+  // 줄 창고가 비어 있으면(창고 목록을 아직 못 받음) 서버가 그 품목을 낸 창고(한 곳일 때) 또는 전체 반품 창고로 받는다.
+  const whLabel = it => it.warehouse || `${wh}(자동)`;
+  const whText = [...new Set(items.map(whLabel))].join(', ');
+  const summary = items.map(it => `- ${it.name} (${it.color}): ${fmtReturnUnits(it.units, it.pack)} → ${whLabel(it)}`).join('\n');
+  if (!confirm(`원 출고 전표 ${d.invoice_no} (${d.partner || '-'})의 반품을 ${whText} 창고로 입고합니다.\n\n${summary}\n\n진행할까요?`)) return;
 
   const btn = document.getElementById('returnSubmit');
   const status = document.getElementById('returnStatus');
   btn.disabled = true;
   status.style.color = '#475569';
   status.textContent = '⏳ 반품 기록 중...';
-  const payload = items.map(({ item_id, box_qty, unit_qty }) => ({ item_id, box_qty, unit_qty }));
+  const payload = items.map(({ item_id, box_qty, unit_qty, warehouse }) => ({ item_id, box_qty, unit_qty, warehouse }));
   callServer('processReturn', [d.invoice_no, wh, memo, payload], {
     key: 'processReturn',
     timeout: 60000,
     onSuccess: res => {
-      alert(`반품이 기록되었습니다.\n반품 전표: ${(res && res.invoice_no) || '-'} (입고 · ${wh})\n원 출고 전표 ${d.invoice_no}는 그대로 남아 있습니다.`);
+      alert(`반품이 기록되었습니다.\n반품 전표: ${(res && res.invoice_no) || '-'} (입고 · ${whText})\n원 출고 전표 ${d.invoice_no}는 그대로 남아 있습니다.`);
       loadStockData(true);
       closeReturnModal();
     },
