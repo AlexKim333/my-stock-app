@@ -1156,7 +1156,9 @@ export const serverMethods = {
         adj_mode: 'replace',
         box_qty: targetBox,
         unit_qty: targetUnit,
-        reason: adj.reason || '실사'
+        reason: adj.reason || '실사',
+        // 창을 연 시각: 그 뒤에 재고가 바뀌었으면 서버가 치환을 거절한다([실사 이후 재고 변동])
+        counted_at: adj.countedAt || null
       })
     }
 
@@ -1491,7 +1493,9 @@ export const serverMethods = {
         adj_mode: adjType,
         box_qty: inputBox,
         unit_qty: inputIndiv,
-        reason: '재고조사'
+        reason: '재고조사',
+        // 행을 표에 담은(센) 시각: 그 뒤에 재고가 바뀌었으면 서버가 치환을 거절한다([실사 이후 재고 변동])
+        counted_at: record.countedAt || null
       })
       updatedKeys.push({ key, name, color, boxContent, adjType, itemId })
     }

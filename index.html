@@ -5051,8 +5051,21 @@ function initPage() {
   prefetchLocationCaches();
 }
 
+// 재고조정 행에 처음 표에 담긴(센) 시각을 남긴다. 그 뒤에 재고가 바뀌었으면 서버가 치환을 거절한다([실사 이후 재고 변동]).
+function stampAdjCountedAt() {
+  if (currentType !== 'adj') return;
+  const now = new Date().toISOString();
+  records.forEach(r => { if (r && !r.countedAt) r.countedAt = now; });
+}
+
+const STALE_COUNT_MARK = '[실사 이후 재고 변동]';
+function isStaleCountError(err) {
+  return String((err && err.message) || err || '').includes(STALE_COUNT_MARK);
+}
+
 function saveTableData() {
   if (currentType === 'product') return;
+  stampAdjCountedAt();
   try {
     const storageKey = typeConfig[currentType].sessionStorageKey;
     localStorage.setItem(storageKey, JSON.stringify(records));
@@ -5722,6 +5735,7 @@ function addRecord() {
       else formData.boxQty = origRec.boxQty;
       showAppToast(`ℹ️ 상자+낱개 혼합 행입니다. 수정하지 않은 ${unitType === 'box' ? '낱개' : '상자'} 수량은 그대로 유지됩니다.`, 3500);
     }
+    if (origRec.countedAt) formData.countedAt = origRec.countedAt; // 수정해도 처음 센 시각 기준으로 변동을 검사한다
     records[editingRecordIndex] = formData;
     exitEditMode();
 
@@ -6671,6 +6685,7 @@ function confirmSubmitCore() {
   if (type === 'adj') {
     const adjWh = getAdjWarehouse();
     records.forEach(r => { r.warehouse = adjWh; });
+    stampAdjCountedAt();
   } else if (type === 'out' || type === 'in') {
     // 그리드/OCR 등으로 담은 행에는 창고가 비어 있을 수 있다. 서버는 첫 행의 창고를 쓰므로(미지정이면 MAIN),
     // 확인창에 보이는 선택 창고와 실제 차감 창고가 어긋나지 않도록 제출 직전에 맞춘다.
@@ -6801,6 +6816,17 @@ function confirmSubmitCore() {
       }
     },
     onError: err => {
+      // 센 뒤에 재고가 바뀐 품목이 있으면(그 사이 출고 등) 다시 세도록 알리고, 센 수량이 지금도 맞다고 하면 다시 제출한다.
+      if (type === 'adj' && isStaleCountError(err)) {
+        const msg = String(err.message || err).replace(/^.*?\[실사 이후 재고 변동\]\s*/s, '');
+        if (confirm(`⚠️ 실사 이후 재고 변동\n\n${msg}\n\n방금 다시 확인해서 센 수량이 지금도 맞으면 [확인]을 눌러 그대로 치환합니다.\n다시 세려면 [취소]를 누르고 해당 행을 고친 뒤 제출하세요.`)) {
+          const now = new Date().toISOString();
+          records.forEach(r => { if (r) r.countedAt = now; });
+          saveTableData();
+          setTimeout(() => confirmSubmitCore(), 0);
+        }
+        return;
+      }
       handleError(err);
       // 연결된 보류가 이미 처리되었거나 다른 곳에서 다시 불러간 경우 연결을 끊을지 묻는다.
       if (type === 'out') {
@@ -9835,7 +9861,7 @@ let activeQuickAdjTarget = null;
 function openQuickAdjustModal(itemName, color, boxContent, currentBox, currentIndiv, requestedQty, opts = {}) {
   const warehouse = String((opts && opts.warehouse) || 'MAIN').toUpperCase();
   const reqUnit = (opts && opts.unit === 'individual') ? '개' : '상자';
-  activeQuickAdjTarget = { itemName, color, boxContent, currentBox, currentIndiv, warehouse, afterAdjust: (opts && opts.afterAdjust) || null };
+  activeQuickAdjTarget = { itemName, color, boxContent, currentBox, currentIndiv, warehouse, afterAdjust: (opts && opts.afterAdjust) || null, countedAt: new Date().toISOString() };
   const titleEl = document.getElementById('qadjItemTitle');
   const curEl = document.getElementById('qadjCurrentStock');
   const reqEl = document.getElementById('qadjRequestedQty');
@@ -9888,7 +9914,8 @@ function submitQuickStockAdjustment() {
     targetIndividual: targetIndiv,
     warehouse: activeQuickAdjTarget.warehouse || 'MAIN',
     location: '재고조정',
-    admin: currentAdmin
+    admin: currentAdmin,
+    countedAt: activeQuickAdjTarget.countedAt
   }];
 
   const activeQuickAdjTargetSnapshot = { ...activeQuickAdjTarget };
@@ -9954,6 +9981,13 @@ function submitQuickStockAdjustment() {
       }
     },
     onError: function(err) {
+      // 창을 연 뒤 재고가 바뀌었으면, 바뀐 현재 재고를 보고 다시 입력하도록 창을 연 시각을 지금으로 갱신한다.
+      if (isStaleCountError(err) && activeQuickAdjTarget) {
+        activeQuickAdjTarget.countedAt = new Date().toISOString();
+        const msg = String(err.message || err).replace(/^.*?\[실사 이후 재고 변동\]\s*/s, '');
+        alert(`⚠️ 실사 이후 재고 변동\n\n${msg}\n\n현재 재고를 확인한 뒤 수량이 맞으면 [재고조정 실행]을 다시 누르세요.`);
+        return;
+      }
       alert('❌ 퀵 재고조정 실패: ' + (err.message || err));
     },
     onSettled: function() {
@@ -16451,6 +16485,8 @@ function submitMobileAdjItem(isContinue) {
   const modeName = currentMobileAdjMode === 'increment' ? '➕추가' : '🔄치환';
 
   if (isEditing) {
+    const prevMobileRec = records[editingMobileRecordIndex];
+    if (prevMobileRec && prevMobileRec.countedAt) newRec.countedAt = prevMobileRec.countedAt; // 처음 센 시각 유지
     records[editingMobileRecordIndex] = newRec;
     if (editingMobileSubMode === 'add') {
       showAppToast(`✅ [#${editingMobileRecordIndex + 1}번] 추가 합산 ➔ 총 ${finalSummaryStr} 확정!`, 2200);

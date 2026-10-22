@@ -480,6 +480,35 @@ async function main() {
     assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고`)
   })
 
+  // 재고조정 화면·퀵재고·모바일 실사(rpc_adjust_stock 치환): 보류 아래로 줄이기 거절, 센 시각(counted_at) 이후 바뀐 재고 거절.
+  const adjustReplace = (targetBox, countedAt) => db.rpc('rpc_adjust_stock', {
+    p_admin: MEMBER_NAME,
+    p_items: [{ item_id: itemId, adj_mode: 'replace', box_qty: targetBox, unit_qty: 0, reason: '스모크테스트', counted_at: countedAt }],
+    p_warehouse: TEST_WAREHOUSE_CODE,
+    p_invoice: null,
+    p_memo: '스모크테스트 재고조정 가드',
+    p_idempotency_key: randomUUID()
+  }).then(({ data, error }) => { if (error) throw error; return data })
+
+  await step(`TEST 5-H2d: 재고조정 보류 가드 — ${TEST_WAREHOUSE_CODE} 6상자 중 4상자 보류, 3상자로 치환은 반드시 실패해야 함`, async () => {
+    await expectFailure(() => adjustReplace(3, null), /출고 보류/, '보류 아래로 치환')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+  })
+
+  await step(`TEST 5-H2e: 실사 이후 재고 변동 가드 — 센 시각 뒤에 재고가 바뀌었으면 치환은 반드시 실패해야 함`, async () => {
+    await expectFailure(() => adjustReplace(5, '2000-01-01T00:00:00Z'), /실사 이후 재고 변동/, '센 뒤 바뀐 재고 치환')
+    const sub = await readStock(db, itemId, TEST_WAREHOUSE_CODE)
+    assertEqual(sub.box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+  })
+
+  await step(`TEST 5-H2f: 재고조정 치환 6→7→6상자 (센 뒤 변동 없음 · 보류 4상자 이상이면 허용)`, async () => {
+    await adjustReplace(7, new Date(Date.now() + 5 * 60 * 1000).toISOString())
+    assertEqual((await readStock(db, itemId, TEST_WAREHOUSE_CODE)).box_qty, 7, `${TEST_WAREHOUSE_CODE} 박스재고`)
+    await adjustReplace(6, null)
+    assertEqual((await readStock(db, itemId, TEST_WAREHOUSE_CODE)).box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고`)
+  })
+
   await step(`TEST 5-H3: 보류 불러와 제출 -4상자 ← ${TEST_WAREHOUSE_CODE} (보류 소진, 옛 version 재제출은 거절)`, async () => {
     const { data: loaded, error } = await db.rpc('rpc_load_outbound_hold', { p_id: hold.id, p_version: hold.version })
     if (error) throw error
