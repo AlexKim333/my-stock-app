@@ -2944,9 +2944,10 @@
             <input type="checkbox" id="chkBelowSafeStock" onchange="filterSubWarehouseTable()" style="margin: 0; cursor: pointer;">
             <span>📉 안전재고 이하</span>
           </label>
-          <!-- ⭐ 관심품목 리스트 3개: 클릭 시 해당 리스트 품목만 필터링 (다시 클릭하면 해제) -->
-          <div style="display: inline-flex; align-items: center; gap: 3px; height: 28px; padding: 0 4px; background: #faf5ff; border: 1px solid #d8b4fe; border-radius: 5px; box-sizing: border-box;" title="관심품목 리스트를 클릭하면 그 품목만 표시됩니다 (다시 클릭하면 해제)">
+          <!-- ⭐ 관심품목 리스트: 드롭다운에 전체 목록, 칩은 핫키로 고정한 리스트(최대 3개). 클릭 시 해당 리스트 품목만 필터링 (다시 클릭하면 해제) -->
+          <div style="display: inline-flex; align-items: center; gap: 3px; height: 28px; padding: 0 4px; background: #faf5ff; border: 1px solid #d8b4fe; border-radius: 5px; box-sizing: border-box;" title="관심품목 리스트를 고르면 그 품목만 표시됩니다 (다시 클릭하면 해제)">
             <span style="font-size: 8.5pt; color: #7e22ce; font-weight: 700; white-space: nowrap; padding: 0 2px;">⭐</span>
+            <select id="subWhWatchlistSelect" onchange="onWatchlistSelectChange(this.value)" title="전체 관심품목 리스트" style="height: 22px; max-width: 150px; padding: 0 2px; border: 1px solid #c084fc; border-radius: 4px; background: #ffffff; color: #6b21a8; font-size: 7.8pt; font-weight: 700; cursor: pointer;"></select>
             <div id="subWhWatchlistChips" style="display: inline-flex; gap: 3px;"></div>
             <button type="button" onclick="openWatchlistEditor()" style="height: 22px; padding: 0 7px; border: 1px solid #c084fc; background: #ffffff; color: #7e22ce; border-radius: 4px; font-size: 7.8pt; font-weight: 700; cursor: pointer; white-space: nowrap;" title="관심품목 리스트 편집">✏️ 편집</button>
           </div>
@@ -3028,7 +3029,7 @@
       </div>
     </div>
 
-    <!-- ⭐ 2차 모달: 관심품목 리스트 편집 (리스트 3개 × 품목 수 제한 없음) -->
+    <!-- ⭐ 2차 모달: 관심품목 리스트 편집 (리스트 수·품목 수 제한 없음, 핫키 칩은 최대 3개) -->
     <div id="watchlistEditorBackdrop" onclick="closeWatchlistEditor()" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); z-index: 1075;"></div>
     <div id="watchlistEditorModal" class="modal" style="display: none; width: 1100px; max-width: 96vw; height: 86vh; max-height: 86vh; padding: 14px 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.4); z-index: 1080; box-sizing: border-box; border-radius: 8px; flex-direction: column;">
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #a855f7; padding-bottom: 8px; margin-bottom: 10px; flex-shrink: 0;">
@@ -3038,11 +3039,19 @@
 
       <!-- 리스트 선택 탭 + 이름 변경 -->
       <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-shrink: 0; flex-wrap: wrap;">
-        <div id="wlEditorTabs" style="display: inline-flex; gap: 4px;"></div>
-        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 8.5pt; color: #475569; font-weight: 600; margin-left: 8px; width: auto; white-space: nowrap;">
+        <div id="wlEditorTabs" style="display: inline-flex; gap: 4px; flex-wrap: wrap;"></div>
+        <button type="button" onclick="addWatchlistEditorList()" style="height: 28px; padding: 0 10px; border: 1px dashed #a855f7; background: #ffffff; color: #7e22ce; border-radius: 5px; font-size: 8.5pt; font-weight: 700; cursor: pointer; white-space: nowrap;" title="새 관심품목 리스트 추가">＋ 새 리스트</button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-shrink: 0; flex-wrap: wrap;">
+        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 8.5pt; color: #475569; font-weight: 600; width: auto; white-space: nowrap;">
           리스트 이름
           <input type="text" id="wlEditorNameInput" maxlength="20" oninput="onWatchlistNameInput(this.value)" style="height: 28px; width: 180px; padding: 0 8px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 9pt; box-sizing: border-box;">
         </label>
+        <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 8.5pt; color: #7e22ce; font-weight: 700; width: auto; white-space: nowrap; cursor: pointer;" title="핫키로 고정한 리스트(최대 3개)는 툴바에 칩으로 바로 표시됩니다">
+          <input type="checkbox" id="wlEditorHotkeyChk" onchange="onWatchlistHotkeyChange(this.checked)" style="margin: 0; cursor: pointer;">
+          ⚡ 핫키 고정 (<span id="wlEditorHotkeyCount">0</span>/3)
+        </label>
+        <button type="button" onclick="deleteWatchlistEditorList()" style="height: 26px; padding: 0 10px; border: 1px solid #fca5a5; background: #ffffff; color: #b91c1c; border-radius: 4px; font-size: 8pt; font-weight: 600; cursor: pointer; margin-left: auto;">🗑 이 리스트 삭제</button>
       </div>
 
       <div style="display: flex; gap: 12px; flex: 1; min-height: 0;">
@@ -13987,12 +13996,14 @@ function updateSubWhPaginationControls(totalFiltered, totalPages, currentPage, s
 }
 
 // -------------------------------------------------------------------
-// ⭐ 관심품목 리스트 (3개, 품목 수 제한 없음) — 이 브라우저(localStorage)에 저장
-// 툴바 칩을 누르면 그 리스트 품목만 매트릭스에 표시되고, 다시 누르면 해제된다.
+// ⭐ 관심품목 리스트 (리스트 수·품목 수 제한 없음) — 이 브라우저(localStorage)에 저장
+// 툴바 드롭다운에 전체 리스트가 나오고, 핫키로 고정한 리스트(최대 3개)는 칩으로 바로 보인다.
+// 리스트를 고르면 그 품목만 매트릭스에 표시되고, 칩을 다시 누르면 해제된다.
 // 품목은 품명+색상으로 식별한다(입수가 다른 같은 품명·색상은 함께 표시).
 // -------------------------------------------------------------------
 const WATCHLIST_STORAGE_KEY = 'wms_subwh_watchlists_v1';
-const WATCHLIST_COUNT = 3;
+const WATCHLIST_DEFAULT_COUNT = 3;  // 저장된 리스트가 없을 때 만들어 두는 빈 리스트 수
+const WATCHLIST_HOTKEY_MAX = 3;     // 툴바 칩(핫키)으로 고정할 수 있는 리스트 수
 const WATCHLIST_SEARCH_RENDER_LIMIT = 300;
 let activeWatchlistIndex = null; // null = 필터 꺼짐
 let wlEditorLists = [];
@@ -14008,27 +14019,55 @@ function getWatchlists() {
   try {
     saved = JSON.parse(localStorage.getItem(WATCHLIST_STORAGE_KEY) || '[]');
   } catch (e) {}
-  const lists = [];
-  for (let i = 0; i < WATCHLIST_COUNT; i++) {
-    const s = Array.isArray(saved) && saved[i] ? saved[i] : {};
-    lists.push({
-      name: (s.name && String(s.name).trim()) || `관심 ${i + 1}`,
-      items: Array.isArray(s.items) ? s.items.filter(it => it && it.codigo) : []
-    });
+  if (!Array.isArray(saved)) saved = [];
+  saved = saved.filter(s => s && typeof s === 'object');
+  // 핫키 표시가 없던 예전 데이터(리스트 3개 고정)는 앞의 3개를 핫키로 본다
+  const hasHotkeyFlag = saved.some(s => typeof s.hotkey === 'boolean');
+  const lists = saved.map((s, i) => ({
+    name: (s.name && String(s.name).trim()) || `관심 ${i + 1}`,
+    items: Array.isArray(s.items) ? s.items.filter(it => it && it.codigo) : [],
+    hotkey: hasHotkeyFlag ? s.hotkey === true : i < WATCHLIST_HOTKEY_MAX
+  }));
+  if (!lists.length) {
+    for (let i = 0; i < WATCHLIST_DEFAULT_COUNT; i++) {
+      lists.push({ name: `관심 ${i + 1}`, items: [], hotkey: i < WATCHLIST_HOTKEY_MAX });
+    }
   }
+  let hotkeys = 0;
+  lists.forEach(l => {
+    if (!l.hotkey) return;
+    if (hotkeys >= WATCHLIST_HOTKEY_MAX) l.hotkey = false;
+    else hotkeys++;
+  });
   return lists;
 }
 
 function getActiveWatchlistKeySet() {
   if (activeWatchlistIndex === null) return null;
   const list = getWatchlists()[activeWatchlistIndex];
+  if (!list) {
+    activeWatchlistIndex = null;
+    return null;
+  }
   return new Set(list.items.map(it => watchlistItemKey(it.codigo, it.color)));
 }
 
 function renderWatchlistChips() {
+  const lists = getWatchlists();
+  const select = document.getElementById('subWhWatchlistSelect');
+  if (select) {
+    select.innerHTML = [
+      `<option value="">${activeWatchlistIndex === null ? `전체 리스트 (${lists.length})` : '✕ 필터 해제'}</option>`,
+      ...lists.map((list, i) => `<option value="${i}">${list.hotkey ? '⚡ ' : ''}${escapeHtml(list.name)} (${list.items.length})</option>`),
+      '<option value="__new__">＋ 새 리스트 만들기…</option>'
+    ].join('');
+    select.value = activeWatchlistIndex === null ? '' : String(activeWatchlistIndex);
+    select.style.background = activeWatchlistIndex === null ? '#ffffff' : '#f3e8ff';
+  }
   const container = document.getElementById('subWhWatchlistChips');
   if (!container) return;
-  container.innerHTML = getWatchlists().map((list, i) => {
+  container.innerHTML = lists.map((list, i) => {
+    if (!list.hotkey) return '';
     const isActive = activeWatchlistIndex === i;
     return `
       <button type="button" onclick="toggleWatchlistFilter(${i})" title="${escapeHtml(list.name)} (${list.items.length}개) — ${isActive ? '클릭하면 필터 해제' : '클릭하면 이 품목만 표시'}"
@@ -14053,12 +14092,29 @@ function toggleWatchlistFilter(index) {
   filterSubWarehouseTable();
 }
 
+function onWatchlistSelectChange(value) {
+  if (value === '__new__') {
+    renderWatchlistChips(); // 드롭다운 선택을 원래대로 되돌린다
+    if (openWatchlistEditor()) addWatchlistEditorList();
+    return;
+  }
+  if (value === '') {
+    activeWatchlistIndex = null;
+    renderWatchlistChips();
+    filterSubWarehouseTable();
+    return;
+  }
+  const index = Number(value);
+  if (activeWatchlistIndex !== index) toggleWatchlistFilter(index);
+  renderWatchlistChips(); // 빈 리스트라 편집창이 열린 경우에도 드롭다운을 현재 필터로 맞춘다
+}
+
 function openWatchlistEditor(index) {
   if (!subWhMatrixData || !subWhMatrixData.items) {
     alert('품목 목록을 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
-    return;
+    return false;
   }
-  wlEditorLists = getWatchlists().map(l => ({ name: l.name, items: l.items.map(it => ({ codigo: it.codigo, color: it.color })) }));
+  wlEditorLists = getWatchlists().map(l => ({ name: l.name, hotkey: l.hotkey, items: l.items.map(it => ({ codigo: it.codigo, color: it.color })) }));
   wlEditorIndex = typeof index === 'number' ? index : (activeWatchlistIndex !== null ? activeWatchlistIndex : 0);
   const searchInput = document.getElementById('wlEditorSearchInput');
   if (searchInput) searchInput.value = '';
@@ -14066,6 +14122,7 @@ function openWatchlistEditor(index) {
   document.getElementById('watchlistEditorModal').style.display = 'flex';
   renderWatchlistEditor();
   setTimeout(() => { if (searchInput) searchInput.focus(); }, 50);
+  return true;
 }
 
 function closeWatchlistEditor() {
@@ -14091,6 +14148,10 @@ function renderWatchlistEditor() {
   renderWatchlistListTable();
 }
 
+function getWatchlistEditorHotkeyCount() {
+  return wlEditorLists.filter(l => l.hotkey).length;
+}
+
 function renderWatchlistEditorTabs() {
   const tabs = document.getElementById('wlEditorTabs');
   if (!tabs) return;
@@ -14100,10 +14161,48 @@ function renderWatchlistEditorTabs() {
       <button type="button" onclick="switchWatchlistEditorTab(${i})"
         style="height: 28px; max-width: 160px; padding: 0 12px; border-radius: 5px; font-size: 8.5pt; font-weight: 700; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         border: 1px solid ${isActive ? '#7e22ce' : '#d8b4fe'}; background: ${isActive ? '#7e22ce' : '#faf5ff'}; color: ${isActive ? '#ffffff' : '#6b21a8'};">
-        ${escapeHtml(list.name || `관심 ${i + 1}`)} (${list.items.length})
+        ${list.hotkey ? '⚡ ' : ''}${escapeHtml(list.name || `관심 ${i + 1}`)} (${list.items.length})
       </button>
     `;
   }).join('');
+  const hotkeyChk = document.getElementById('wlEditorHotkeyChk');
+  if (hotkeyChk) hotkeyChk.checked = !!wlEditorLists[wlEditorIndex].hotkey;
+  const hotkeyCount = document.getElementById('wlEditorHotkeyCount');
+  if (hotkeyCount) hotkeyCount.textContent = getWatchlistEditorHotkeyCount();
+}
+
+function onWatchlistHotkeyChange(checked) {
+  const list = wlEditorLists[wlEditorIndex];
+  if (checked && !list.hotkey && getWatchlistEditorHotkeyCount() >= WATCHLIST_HOTKEY_MAX) {
+    alert(`핫키는 최대 ${WATCHLIST_HOTKEY_MAX}개까지 고정할 수 있습니다.\n다른 리스트의 핫키 고정을 먼저 해제해 주세요.`);
+    renderWatchlistEditorTabs();
+    return;
+  }
+  list.hotkey = checked;
+  renderWatchlistEditorTabs();
+}
+
+function addWatchlistEditorList() {
+  const usedNames = new Set(wlEditorLists.map(l => String(l.name || '').trim()));
+  let n = wlEditorLists.length + 1;
+  while (usedNames.has(`관심 ${n}`)) n++;
+  wlEditorLists.push({ name: `관심 ${n}`, items: [], hotkey: getWatchlistEditorHotkeyCount() < WATCHLIST_HOTKEY_MAX });
+  wlEditorIndex = wlEditorLists.length - 1;
+  renderWatchlistEditor();
+  const nameInput = document.getElementById('wlEditorNameInput');
+  if (nameInput) setTimeout(() => { nameInput.focus(); nameInput.select(); }, 60);
+}
+
+function deleteWatchlistEditorList() {
+  const list = wlEditorLists[wlEditorIndex];
+  if (wlEditorLists.length <= 1) {
+    alert('마지막 리스트는 삭제할 수 없습니다. 품목을 비우려면 [전체 비우기]를 사용하세요.');
+    return;
+  }
+  if (!confirm(`[${list.name}] 리스트${list.items.length ? `(품목 ${list.items.length}개)` : ''}를 삭제하시겠습니까?\n(저장을 눌러야 반영됩니다)`)) return;
+  wlEditorLists.splice(wlEditorIndex, 1);
+  wlEditorIndex = Math.min(wlEditorIndex, wlEditorLists.length - 1);
+  renderWatchlistEditor();
 }
 
 function getWatchlistEditorKeySet() {
@@ -14243,7 +14342,7 @@ function clearWatchlistEditorItems() {
 }
 
 function saveWatchlistEditor() {
-  const lists = wlEditorLists.map((l, i) => ({ name: String(l.name || '').trim() || `관심 ${i + 1}`, items: l.items }));
+  const lists = wlEditorLists.map((l, i) => ({ name: String(l.name || '').trim() || `관심 ${i + 1}`, hotkey: !!l.hotkey, items: l.items }));
   try {
     localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(lists));
   } catch (e) {
