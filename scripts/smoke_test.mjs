@@ -301,6 +301,18 @@ async function main() {
     assertEqual(sub.box_qty, 0, `${TEST_WAREHOUSE_CODE} 박스재고`)
   })
 
+  // 비활성·없는 창고로의 이동은 거절해야 한다. 가드가 고장나면 실제 창고에 재고가 써지므로
+  // 실제 비활성 창고(YARE 등) 대신 존재하지 않는 코드로만 확인한다(SMOKETEST는 예외로 허용됨 — TEST 2).
+  await step('TEST 3-W: 이동(MOVE) 없는/비활성 창고로는 거절', async () => {
+    await expectFailure(
+      () => processTx(db, { txType: 'MOVE', warehouse: 'MAIN', targetWarehouse: '__SMOKE_NO_SUCH_WH__', items: [{ item_id: itemId, box_qty: 1, unit_qty: 0 }] }),
+      /\[비활성 창고\]/,
+      '없는 창고로 이동'
+    )
+    const main = await readStock(db, itemId, 'MAIN')
+    assertEqual(main.box_qty, 10, 'MAIN 박스재고 (거절된 이동은 재고를 바꾸지 않음)')
+  })
+
   let outInvoice
   await step('TEST 4: 출고(OUTBOUND) -10상자 ← MAIN', async () => {
     const res = await processTx(db, { txType: 'OUTBOUND', warehouse: 'MAIN', items: [{ item_id: itemId, box_qty: 10, unit_qty: 0 }] })

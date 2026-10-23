@@ -108,9 +108,10 @@ function saveWarehouseForm() {
 
   callServer('upsertWarehouse', [{ code, name, truckCapacityBoxes, sortOrder, isActive }], {
     key: 'upsertWarehouse',
-    onSuccess: () => {
+    onSuccess: res => {
       closeWarehouseForm();
       if (typeof showAppToast === 'function') showAppToast(`💾 서브창고 "${name}"${isEdit ? ' 정보가 수정' : '이 등록'}되었습니다.`, 2500);
+      afterWarehouseSaved(code, res);
       loadWarehousesAdminList();
     },
     onError: err => {
@@ -129,12 +130,21 @@ function toggleWarehouseActive(code, makeActive) {
 
   callServer('upsertWarehouse', [{ code: w.code, name: w.name, truckCapacityBoxes: w.truck_capacity_boxes, sortOrder: w.sort_order, isActive: makeActive }], {
     key: 'toggleWarehouseActive_' + code,
-    onSuccess: () => {
+    onSuccess: res => {
       if (typeof showAppToast === 'function') showAppToast(makeActive ? `✅ "${w.name}" 활성화되었습니다.` : `⛔ "${w.name}" 비활성화되었습니다.`, 2500);
+      afterWarehouseSaved(w.code, res);
       loadWarehousesAdminList();
     },
     onError: err => alert('처리 실패: ' + (err?.message || String(err)))
   });
+}
+
+// 서버가 창고의 지점 거래처(이동 도착지)를 창고 활성 상태에 맞춰 바꾸므로 출고처 목록을 다시 읽는다.
+function afterWarehouseSaved(code, res) {
+  if (res && res.branch_partner && res.branch_partner !== 'unchanged') invalidatePartnerCaches();
+  if (res && res.branch_partner === 'name_conflict') {
+    alert(`"${code}"와(과) 같은 이름의 거래처가 이미 있어 이동용 지점 거래처를 만들지 못했습니다.\n거래처 관리에서 지점 거래처를 직접 등록해야 이 창고로 이동할 수 있습니다.`);
+  }
 }
 
 /* ---------------- 🔐 작업자(관리자/직원) 관리 컨트롤러 ---------------- */
