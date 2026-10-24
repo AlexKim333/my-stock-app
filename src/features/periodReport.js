@@ -9,13 +9,16 @@
  * 수량은 모두 상자 환산(상자 + 낱개 ÷ 입수)이다. 이동(창고 간)은 출고 실적에 넣지 않고 따로 센다.
  * 반품 입고(type 'RETURN', DB에서는 INBOUND + return_of_invoice)는 입고에 넣지 않고, 반품일 기준으로
  * 따로 센다. 순출고 = 출고 − 반품. 판매 속도(일평균·재고 분석)는 순출고를 쓴다.
- * 서버는 전표 행만 돌려주고 집계는 여기서 하므로, 탭·창고 필터·검색을 바꿔도 다시 조회하지 않는다.
+ * 서버는 전표 행만 돌려주고 집계는 여기서 하므로, 탭·창고 필터·품목 필터·검색을 바꿔도 다시 조회하지 않는다.
+ * 품목 필터는 요약·모든 탭·엑셀에 같이 걸린다. 피벗 탭(기본 탭)은 행 차원 × 열 차원으로 고른 값을 펼친다
+ * (예: 한 품목의 거래처 × 일자 출고). 품목별 탭의 행을 누르면 그 품목으로 필터를 걸고 피벗으로 간다.
  * 재고 분석 탭(소진 예상·안 팔리는 재고·안전재고 점검)은 고른 기간의 출고량을 판매 속도로 쓰고
  * 현재 재고 스냅샷과 비교한다. 창고 필터와 상관없이 전체 출고·전체 재고 기준이다.
  * HTML 속성이 호출하는 함수만 파일 하단에서 window에 노출한다.
  */
 
 const PR_TABS = [
+  { key: 'pivot', label: '🧮 피벗' },
   { key: 'daily', label: '일자별' },
   { key: 'partner', label: '거래처·지점별' },
   { key: 'item', label: '품목별' },
@@ -30,8 +33,43 @@ const PR_MAX_TABLE_ROWS = 500;
 
 let prData = null; // { from, to, rows }
 let prSnapshot = null; // getStockSnapshot().items — 재고 분석 탭용 현재 재고
-let prTab = 'daily';
+let prTab = 'pivot';
 let prLoading = false;
+
+const PR_PIVOT_MAX_COLS = 60; // 날짜가 아닌 열 차원은 합계 상위만 열로 펼치고 나머지는 '기타'로 묶는다
+
+/** 피벗 차원: key(r)로 묶고 label(r)로 보여 준다. dates면 기간의 모든 날(주·월)을 순서대로 펼친다. */
+const PR_PIVOT_DIMS = {
+  partner: { label: '거래처·지점', key: r => r.partner || (r.type === 'MOVE' ? `→ ${r.dst || '?'} (이동)` : '(미지정)') },
+  item: { label: '품목', key: r => String(r.itemId), name: r => prItemLabel(r) },
+  date: { label: '일자', dates: true, key: r => r.date },
+  week: { label: '주(월요일 시작)', dates: true, key: r => prWeekKey(r.date) },
+  month: { label: '월', dates: true, key: r => String(r.date || '').slice(0, 7) },
+  warehouse: { label: '창고', key: r => (r.type === 'MOVE' ? (r.src || r.wh) : r.wh) || '(미지정)' },
+  handler: { label: '담당자', key: r => r.handler || '(미지정)' },
+  none: { label: '(합계만)', key: () => '합계' }
+};
+/** 피벗 값: 해당하지 않는 전표 행은 null을 돌려 빠진다. */
+const PR_PIVOT_MEASURES = {
+  out: { label: '출고 (상자 환산)', v: r => (r.type === 'OUTBOUND' ? r.boxEq : null) },
+  netOut: { label: '순출고 (출고 − 반품)', v: r => (r.type === 'OUTBOUND' ? r.boxEq : r.type === 'RETURN' ? -r.boxEq : null) },
+  outLines: { label: '출고 횟수 (줄)', v: r => (r.type === 'OUTBOUND' ? 1 : null) },
+  in: { label: '입고', v: r => (r.type === 'INBOUND' ? r.boxEq : null) },
+  ret: { label: '반품', v: r => (r.type === 'RETURN' ? r.boxEq : null) },
+  move: { label: '이동', v: r => (r.type === 'MOVE' ? r.boxEq : null) }
+};
+const PR_WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
+
+function prItemLabel(r) {
+  return r.color ? `${r.name} / ${r.color}` : String(r.name || '');
+}
+
+function prWeekKey(dateStr) {
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7));
+  return prDateStr(dt);
+}
 
 function prRound1(n) {
   return Math.round((Number(n) || 0) * 10) / 10;
@@ -123,6 +161,7 @@ function loadPeriodReport() {
       prLoading = false;
       prData = { from, to, rows: (res && res.rows) || [] };
       prFillWarehouseFilter();
+      prFillItemFilter();
       const days = prDays().length;
       prSetStatus(`${from} ~ ${to} · 전표 행 ${prData.rows.length.toLocaleString()}건 · 수량은 상자 환산(낱개 ÷ 입수)` +
         (days < 28 ? ' · ⚠️ 재고 분석의 판매 속도는 기간이 짧으면 흔들립니다(30~90일 권장)' : ''));
@@ -147,13 +186,173 @@ function prFillWarehouseFilter() {
   sel.value = list.includes(cur) ? cur : '';
 }
 
+function prFillItemFilter() {
+  const list = document.getElementById('prItemList');
+  if (!list || !prData) return;
+  const labels = new Set();
+  prData.rows.forEach(r => labels.add(prItemLabel(r)));
+  list.innerHTML = Array.from(labels).sort().map(l => `<option value="${escapeHtml(l)}"></option>`).join('');
+}
+
+/**
+ * 품목 필터 판정 함수. 비어 있으면 null.
+ * 목록의 이름("품명 / 컬러")과 정확히 같으면 그 품목만, 아니면 품명·컬러·이름에 그 글자가 들어간 품목 전부.
+ */
+function prItemMatcher() {
+  const q = String((document.getElementById('prItem') || {}).value || '').trim().toUpperCase();
+  if (!q) return null;
+  const exact = prData && prData.rows.some(r => prItemLabel(r).toUpperCase() === q);
+  if (exact) return r => prItemLabel(r).toUpperCase() === q;
+  return r => [r.name, r.color, prItemLabel(r)].some(v => String(v || '').toUpperCase().includes(q));
+}
+
 function prFilteredRows() {
   if (!prData) return [];
   const wh = (document.getElementById('prWh') || {}).value || '';
-  if (!wh) return prData.rows;
-  // 입고·출고는 재고가 늘거나 준 창고(warehouse_code)로만 거른다. 서브창고발 입고는 본사 입고라서
-  // 서브창고 필터에 넣으면 그 창고의 입고로 잘못 보인다(창고별 탭의 '본사로 보냄'에서 따로 보여 준다).
-  return prData.rows.filter(r => (r.type === 'MOVE' ? (r.src === wh || r.dst === wh || r.wh === wh) : r.wh === wh));
+  const itemMatch = prItemMatcher();
+  return prData.rows.filter(r => {
+    if (itemMatch && !itemMatch(r)) return false;
+    if (!wh) return true;
+    // 입고·출고는 재고가 늘거나 준 창고(warehouse_code)로만 거른다. 서브창고발 입고는 본사 입고라서
+    // 서브창고 필터에 넣으면 그 창고의 입고로 잘못 보인다(창고별 탭의 '본사로 보냄'에서 따로 보여 준다).
+    return r.type === 'MOVE' ? (r.src === wh || r.dst === wh || r.wh === wh) : r.wh === wh;
+  });
+}
+
+function prFillPivotControls() {
+  const fill = (id, map, def) => {
+    const sel = document.getElementById(id);
+    if (!sel || sel.options.length) return;
+    sel.innerHTML = Object.entries(map).map(([k, d]) => `<option value="${k}">${escapeHtml(d.label)}</option>`).join('');
+    sel.value = def;
+  };
+  fill('prPivRow', PR_PIVOT_DIMS, 'partner');
+  fill('prPivCol', PR_PIVOT_DIMS, 'date');
+  fill('prPivMeasure', PR_PIVOT_MEASURES, 'out');
+}
+
+function prPivotSettings() {
+  prFillPivotControls();
+  const val = (id, map, def) => {
+    const v = (document.getElementById(id) || {}).value;
+    return map[v] ? v : def;
+  };
+  return {
+    row: val('prPivRow', PR_PIVOT_DIMS, 'partner'),
+    col: val('prPivCol', PR_PIVOT_DIMS, 'date'),
+    measure: val('prPivMeasure', PR_PIVOT_MEASURES, 'out')
+  };
+}
+
+/** 날짜 차원의 버킷 목록(기간 전체, 데이터 없는 날도 포함)과 화면용 이름 */
+function prDateBuckets(dimKey) {
+  const dim = PR_PIVOT_DIMS[dimKey];
+  const keys = [];
+  prDays().forEach(d => {
+    const k = dim.key({ date: d });
+    if (!keys.includes(k)) keys.push(k);
+  });
+  const label = k => {
+    if (dimKey === 'date') {
+      const [y, m, d] = k.split('-').map(Number);
+      return `${k.slice(5)}(${PR_WEEKDAY[new Date(y, m - 1, d).getDay()]})`;
+    }
+    if (dimKey === 'week') return `${k.slice(5)} 시작 주`;
+    return k;
+  };
+  return keys.map(k => ({ key: k, label: label(k) }));
+}
+
+/** 피벗 표: 행 차원 × 열 차원, 값은 고른 지표. 마지막 열은 행 합계, 마지막 행은 열 합계. */
+function prBuildPivot(rows) {
+  const { row, col, measure } = prPivotSettings();
+  const rowDim = PR_PIVOT_DIMS[row];
+  const colDim = PR_PIVOT_DIMS[col];
+  const mv = PR_PIVOT_MEASURES[measure].v;
+  const names = new Map(); // 품목처럼 key와 보여 줄 이름이 다른 차원용
+  const cells = new Map(); // rowKey -> Map(colKey -> value)
+  const rowTot = new Map();
+  const colTot = new Map();
+  let grand = 0;
+  rows.forEach(r => {
+    const v = mv(r);
+    if (v == null) return;
+    const rk = rowDim.key(r);
+    const ck = colDim.key(r);
+    if (rowDim.name) names.set('r:' + rk, rowDim.name(r));
+    if (colDim.name) names.set('c:' + ck, colDim.name(r));
+    if (!cells.has(rk)) cells.set(rk, new Map());
+    const m = cells.get(rk);
+    m.set(ck, (m.get(ck) || 0) + v);
+    rowTot.set(rk, (rowTot.get(rk) || 0) + v);
+    colTot.set(ck, (colTot.get(ck) || 0) + v);
+    grand += v;
+  });
+
+  let colList = colDim.dates
+    ? prDateBuckets(col)
+    : Array.from(colTot.keys())
+      .sort((a, b) => colTot.get(b) - colTot.get(a))
+      .map(k => ({ key: k, label: names.get('c:' + k) || k }));
+  let otherKeys = null;
+  if (!colDim.dates && colList.length > PR_PIVOT_MAX_COLS) {
+    otherKeys = new Set(colList.slice(PR_PIVOT_MAX_COLS - 1).map(c => c.key));
+    colList = colList.slice(0, PR_PIVOT_MAX_COLS - 1);
+  }
+  if (col === 'none') colList = [];
+
+  const columns = [{ key: 'label', label: col === 'none' ? rowDim.label : `${rowDim.label} \\ ${colDim.label}`, sticky: true }];
+  colList.forEach((c, i) => columns.push({ key: 'c' + i, label: c.label, num: true }));
+  if (otherKeys) columns.push({ key: 'cOther', label: `기타 ${otherKeys.size}`, num: true });
+  columns.push({ key: 'total', label: '합계', num: true, bold: true });
+
+  const makeRow = (label, get, total) => {
+    const o = { label, total };
+    colList.forEach((c, i) => { o['c' + i] = get(c.key); });
+    if (otherKeys) o.cOther = Array.from(otherKeys).reduce((s, k) => s + (get(k) || 0), 0);
+    return o;
+  };
+
+  const rowKeys = rowDim.dates
+    ? prDateBuckets(row).map(b => b.key)
+    : Array.from(rowTot.keys()).sort((a, b) => rowTot.get(b) - rowTot.get(a));
+  const rowLabels = rowDim.dates ? new Map(prDateBuckets(row).map(b => [b.key, b.label])) : null;
+  const out = rowKeys.map(rk => {
+    const m = cells.get(rk) || new Map();
+    return makeRow(rowLabels ? rowLabels.get(rk) : (names.get('r:' + rk) || rk), k => m.get(k) || 0, rowTot.get(rk) || 0);
+  });
+  if (out.length > 1 || !rowDim.dates) out.push({ ...makeRow('합계', k => colTot.get(k) || 0, grand), _total: true });
+  return { columns, rows: grand === 0 && !rowTot.size ? [] : out, pivot: true };
+}
+
+function swapPeriodReportPivot() {
+  prFillPivotControls();
+  const r = document.getElementById('prPivRow');
+  const c = document.getElementById('prPivCol');
+  if (!r || !c) return;
+  if (c.value === 'none') return;
+  [r.value, c.value] = [c.value, r.value];
+  renderPeriodReport();
+}
+
+function clearPeriodReportItem() {
+  const el = document.getElementById('prItem');
+  if (el) el.value = '';
+  renderPeriodReport();
+}
+
+/** 품목별 탭에서 품목을 누르면 그 품목으로 필터를 걸고 거래처 × 일자 피벗으로 간다. */
+function drillPeriodReportItem(label) {
+  const el = document.getElementById('prItem');
+  if (!el) return;
+  el.value = label || '';
+  prFillPivotControls();
+  const r = document.getElementById('prPivRow');
+  const c = document.getElementById('prPivCol');
+  if (r) r.value = 'partner';
+  if (c) c.value = 'date';
+  prTab = 'pivot';
+  renderPeriodReport();
 }
 
 function prDays() {
@@ -215,6 +414,8 @@ function prBuildTable(tab, rows) {
     if (!map.has(key)) map.set(key, init());
     return map.get(key);
   };
+
+  if (tab === 'pivot') return prBuildPivot(rows);
 
   if (tab === 'daily') {
     const map = new Map(prDays().map(d => [d, { date: d, inAll: 0, inFromSub: 0, out: 0, ret: 0, move: 0, inv: new Set() }]));
@@ -291,7 +492,7 @@ function prBuildTable(tab, rows) {
     const map = new Map();
     rows.forEach(r => {
       const g = add(map, r.itemId, () => ({
-        name: r.name, color: r.color, pack: r.pack,
+        name: r.name, color: r.color, pack: r.pack, _item: prItemLabel(r),
         outBox: 0, outUnit: 0, out: 0, ret: 0, outLines: 0, outPartners: new Set(), in: 0, move: 0
       }));
       if (r.type === 'OUTBOUND') {
@@ -322,7 +523,8 @@ function prBuildTable(tab, rows) {
       ],
       rows: Array.from(map.values())
         .map(g => ({ ...g, netOut: g.out - g.ret, retRate: prRate(g.ret, g.out), outPartnerCount: g.outPartners.size }))
-        .sort((a, b) => b.netOut - a.netOut || b.in - a.in)
+        .sort((a, b) => b.netOut - a.netOut || b.in - a.in),
+      drillItem: true
     };
   }
 
@@ -399,7 +601,8 @@ function prAnalysisItems() {
     if (r.type === 'OUTBOUND') outMap.set(r.itemId, (outMap.get(r.itemId) || 0) + r.boxEq);
     else if (r.type === 'RETURN') outMap.set(r.itemId, (outMap.get(r.itemId) || 0) - r.boxEq);
   });
-  return prSnapshot.map(it => {
+  const itemMatch = prItemMatcher();
+  return prSnapshot.filter(it => !itemMatch || itemMatch(it)).map(it => {
     const main = it.mainUnits / it.pack;
     const sub = it.subUnits / it.pack;
     const held = it.heldUnits / it.pack;
@@ -530,6 +733,11 @@ function renderPeriodReport() {
   if (searchWrap) searchWrap.style.display = prTab === 'item' || prTab === 'partner' || prIsAnalysisTab() ? 'block' : 'none';
   const leadWrap = document.getElementById('prLeadWrap');
   if (leadWrap) leadWrap.style.display = prTab === 'safety' ? 'inline-flex' : 'none';
+  const pivotWrap = document.getElementById('prPivotWrap');
+  if (pivotWrap) pivotWrap.style.display = prTab === 'pivot' ? 'inline-flex' : 'none';
+  if (prTab === 'pivot') prFillPivotControls();
+  const itemEl = document.getElementById('prItem');
+  if (itemEl) itemEl.style.background = itemEl.value.trim() ? '#dbeafe' : '#ffffff';
 
   const summaryEl = document.getElementById('prSummary');
   const tableEl = document.getElementById('prTable');
@@ -573,17 +781,25 @@ function renderPeriodReport() {
     return;
   }
   const shown = list.slice(0, PR_MAX_TABLE_ROWS);
-  const head = table.columns.map(c => `<th style="padding:6px 8px; text-align:${c.num ? 'right' : 'left'}; white-space:nowrap; position:sticky; top:0; background:#f1f5f9; border-bottom:1.5px solid #cbd5e1;">${escapeHtml(c.label)}</th>`).join('');
-  const body = shown.map(r => '<tr style="border-bottom:1px solid #f1f5f9;">' + table.columns.map(c => {
-    const v = r[c.key];
-    let text;
-    if (c.num && typeof v !== 'string') {
-      text = (Number(v) || (c.zero && v === 0)) ? prFmt(v) : '<span style="color:#cbd5e1;">-</span>';
-    } else {
-      text = escapeHtml(v == null ? '' : v);
-    }
-    return `<td style="padding:5px 8px; text-align:${c.num ? 'right' : 'left'}; white-space:nowrap;">${text}</td>`;
-  }).join('') + '</tr>').join('');
+  // 피벗의 첫 열(행 이름)은 가로 스크롤해도 왼쪽에 붙어 있게 한다.
+  const stickyCss = (c, bg) => (c.sticky ? `position:sticky; left:0; background:${bg}; border-right:1.5px solid #cbd5e1;` : '');
+  const head = table.columns.map(c => `<th style="padding:6px 8px; text-align:${c.num ? 'right' : 'left'}; white-space:nowrap; position:sticky; top:0; ${c.sticky ? 'left:0; z-index:2; border-right:1.5px solid #cbd5e1;' : 'z-index:1;'} background:#f1f5f9; border-bottom:1.5px solid #cbd5e1;">${escapeHtml(c.label)}</th>`).join('');
+  const body = shown.map(r => {
+    const bg = r._total ? '#f1f5f9' : '#ffffff';
+    const trAttr = table.drillItem && r._item
+      ? ` data-item="${escapeHtml(r._item)}" onclick="drillPeriodReportItem(this.dataset.item)" title="이 품목의 거래처 × 일자 피벗 보기" style="border-bottom:1px solid #f1f5f9; cursor:pointer;"`
+      : ` style="border-bottom:1px solid #f1f5f9;${r._total ? ' font-weight:800; border-top:1.5px solid #94a3b8;' : ''}"`;
+    return `<tr${trAttr}>` + table.columns.map(c => {
+      const v = r[c.key];
+      let text;
+      if (c.num && typeof v !== 'string') {
+        text = (Number(v) || (c.zero && v === 0)) ? prFmt(v) : '<span style="color:#cbd5e1;">-</span>';
+      } else {
+        text = escapeHtml(v == null ? '' : v);
+      }
+      return `<td style="padding:5px 8px; text-align:${c.num ? 'right' : 'left'}; white-space:nowrap; background:${c.bold && !r._total ? '#f8fafc' : bg};${c.bold ? ' font-weight:800;' : ''} ${stickyCss(c, bg)}">${text}</td>`;
+    }).join('') + '</tr>';
+  }).join('');
   const more = list.length > shown.length
     ? `<div style="padding:8px; font-size:8pt; color:#64748b; text-align:center;">상위 ${PR_MAX_TABLE_ROWS}행만 표시합니다 (전체 ${list.length.toLocaleString()}행은 엑셀에 들어갑니다).</div>`
     : '';
@@ -612,6 +828,11 @@ async function downloadPeriodReportXlsx() {
     ['기간 보고서'],
     ['기간', `${prData.from} ~ ${prData.to}`],
     ['창고', wh || '전체'],
+    ['품목 필터', String((document.getElementById('prItem') || {}).value || '').trim() || '전체'],
+    ['피벗 시트', (() => {
+      const p = prPivotSettings();
+      return `${PR_PIVOT_DIMS[p.row].label} × ${PR_PIVOT_DIMS[p.col].label} · ${PR_PIVOT_MEASURES[p.measure].label}`;
+    })()],
     ['수량 단위', '상자 환산 (상자 + 낱개 ÷ 입수). 이동은 출고에 포함하지 않음. 반품은 입고에 포함하지 않고 따로 셈'],
     [],
     ['입고', r1(s.inAll)],
@@ -637,7 +858,7 @@ async function downloadPeriodReportXlsx() {
       if (c.num && typeof v !== 'string') return r1(v);
       return v == null ? '' : v;
     })));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), t.label.replace(/[·]/g, ''));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), t.key === 'pivot' ? '피벗' : t.label.replace(/[·]/g, ''));
   });
 
   const TYPE_LABEL = { INBOUND: '입고', OUTBOUND: '출고', RETURN: '반품', MOVE: '이동' };
@@ -658,3 +879,6 @@ window.loadPeriodReport = loadPeriodReport;
 window.setPeriodReportTab = setPeriodReportTab;
 window.onPeriodReportFilterChange = onPeriodReportFilterChange;
 window.downloadPeriodReportXlsx = downloadPeriodReportXlsx;
+window.swapPeriodReportPivot = swapPeriodReportPivot;
+window.clearPeriodReportItem = clearPeriodReportItem;
+window.drillPeriodReportItem = drillPeriodReportItem;

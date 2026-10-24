@@ -17421,7 +17421,7 @@ if (document.readyState === 'loading') {
       <div style="padding:12px 18px; background:linear-gradient(135deg, #1e3a8a, #1d4ed8); color:#ffffff; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-shrink:0;">
         <div>
           <h2 style="margin:0; font-size:12pt; font-weight:800; color:#ffffff;">📑 기간 보고서</h2>
-          <span style="font-size:7.5pt; color:#bfdbfe;">입고·출고·이동을 일자/거래처/품목/창고/담당자별로 집계 (상자 환산, 이동은 출고와 별도)</span>
+          <span style="font-size:7.5pt; color:#bfdbfe;">품목 필터 + 피벗(예: 거래처 × 일자)으로 입고·출고·반품·이동 집계 (상자 환산, 이동은 출고와 별도)</span>
         </div>
         <button type="button" onclick="closePeriodReportModal()" style="background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:6px 14px; cursor:pointer; font-weight:bold; font-size:9.5pt; flex-shrink:0;">✕ 닫기</button>
       </div>
@@ -17440,6 +17440,11 @@ if (document.readyState === 'loading') {
         <select id="prWh" onchange="onPeriodReportFilterChange()" style="padding:4px 6px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;">
           <option value="">전체 창고</option>
         </select>
+        <span style="display:inline-flex; align-items:center; gap:3px;" title="고른 품목만으로 요약·모든 탭·엑셀을 다시 집계합니다. 목록에서 고르면 그 품목만, 일부만 치면 그 글자가 들어간 품목 전부.">
+          <input type="text" id="prItem" list="prItemList" oninput="onPeriodReportFilterChange()" placeholder="📦 품목 필터 (품명 / 컬러)" autocomplete="off" style="padding:4px 8px; border:1.5px solid #1d4ed8; border-radius:5px; font-size:8.5pt; width:220px; max-width:100%;">
+          <button type="button" onclick="clearPeriodReportItem()" style="padding:4px 7px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;" title="품목 필터 지우기">✕</button>
+          <datalist id="prItemList"></datalist>
+        </span>
         <button type="button" onclick="downloadPeriodReportXlsx()" style="padding:5px 12px; background:#15803d; color:#ffffff; border:none; border-radius:5px; font-weight:700; font-size:8.5pt; cursor:pointer; margin-left:auto;">⬇️ 엑셀 다운로드</button>
       </div>
       <div style="flex:1; overflow-y:auto; padding:12px 18px; display:flex; flex-direction:column; gap:12px;">
@@ -17447,6 +17452,12 @@ if (document.readyState === 'loading') {
         <div id="prSummary" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px;"></div>
         <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px;">
           <div id="prTabs" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
+          <span id="prPivotWrap" style="display:none; flex-wrap:wrap; align-items:center; gap:4px; font-size:8pt; color:#475569; flex-basis:100%;">
+            행 <select id="prPivRow" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
+            × 열 <select id="prPivCol" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
+            · 값 <select id="prPivMeasure" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
+            <button type="button" onclick="swapPeriodReportPivot()" style="padding:3px 8px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;" title="행과 열 바꾸기">⇄ 행/열 바꾸기</button>
+          </span>
           <span id="prLeadWrap" style="display:none; align-items:center; gap:4px; font-size:8pt; color:#475569;" title="권장 안전재고 = 일평균 출고 × 이 일수 (발주부터 입고까지 걸리는 기간 + 여유)">
             보충 기간 <input type="number" id="prLeadDays" value="14" min="1" max="365" oninput="onPeriodReportFilterChange()" style="width:52px; padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"> 일
           </span>
