@@ -17445,6 +17445,11 @@ if (document.readyState === 'loading') {
           <button type="button" onclick="clearPeriodReportItem()" style="padding:4px 7px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;" title="품목 필터 지우기">✕</button>
           <datalist id="prItemList"></datalist>
         </span>
+        <span style="display:inline-flex; align-items:center; gap:3px;" title="고른 거래처의 전표만으로 요약·탭·엑셀을 다시 집계합니다(재고 분석 탭은 제외). 목록에서 고르면 그 거래처만, 일부만 치면 그 글자가 들어간 거래처 전부.">
+          <input type="text" id="prPartner" list="prPartnerList" oninput="onPeriodReportPartnerChange()" placeholder="🏪 거래처 필터" autocomplete="off" style="padding:4px 8px; border:1.5px solid #1d4ed8; border-radius:5px; font-size:8.5pt; width:180px; max-width:100%;">
+          <button type="button" onclick="clearPeriodReportPartner()" style="padding:4px 7px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;" title="거래처 필터 지우기">✕</button>
+          <datalist id="prPartnerList"></datalist>
+        </span>
         <button type="button" onclick="downloadPeriodReportXlsx()" style="padding:5px 12px; background:#15803d; color:#ffffff; border:none; border-radius:5px; font-weight:700; font-size:8.5pt; cursor:pointer; margin-left:auto;">⬇️ 엑셀 다운로드</button>
       </div>
       <div style="flex:1; overflow-y:auto; padding:12px 18px; display:flex; flex-direction:column; gap:12px;">

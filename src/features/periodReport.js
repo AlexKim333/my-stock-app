@@ -10,7 +10,8 @@
  * 반품 입고(type 'RETURN', DB에서는 INBOUND + return_of_invoice)는 입고에 넣지 않고, 반품일 기준으로
  * 따로 센다. 순출고 = 출고 − 반품. 판매 속도(일평균·재고 분석)는 순출고를 쓴다.
  * 서버는 전표 행만 돌려주고 집계는 여기서 하므로, 탭·창고 필터·품목 필터·검색을 바꿔도 다시 조회하지 않는다.
- * 품목 필터는 요약·모든 탭·엑셀에 같이 걸린다. 피벗 탭(기본 탭)은 행 차원 × 열 차원으로 고른 값을 펼친다
+ * 품목 필터는 요약·모든 탭·엑셀에 같이 걸린다. 거래처 필터도 같지만 재고 분석 탭(현재 재고 기준)에는 걸리지 않는다.
+ * 거래처·지점별 탭의 행을 누르면 그 거래처로 필터를 걸고 품목별 합계 피벗으로 간다. 피벗 탭(기본 탭)은 행 차원 × 열 차원으로 고른 값을 펼친다
  * (예: 한 품목의 거래처 × 일자 출고). 품목별 탭의 행을 누르면 그 품목으로 필터를 걸고 피벗으로 간다.
  * 재고 분석 탭(소진 예상·안 팔리는 재고·안전재고 점검)은 고른 기간의 출고량을 판매 속도로 쓰고
  * 현재 재고 스냅샷과 비교한다. 창고 필터와 상관없이 전체 출고·전체 재고 기준이다.
@@ -162,6 +163,7 @@ function loadPeriodReport() {
       prData = { from, to, rows: (res && res.rows) || [] };
       prFillWarehouseFilter();
       prFillItemFilter();
+      prFillPartnerFilter();
       const days = prDays().length;
       prSetStatus(`${from} ~ ${to} · 전표 행 ${prData.rows.length.toLocaleString()}건 · 수량은 상자 환산(낱개 ÷ 입수)` +
         (days < 28 ? ' · ⚠️ 재고 분석의 판매 속도는 기간이 짧으면 흔들립니다(30~90일 권장)' : ''));
@@ -206,12 +208,44 @@ function prItemMatcher() {
   return r => [r.name, r.color, prItemLabel(r)].some(v => String(v || '').toUpperCase().includes(q));
 }
 
+/** 이동 전표는 거래처가 비어 있으므로 도착 창고(지점 거래처 이름 = 창고 코드)를 거래처로 본다. */
+function prPartnerOf(r) {
+  return r.partner || (r.type === 'MOVE' ? r.dst || '' : '');
+}
+
+function prFillPartnerFilter() {
+  const list = document.getElementById('prPartnerList');
+  if (!list || !prData) return;
+  const names = new Set();
+  prData.rows.forEach(r => { const p = prPartnerOf(r); if (p) names.add(p); });
+  list.innerHTML = Array.from(names).sort().map(p => `<option value="${escapeHtml(p)}"></option>`).join('');
+}
+
+/** 거래처 필터 판정 함수. 비어 있으면 null. 목록의 이름과 정확히 같으면 그 거래처만, 아니면 그 글자가 들어간 거래처 전부. */
+function prPartnerMatcher() {
+  const q = prPartnerQuery().toUpperCase();
+  if (!q) return null;
+  if (prPartnerIsExact()) return r => prPartnerOf(r).toUpperCase() === q;
+  return r => prPartnerOf(r).toUpperCase().includes(q);
+}
+
+function prPartnerQuery() {
+  return String((document.getElementById('prPartner') || {}).value || '').trim();
+}
+
+function prPartnerIsExact() {
+  const q = prPartnerQuery().toUpperCase();
+  return !!q && !!prData && prData.rows.some(r => prPartnerOf(r).toUpperCase() === q);
+}
+
 function prFilteredRows() {
   if (!prData) return [];
   const wh = (document.getElementById('prWh') || {}).value || '';
   const itemMatch = prItemMatcher();
+  const partnerMatch = prPartnerMatcher();
   return prData.rows.filter(r => {
     if (itemMatch && !itemMatch(r)) return false;
+    if (partnerMatch && !partnerMatch(r)) return false;
     if (!wh) return true;
     // 입고·출고는 재고가 늘거나 준 창고(warehouse_code)로만 거른다. 서브창고발 입고는 본사 입고라서
     // 서브창고 필터에 넣으면 그 창고의 입고로 잘못 보인다(창고별 탭의 '본사로 보냄'에서 따로 보여 준다).
@@ -341,16 +375,47 @@ function clearPeriodReportItem() {
   renderPeriodReport();
 }
 
+function prSetPivot(row, col) {
+  prFillPivotControls();
+  const r = document.getElementById('prPivRow');
+  const c = document.getElementById('prPivCol');
+  if (r) r.value = row;
+  if (c) c.value = col;
+}
+
+/**
+ * 거래처 필터 입력. 한 거래처를 정확히 고른 순간 피벗 행이 거래처면(한 줄짜리 표가 되므로)
+ * 그 거래처의 품목별 합계(품목 × 합계만)로 바꿔 준다.
+ */
+function onPeriodReportPartnerChange() {
+  if (prPartnerIsExact() && prTab === 'pivot' && (document.getElementById('prPivRow') || {}).value === 'partner') {
+    prSetPivot('item', 'none');
+  }
+  renderPeriodReport();
+}
+
+function clearPeriodReportPartner() {
+  const el = document.getElementById('prPartner');
+  if (el) el.value = '';
+  renderPeriodReport();
+}
+
+/** 거래처·지점별 탭에서 거래처를 누르면 그 거래처로 필터를 걸고 품목별 합계 피벗으로 간다. */
+function drillPeriodReportPartner(name) {
+  const el = document.getElementById('prPartner');
+  if (!el) return;
+  el.value = name || '';
+  prSetPivot('item', 'none');
+  prTab = 'pivot';
+  renderPeriodReport();
+}
+
 /** 품목별 탭에서 품목을 누르면 그 품목으로 필터를 걸고 거래처 × 일자 피벗으로 간다. */
 function drillPeriodReportItem(label) {
   const el = document.getElementById('prItem');
   if (!el) return;
   el.value = label || '';
-  prFillPivotControls();
-  const r = document.getElementById('prPivRow');
-  const c = document.getElementById('prPivCol');
-  if (r) r.value = 'partner';
-  if (c) c.value = 'date';
+  prSetPivot('partner', 'date');
   prTab = 'pivot';
   renderPeriodReport();
 }
@@ -474,6 +539,7 @@ function prBuildTable(tab, rows) {
       rows: Array.from(map.values())
         .map(g => ({
           partner: g.partner,
+          _partner: g.partner === '(미지정)' ? '' : g.partner,
           // 내부 창고로 가는 출고는 보통 이동(MOVE)으로 기록되지만, 이름이 창고인 거래처는 구분해 둔다.
           kind: prIsBranch(g.partner) ? '내부 창고' : (g.out > 0 || g.ret > 0 ? '거래처' : '입고처'),
           out: g.out,
@@ -484,7 +550,8 @@ function prBuildTable(tab, rows) {
           outItemCount: g.outItems.size,
           in: g.in
         }))
-        .sort((a, b) => b.netOut - a.netOut || b.in - a.in)
+        .sort((a, b) => b.netOut - a.netOut || b.in - a.in),
+      drillPartner: true
     };
   }
 
@@ -738,6 +805,8 @@ function renderPeriodReport() {
   if (prTab === 'pivot') prFillPivotControls();
   const itemEl = document.getElementById('prItem');
   if (itemEl) itemEl.style.background = itemEl.value.trim() ? '#dbeafe' : '#ffffff';
+  const partnerEl = document.getElementById('prPartner');
+  if (partnerEl) partnerEl.style.background = partnerEl.value.trim() ? '#dbeafe' : '#ffffff';
 
   const summaryEl = document.getElementById('prSummary');
   const tableEl = document.getElementById('prTable');
@@ -788,6 +857,8 @@ function renderPeriodReport() {
     const bg = r._total ? '#f1f5f9' : '#ffffff';
     const trAttr = table.drillItem && r._item
       ? ` data-item="${escapeHtml(r._item)}" onclick="drillPeriodReportItem(this.dataset.item)" title="이 품목의 거래처 × 일자 피벗 보기" style="border-bottom:1px solid #f1f5f9; cursor:pointer;"`
+      : table.drillPartner && r._partner
+      ? ` data-partner="${escapeHtml(r._partner)}" onclick="drillPeriodReportPartner(this.dataset.partner)" title="이 거래처의 품목별 합계 피벗 보기" style="border-bottom:1px solid #f1f5f9; cursor:pointer;"`
       : ` style="border-bottom:1px solid #f1f5f9;${r._total ? ' font-weight:800; border-top:1.5px solid #94a3b8;' : ''}"`;
     return `<tr${trAttr}>` + table.columns.map(c => {
       const v = r[c.key];
@@ -829,6 +900,7 @@ async function downloadPeriodReportXlsx() {
     ['기간', `${prData.from} ~ ${prData.to}`],
     ['창고', wh || '전체'],
     ['품목 필터', String((document.getElementById('prItem') || {}).value || '').trim() || '전체'],
+    ['거래처 필터', prPartnerQuery() || '전체'],
     ['피벗 시트', (() => {
       const p = prPivotSettings();
       return `${PR_PIVOT_DIMS[p.row].label} × ${PR_PIVOT_DIMS[p.col].label} · ${PR_PIVOT_MEASURES[p.measure].label}`;
@@ -882,3 +954,6 @@ window.downloadPeriodReportXlsx = downloadPeriodReportXlsx;
 window.swapPeriodReportPivot = swapPeriodReportPivot;
 window.clearPeriodReportItem = clearPeriodReportItem;
 window.drillPeriodReportItem = drillPeriodReportItem;
+window.onPeriodReportPartnerChange = onPeriodReportPartnerChange;
+window.clearPeriodReportPartner = clearPeriodReportPartner;
+window.drillPeriodReportPartner = drillPeriodReportPartner;
