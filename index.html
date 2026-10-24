@@ -17450,18 +17450,49 @@ if (document.readyState === 'loading') {
           <button type="button" onclick="clearPeriodReportPartner()" style="padding:4px 7px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;" title="거래처 필터 지우기">✕</button>
           <datalist id="prPartnerList"></datalist>
         </span>
+        <button type="button" id="prFieldBtn" onclick="togglePeriodReportFieldPanel()" title="거래처·품목·창고·담당자 값을 체크박스로 골라 빼거나 넣습니다 (요약·모든 탭·엑셀에 적용)" style="padding:4px 10px; background:#ffffff; border:1.5px solid #1d4ed8; color:#1d4ed8; border-radius:5px; font-weight:700; font-size:8.5pt; cursor:pointer;">☑️ 값 필터</button>
         <button type="button" onclick="downloadPeriodReportXlsx()" style="padding:5px 12px; background:#15803d; color:#ffffff; border:none; border-radius:5px; font-weight:700; font-size:8.5pt; cursor:pointer; margin-left:auto;">⬇️ 엑셀 다운로드</button>
       </div>
       <div style="flex:1; overflow-y:auto; padding:12px 18px; display:flex; flex-direction:column; gap:12px;">
         <div id="prStatus" style="font-size:8pt; color:#64748b;"></div>
+        <div id="prFieldChips" style="display:none; flex-wrap:wrap; gap:6px; align-items:center;"></div>
+        <div id="prFieldPanel" style="display:none; background:#ffffff; border:1.5px solid #1d4ed8; border-radius:8px; padding:10px 12px;">
+          <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px;">
+            <select id="prFieldDim" onchange="renderPeriodReportFieldPanel()" style="padding:4px 6px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; font-weight:700;">
+              <option value="partner">거래처·지점</option>
+              <option value="item">품목</option>
+              <option value="warehouse">창고</option>
+              <option value="handler">담당자</option>
+            </select>
+            <input type="text" id="prFieldSearch" oninput="renderPeriodReportFieldPanel()" placeholder="🔍 값 검색" autocomplete="off" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt; width:180px; max-width:100%;">
+            <button type="button" onclick="setPeriodReportFieldAll(true)" style="padding:4px 8px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;">보이는 값 모두 선택</button>
+            <button type="button" onclick="setPeriodReportFieldAll(false)" style="padding:4px 8px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;">보이는 값 모두 해제</button>
+            <span id="prFieldInfo" style="font-size:8pt; color:#64748b;"></span>
+            <button type="button" onclick="togglePeriodReportFieldPanel()" style="padding:4px 10px; background:#1d4ed8; color:#ffffff; border:none; border-radius:5px; font-size:8pt; font-weight:700; cursor:pointer; margin-left:auto;">닫기</button>
+          </div>
+          <div id="prFieldList" style="max-height:220px; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:2px 12px; font-size:8.5pt;"></div>
+        </div>
         <div id="prSummary" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px;"></div>
         <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px;">
           <div id="prTabs" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
-          <span id="prPivotWrap" style="display:none; flex-wrap:wrap; align-items:center; gap:4px; font-size:8pt; color:#475569; flex-basis:100%;">
-            행 <select id="prPivRow" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
-            × 열 <select id="prPivCol" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
-            · 값 <select id="prPivMeasure" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
-            <button type="button" onclick="swapPeriodReportPivot()" style="padding:3px 8px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;" title="행과 열 바꾸기">⇄ 행/열 바꾸기</button>
+          <span id="prPivotWrap" style="display:none; flex-wrap:wrap; align-items:center; gap:5px 6px; font-size:8pt; color:#475569; flex-basis:100%; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:6px 10px;">
+            <b style="color:#1e3a8a;">행</b>
+            <select id="prPivRow" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
+            › <select id="prPivRow2" onchange="onPeriodReportFilterChange()" title="2단계 행 (선택하면 1단계 행 아래로 나눠 소계를 보여 줍니다)" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
+            › <select id="prPivRow3" onchange="onPeriodReportFilterChange()" title="3단계 행" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
+            <b style="color:#1e3a8a; margin-left:6px;">열</b>
+            <select id="prPivCol" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
+            <button type="button" onclick="swapPeriodReportPivot()" style="padding:3px 8px; background:#ffffff; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;" title="1단계 행과 열 바꾸기">⇄ 행/열 바꾸기</button>
+            <span style="flex-basis:100%; height:0;"></span>
+            <b style="color:#1e3a8a;">값</b>
+            <span id="prPivMeasures" style="display:inline-flex; flex-wrap:wrap; gap:4px 10px;"></span>
+            <b style="color:#1e3a8a; margin-left:6px;">표시</b>
+            <select id="prPivShowAs" onchange="onPeriodReportFilterChange()" style="padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"></select>
+            <span id="prPivExpandWrap" style="display:none; gap:4px; margin-left:6px;">
+              <button type="button" onclick="expandPeriodReportPivot(true)" style="padding:3px 8px; background:#ffffff; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;">▾ 모두 펼치기</button>
+              <button type="button" onclick="expandPeriodReportPivot(false)" style="padding:3px 8px; background:#ffffff; border:1px solid #cbd5e1; border-radius:5px; font-size:8pt; cursor:pointer;">▸ 모두 접기</button>
+            </span>
+            <span style="margin-left:auto; color:#64748b;">머리글을 누르면 정렬</span>
           </span>
           <span id="prLeadWrap" style="display:none; align-items:center; gap:4px; font-size:8pt; color:#475569;" title="권장 안전재고 = 일평균 출고 × 이 일수 (발주부터 입고까지 걸리는 기간 + 여유)">
             보충 기간 <input type="number" id="prLeadDays" value="14" min="1" max="365" oninput="onPeriodReportFilterChange()" style="width:52px; padding:3px 5px; border:1px solid #cbd5e1; border-radius:5px; font-size:8.5pt;"> 일
