@@ -2929,7 +2929,7 @@
       <div class="subwh-toolbar" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; height: 30px; flex-shrink: 0; background: #ffffff;">
         <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
           <div class="subwh-search" style="position: relative; width: 240px;">
-            <input type="text" id="subWhSearchInput" placeholder="품명 / 색상 검색..." oninput="onSubWhSearchInput()" style="width: 100%; height: 28px; padding: 0 8px 0 24px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 8.8pt; box-sizing: border-box;">
+            <input type="text" id="subWhSearchInput" placeholder="품명 / 색상 검색..." onfocus="this.select(); this._selAllOnUp = true" onmouseup="if (this._selAllOnUp) { this._selAllOnUp = false; this.select(); }" onblur="this._selAllOnUp = false" oninput="onSubWhSearchInput()" style="width: 100%; height: 28px; padding: 0 8px 0 24px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 8.8pt; box-sizing: border-box;">
             <span style="position: absolute; left: 7px; top: 6px; color: #94a3b8; font-size: 9pt;">🔍</span>
           </div>
           <label class="wms-admin-only" style="display: inline-flex; align-items: center; gap: 5px; font-size: 8.5pt; color: #92400e; background: #fef3c7; border: 1px solid #fde68a; height: 28px; padding: 0 10px; border-radius: 5px; cursor: pointer; font-weight: 600; white-space: nowrap; box-sizing: border-box;">
