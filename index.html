@@ -5566,6 +5566,7 @@ function addRecord() {
     clearForm();
     toggleScroll();
     updateTotals();
+    focusItemNameInput();
     return;
   }
 
@@ -5779,6 +5780,7 @@ function addRecord() {
         clearForm();
         toggleScroll();
         updateTotals();
+        focusItemNameInput();
         return;
       }
       const initBox = formData.boxQty || 0;
@@ -5793,6 +5795,15 @@ function addRecord() {
   clearForm();
   toggleScroll();
   updateTotals();
+  focusItemNameInput();
+}
+
+// 추가가 끝나면 다음 품목을 바로 입력할 수 있도록 품명 칸으로 커서를 옮긴다.
+function focusItemNameInput() {
+  const itemNameInput = document.getElementById('itemName');
+  if (!itemNameInput) return;
+  itemNameInput.focus();
+  hideCustomDropdown();
 }
 
 let stockWarningQuickCtx = null;
