@@ -4498,6 +4498,7 @@ function loadStockData(silent = false) {
       updateTotals();
       if (typeof updateUnitType === 'function') updateUnitType();
       refreshOpenStockViews();
+      refreshOpenItemDropdown();
       return stockDataCache;
     },
     onPersisted: stamp => { lastSyncedStockTime = stamp; },
@@ -6599,6 +6600,44 @@ function showConfirmModal() {
  * 프론트엔드의 임의 추정/가산에 의한 데이터 오염(Data Contamination)을 원천 차단하고,
  * 백엔드 Lock과 Two-Way 불변성 검증을 통과한 순수 공인 데이터만 받아 메모리에 즉각 반영합니다.
  */
+// 상품등록 직후 전체 목록 재조회가 끝나기 전에도 품명 검색에 바로 잡히도록, 등록된 품목을 캐시에 먼저 넣는다.
+// (재고는 기초재고 상자 수로 두고, 이어지는 loadStockData가 서버 값으로 교체한다.)
+function addRegisteredProductsToCache(registered) {
+  if (!Array.isArray(registered) || !registered.length || !Array.isArray(stockDataCache)) return;
+  let added = 0;
+  registered.forEach(rec => {
+    const name = String((rec && rec.itemName) || '').trim();
+    if (!name) return;
+    const color = String(rec.color || 'SURTIDO').trim();
+    const boxContent = Number(rec.boxContent || 1);
+    const key = `${name}_${color}_${boxContent}`;
+    if (stockDataCache.some(it => it.key === key)) return;
+    stockDataCache.push({
+      name, color,
+      stockBox: Number(rec.initialStock || 0),
+      stockIndividual: 0,
+      safeStock: Number(rec.safeStock || 0),
+      boxContent,
+      initialStock: 0,
+      manufacturer: '',
+      isDelta: false,
+      key
+    });
+    added++;
+  });
+  if (!added) return;
+  if (typeof WmsSearchEngine !== 'undefined') WmsSearchEngine.rebuildIndex(stockDataCache);
+  try {
+    localStorage.setItem('cached_stock_data', JSON.stringify(stockDataCache));
+  } catch (e) {}
+}
+
+// 재고 목록을 다시 받았을 때 품명 드롭다운이 열려 있으면 새 목록으로 다시 그린다.
+function refreshOpenItemDropdown() {
+  const input = document.getElementById('itemName');
+  if (dropdownVisible && input && input.value.trim()) filterItems(input.value);
+}
+
 function applyBackendAuthoritativeStock(updatedItems) {
   if (!updatedItems || !Array.isArray(updatedItems) || !updatedItems.length || !Array.isArray(stockDataCache)) return;
 
@@ -6728,6 +6767,7 @@ function confirmSubmitCore() {
     onSuccess: result => {
       if (type !== 'product') confirmOcrSamplesFromRecords(recordsToPrint);
       if (type === 'product') {
+        addRegisteredProductsToCache(result.filter(r => r.success).map(r => r.record));
         const duplicates = result.filter(r => !r.success);
         if (duplicates.length > 0) {
           alert('다음 상품은 이미 등록되어 있거나 오류가 발생했습니다:\n' + duplicates.map(d => `${d.record.itemName} (${d.record.color}) - ${d.message}`).join('\n'));
