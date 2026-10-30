@@ -990,28 +990,13 @@ const WmsSearchEngine = (() => {
     return scored.map(s => s.item);
   }
 
-  // 3. FlexSearch 인덱스 초기화 및 빌드
+  // 3. 품목 맵 빌드 (키 → 품목)
   function rebuildIndex(items = []) {
     if (!items || !items.length) {
       _itemMap.clear();
       _itemDocIndex = null;
       _lastIndexedCount = 0;
       return;
-    }
-
-    const FlexSearchLib = window.FlexSearch;
-    if (FlexSearchLib) {
-      const Document = FlexSearchLib.Document || FlexSearchLib;
-      _itemDocIndex = new Document({
-        document: {
-          id: 'k',
-          index: ['name', 'cleanName', 'color'],
-          store: false
-        },
-        tokenize: 'full', // 접두뿐 아니라 중간/끝 부분도 완벽 색인 (P-D60 -> D60, 60)
-        cache: true,
-        optimize: true
-      });
     }
 
     _itemMap = new Map();
@@ -1022,18 +1007,9 @@ const WmsSearchEngine = (() => {
       if (!rawName) continue;
       const k = it.key || `${rawName}___${it.color || 'SURTIDO'}___${it.boxContent || 0}`;
       _itemMap.set(k, it);
-
-      if (_itemDocIndex) {
-        _itemDocIndex.add({
-          k: k,
-          name: rawName,
-          cleanName: rawName.replace(/[\s_\-\/]/g, ''),
-          color: it.color || ''
-        });
-      }
     }
     _lastIndexedCount = items.length;
-    console.log(`⚡ [WmsSearchEngine] FlexSearch 인덱스 빌드 완료 (${_lastIndexedCount}개 품목)`);
+    console.log(`⚡ [WmsSearchEngine] 품목 인덱스 빌드 완료 (${_lastIndexedCount}개 품목)`);
   }
 
   // 4. 초고속 검색 질의 (0.001초 미만 완료)
@@ -1046,55 +1022,23 @@ const WmsSearchEngine = (() => {
       return sourceItems.slice(0, limit);
     }
 
-    if (_itemDocIndex && sourceItems.length !== _lastIndexedCount) {
-      rebuildIndex(sourceItems);
-    }
-
     const aliasInfo = typeof resolveModelAlias === 'function' ? resolveModelAlias(q) : null;
     const targetClean = aliasInfo ? aliasInfo.targetModel.toLowerCase().replace(/[\s_\-\/]/g, '') : null;
 
-    let candidateItems = [];
+    // 품명/색상에 검색어가 "포함"되면 모두 후보 (CK0 → CK001, CK002 …).
+    // FlexSearch 기본 인코더가 숫자·반복 문자를 변형해(예: 'ck00' ≠ 'ck001'의 색인 토큰) 부분 입력이
+    // 매칭되지 않던 문제로, 색인 대신 현재 캐시를 직접 훑는다(수천 품목도 1ms 안팎).
+    const candidateItems = [];
+    const searchClean = q.replace(/[\s_\-\/]/g, '');
+    for (let i = 0; i < sourceItems.length; i++) {
+      const it = sourceItems[i];
+      if (!it) continue;
+      const rawName = (it.name || it.codigo || it.itemName || '').toLowerCase();
+      const clean = rawName.replace(/[\s_\-\/]/g, '');
+      const color = (it.color || '').toLowerCase();
 
-    if (_itemDocIndex) {
-      const rawResults = _itemDocIndex.search(q, { limit: limit * 4 });
-      const seen = new Set();
-
-      for (let f = 0; f < rawResults.length; f++) {
-        const idList = rawResults[f].result || [];
-        for (let i = 0; i < idList.length; i++) {
-          const id = idList[i];
-          if (!seen.has(id)) {
-            seen.add(id);
-            const item = _itemMap.get(id);
-            if (item) candidateItems.push(item);
-          }
-        }
-      }
-
-      if (targetClean) {
-        for (let i = 0; i < sourceItems.length; i++) {
-          const it = sourceItems[i];
-          const rawName = it.name || it.codigo || it.itemName || '';
-          if (rawName.toLowerCase().replace(/[\s_\-\/]/g, '') === targetClean) {
-            const k = it.key || `${rawName}___${it.color || 'SURTIDO'}___${it.boxContent || 0}`;
-            if (!seen.has(k)) {
-              seen.add(k);
-              candidateItems.push(it);
-            }
-          }
-        }
-      }
-    } else {
-      const searchClean = q.replace(/[\s_\-\/]/g, '');
-      for (let i = 0; i < sourceItems.length; i++) {
-        const it = sourceItems[i];
-        const rawName = (it.name || it.codigo || it.itemName || '').toLowerCase();
-        const clean = rawName.replace(/[\s_\-\/]/g, '');
-        const color = (it.color || '').toLowerCase();
-
-        if (rawName.includes(q) || clean.includes(searchClean) || color.includes(q) || (targetClean && clean === targetClean)) {
-          candidateItems.push(it);
-        }
+      if (rawName.includes(q) || (searchClean && clean.includes(searchClean)) || color.includes(q) || (targetClean && clean === targetClean)) {
+        candidateItems.push(it);
       }
     }
 
