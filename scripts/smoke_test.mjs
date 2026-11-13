@@ -90,7 +90,7 @@ async function processTx(db, payload) {
     p_memo: payload.memo ?? '스모크테스트 자동 실행',
     p_items: payload.items,
     p_target_warehouse: payload.targetWarehouse ?? null,
-    p_pending_from_warehouse: null,
+    p_pending_from_warehouse: payload.pendingFromWarehouse ?? null,
     p_idempotency_key: randomUUID(),
     p_hold_refs: payload.holdRefs ?? null
   })
@@ -519,6 +519,38 @@ async function main() {
     assertEqual((await readStock(db, itemId, TEST_WAREHOUSE_CODE)).box_qty, 7, `${TEST_WAREHOUSE_CODE} 박스재고`)
     await adjustReplace(6, null)
     assertEqual((await readStock(db, itemId, TEST_WAREHOUSE_CODE)).box_qty, 6, `${TEST_WAREHOUSE_CODE} 박스재고`)
+  })
+
+  // 서브창고 입고확정·전표 수정도 보류 예약을 침범하면 안 된다. 만든 전표는 빈 수정으로 지워 행을 남기지 않는다.
+  const deleteInvoice = (invoice, txType) => db.rpc('rpc_update_transaction_records', {
+    p_invoice_no: invoice, p_tx_type: txType, p_new_records: [], p_admin: MEMBER_NAME, p_expected_signature: null
+  }).then(({ data, error }) => { if (error) throw error; return data })
+  const subStock = async () => (await readStock(db, itemId, TEST_WAREHOUSE_CODE)).box_qty
+
+  await step(`TEST 5-H2g: 입고확정 보류 가드 — ${TEST_WAREHOUSE_CODE} 6상자 중 4상자 보류, 발주 없이 3상자 MAIN 입고확정은 실패, 2상자는 허용`, async () => {
+    const confirm = boxes => processTx(db, {
+      txType: 'INBOUND', warehouse: 'MAIN', pendingFromWarehouse: TEST_WAREHOUSE_CODE,
+      items: [{ item_id: itemId, box_qty: boxes, unit_qty: 0 }]
+    })
+    await expectFailure(() => confirm(3), /발주 초과분/, '보류를 침범하는 입고확정')
+    assertEqual(await subStock(), 6, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+    const res = await confirm(2)
+    assertEqual(await subStock(), 4, `${TEST_WAREHOUSE_CODE} 박스재고`)
+    assertEqual((await readStock(db, itemId, 'MAIN')).box_qty, 2, 'MAIN 박스재고')
+    await deleteInvoice(res.invoice_no, 'INBOUND')
+    assertEqual(await subStock(), 6, `${TEST_WAREHOUSE_CODE} 박스재고 (입고확정 전표 삭제 후)`)
+    assertEqual((await readStock(db, itemId, 'MAIN')).box_qty, 0, 'MAIN 박스재고 (입고확정 전표 삭제 후)')
+  })
+
+  await step(`TEST 5-H2h: 전표 수정 보류 가드 — 입고 전표 삭제로 ${TEST_WAREHOUSE_CODE}가 보류(4) 아래로 내려가면 실패`, async () => {
+    const inb = await processTx(db, { txType: 'INBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 1, unit_qty: 0 }] })
+    const out = await processTx(db, { txType: 'OUTBOUND', warehouse: TEST_WAREHOUSE_CODE, items: [{ item_id: itemId, box_qty: 3, unit_qty: 0 }] })
+    assertEqual(await subStock(), 4, `${TEST_WAREHOUSE_CODE} 박스재고`)
+    await expectFailure(() => deleteInvoice(inb.invoice_no, 'INBOUND'), /전표 수정 불가/, '보류 아래로 내리는 입고 전표 삭제')
+    assertEqual(await subStock(), 4, `${TEST_WAREHOUSE_CODE} 박스재고 (실패한 시도 후에도 변화 없어야 함)`)
+    await deleteInvoice(out.invoice_no, 'OUTBOUND')
+    await deleteInvoice(inb.invoice_no, 'INBOUND')
+    assertEqual(await subStock(), 6, `${TEST_WAREHOUSE_CODE} 박스재고 (정리 후)`)
   })
 
   await step(`TEST 5-H3: 보류 불러와 제출 -4상자 ← ${TEST_WAREHOUSE_CODE} (보류 소진, 옛 version 재제출은 거절)`, async () => {

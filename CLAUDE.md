@@ -83,6 +83,8 @@ npm run smoke
   바뀐 재고 거절)도 검증합니다(TEST 5-H2a~5-H2c). 재고조정 화면·퀵재고·모바일 실사의 치환(`rpc_adjust_stock` →
   `rpc_adjust_stock_apply`)도 출고 보류·입고 예정 발주 아래로 줄이기와, 행의 `counted_at`(센 시각) 이후 바뀐 재고 치환을
   거절합니다(TEST 5-H2d~5-H2f, 오류 메시지는 `[실사 이후 재고 변동]`으로 시작 — 화면이 이 표시로 다시 확인을 묻습니다).
+- 서브창고 입고확정(`p_pending_from_warehouse`)의 열린 발주 초과분과, 전표 수정(`rpc_update_transaction_records_apply`)으로
+  재고가 줄어드는 창고도 출고 보류·입고 예정 발주 아래로 내려가면 거절합니다(TEST 5-H2g~5-H2h).
 - 재고는 0으로 돌아오지만 전표(`stock_transactions`)는 테스트 품목 이름으로 남습니다. `npm run smoke`는
   **통과하면 이어서 자동으로 정리**(`scripts/cleanup_smoke.mjs --soft`)합니다. 스모크가 실패하면 정리를
   건너뜁니다(원인 추적 자료를 남기려고). 정리 자체는 Supabase CLI가 로그인/링크된 환경이 필요한데, 연결이

@@ -602,6 +602,9 @@
       </div>
     </div>
 
+    <!-- 불러온 전표 범위 (최근 일부만 읽었으면 경고 + 전체 불러오기) -->
+    <div id="ledgerCoverage" style="display:none; align-items:center; flex-wrap:wrap; gap:8px; margin:0 0 10px; padding:8px 12px; border-radius:8px; font-size:8.5pt;"></div>
+
     <!-- 3대 분석 탭 헤더 -->
     <div class="tab-bar">
       <button type="button" class="tab-btn active" id="tabBtn_ledger" onclick="switchLedgerTab('ledger')">⏱️ 시간순 수불 상세 원장 (<span id="tabCountLedger">0</span>건)</button>
@@ -799,15 +802,20 @@
     }
 
     /* 3. 수불원장 API 호출 */
-    function loadProductLedger(identifier) {
+    // 전체 내역을 불러온 품목 id. 같은 품목을 다시 조회(필터 변경·재고 변경 반영)할 때도 끝까지 읽는다.
+    let ledgerLoadAllItemId = null;
+
+    function loadProductLedger(identifier, loadAll) {
       const badge = document.getElementById('selectedItemBadge');
-      if (badge) badge.textContent = `조회 중: ${identifier}... ⏳`;
+      if (badge) badge.textContent = loadAll ? `전체 내역 불러오는 중: ${identifier}... ⏳` : `조회 중: ${identifier}... ⏳`;
 
       const options = {
         startDate: document.getElementById('filterStartDate')?.value || '',
         endDate: document.getElementById('filterEndDate')?.value || '',
         transactionType: document.getElementById('filterTxType')?.value || 'ALL',
-        partnerName: document.getElementById('filterPartner')?.value || ''
+        partnerName: document.getElementById('filterPartner')?.value || '',
+        loadAll: !!loadAll || (!!ledgerLoadAllItemId && !!currentItemData && currentItemData.id === ledgerLoadAllItemId &&
+          (identifier === currentItemData.id || identifier === currentItemData.itemName))
       };
 
       if (typeof google !== 'undefined' && google.script && google.script.run) {
@@ -840,6 +848,8 @@
       currentLedgerResult = res;
       currentItemData = res.item;
       saveToRecentItems(res.item.itemName);
+      ledgerLoadAllItemId = res.coverage && res.coverage.loadAll ? res.item.id : null;
+      renderLedgerCoverage(res.coverage);
 
       const badge = document.getElementById('selectedItemBadge');
       if (badge) badge.textContent = `📦 ${res.item.itemName} (${res.item.color || 'SURTIDO'})`;
@@ -894,6 +904,41 @@
       renderDailyTrend(res.dailyTrend);
     }
 
+    /** 불러온 전표 범위 표시: 최근 일부만 읽었으면 남은 건수와 '전체 불러오기' 버튼을 보여 준다. */
+    function renderLedgerCoverage(cov) {
+      const el = document.getElementById('ledgerCoverage');
+      if (!el) return;
+      if (!cov || !cov.total) {
+        el.style.display = 'none';
+        return;
+      }
+      const oldest = cov.oldestLoaded ? String(cov.oldestLoaded).slice(0, 10) : '-';
+      el.style.display = 'flex';
+      if (cov.truncated) {
+        el.style.background = '#fef3c7';
+        el.style.border = '1px solid #f59e0b';
+        el.style.color = '#92400e';
+        const head = cov.periodComplete
+          ? `ℹ️ 고른 기간의 전표는 모두 들어 있습니다. 그 이전 내역 <b>${cov.remaining.toLocaleString()}건</b>이 더 있습니다(이 품목 전체 ${cov.total.toLocaleString()}건).`
+          : `⚠️ 이 품목의 전표 ${cov.total.toLocaleString()}건 중 최근 <b>${cov.loaded.toLocaleString()}건</b>(${oldest}부터)만 불러왔습니다. ` +
+            `이전 내역 <b>${cov.remaining.toLocaleString()}건</b>이 더 있습니다. 시작일을 지정해 조회하거나 전체를 불러오세요.`;
+        el.innerHTML = `<span>${head}</span>` +
+          '<button type="button" onclick="loadFullLedger()" style="margin-left:auto; padding:5px 12px; background:#b45309; color:#ffffff; border:none; border-radius:6px; font-weight:700; font-size:8.5pt; cursor:pointer;">📜 전체 내역 불러오기</button>';
+      } else {
+        el.style.background = '#f0fdf4';
+        el.style.border = '1px solid #86efac';
+        el.style.color = '#166534';
+        el.innerHTML = `<span>✅ 이 품목의 전표 ${cov.total.toLocaleString()}건을 첫 기록(${oldest})까지 모두 불러왔습니다.</span>`;
+      }
+    }
+
+    function loadFullLedger() {
+      const id = currentItemData && currentItemData.id;
+      if (!id) return;
+      ledgerLoadAllItemId = id;
+      loadProductLedger(id, true);
+    }
+
     function renderLedgerTable(txList) {
       const tbody = document.getElementById('ledgerTableBody');
       if (!tbody) return;
@@ -927,7 +972,7 @@
           numColor = '#6d28d9';
         } else if (type === 'ADJUST') {
           typeBadge = '<span class="badge-tx badge-adjust">⚖️ 실사</span>';
-          sign = Number(tx.box_qty) >= 0 ? '+' : '';
+          sign = null; // 실사는 상자·낱개마다 부호 있는 증감(Δ)이라 칸마다 따로 붙인다
           numColor = '#0369a1';
         }
 
@@ -939,6 +984,7 @@
         const boxQty = Number(tx.box_qty || 0);
         const unitQty = Number(tx.unit_qty || 0);
         const balBoxes = Number(tx.balance_after_boxes || 0);
+        const fmtQty = q => sign !== null ? `${sign}${Math.abs(q)}` : (q > 0 ? `+${q}` : String(q));
 
         return `
           <tr>
@@ -948,8 +994,8 @@
               <strong style="color:#2563eb; cursor:pointer;" data-invoice="${invoice}">${invoice}</strong>
             </td>
             <td style="font-weight:700; color:#1e293b;">${partner}</td>
-            <td style="text-align:right; font-weight:800; color:${numColor};">${sign}${Math.abs(boxQty)}</td>
-            <td style="text-align:right; color:#64748b;">${sign}${Math.abs(unitQty)}</td>
+            <td style="text-align:right; font-weight:800; color:${numColor};">${fmtQty(boxQty)}</td>
+            <td style="text-align:right; color:#64748b;">${fmtQty(unitQty)}</td>
             <td style="text-align:right;">
               <span class="balance-pill">${balBoxes.toLocaleString()} 상자</span>
             </td>

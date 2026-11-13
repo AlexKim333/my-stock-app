@@ -194,7 +194,8 @@ export function resolveBranchCode(partner) {
     || BRANCH_MAP[clean]
     || BRANCH_MAP[raw.toUpperCase()]
     || BRANCH_MAP[raw]
-    || SUB_WAREHOUSES.find(w => clean.toUpperCase().includes(w) || raw.toUpperCase().includes(w))
+    // 부분 일치는 쓰지 않는다: 'TLANETPANTLA'(→TLANE), 'ALEXIS EZPINOZA'(→PINO) 같은 일반 거래처가
+    // 지점으로 오인되어 출고가 이동으로, 입고가 서브창고 입고확정으로 바뀌었다.
     || null
 }
 
@@ -3084,24 +3085,62 @@ export const serverMethods = {
 
     const item = matchedItems[0]
 
-    // 2. 본사 재고 및 외부창고 재고 병렬 조회
-    const [effStockRes, whStockRes, allTxRes] = await Promise.all([
+    // 2. 본사 재고 및 외부창고 재고 병렬 조회 + 전표 총 건수
+    const [effStockRes, whStockRes, countRes] = await Promise.all([
       supabase.from('view_effective_stocks').select('*').eq('item_id', item.id).maybeSingle(),
       supabase.from('inventory_stocks').select('warehouse_code, box_qty, unit_qty').eq('item_id', item.id),
-      supabase.from('stock_transactions')
-        .select('*')
-        .eq('item_id', item.id)
-        .order('created_at', { ascending: false })
-        .limit(2000)
+      supabase.from('stock_transactions').select('id', { count: 'exact', head: true }).eq('item_id', item.id)
     ])
 
     if (effStockRes.error) throw effStockRes.error
     if (whStockRes.error) throw whStockRes.error
-    if (allTxRes.error) throw allTxRes.error
+    if (countRes.error) throw countRes.error
 
     const eff = effStockRes.data || {}
     const whStocks = whStockRes.data || []
-    const allTxs = allTxRes.data || []
+
+    // 전표는 최신부터 페이지로 읽는다. 잔고를 현재 재고에서 거꾸로 계산하므로 고른 기간까지의 최신 전표는
+    // 모두 필요하다: 시작일이 있으면 그 날 이전 전표가 나올 때까지, 없으면 기본 2,000건까지 읽는다.
+    // options.loadAll이면 첫 전표까지 끝까지 읽는다. 덜 읽었으면 coverage.truncated로 화면에 알린다.
+    const LEDGER_DEFAULT_ROWS = 2000
+    const LEDGER_PAGE = 1000
+    const ledgerStart = options.startDate ? new Date(options.startDate + 'T00:00:00') : null
+    const allTxs = []
+    const seenTx = new Set()
+    let reachedEnd = false
+    for (let from = 0; ; from += LEDGER_PAGE) {
+      const { data, error } = await supabase.from('stock_transactions')
+        .select('*')
+        .eq('item_id', item.id)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(from, from + LEDGER_PAGE - 1)
+      if (error) throw error
+      const page = data || []
+      page.forEach(tx => {
+        if (seenTx.has(tx.id)) return // 읽는 사이 새 전표가 들어와 페이지가 밀린 경우
+        seenTx.add(tx.id)
+        allTxs.push(tx)
+      })
+      if (page.length < LEDGER_PAGE) {
+        reachedEnd = true
+        break
+      }
+      if (options.loadAll) continue
+      const oldest = new Date(page[page.length - 1].created_at)
+      if (ledgerStart ? oldest < ledgerStart : allTxs.length >= LEDGER_DEFAULT_ROWS) break
+    }
+    const totalTxCount = countRes.count == null ? allTxs.length : Math.max(countRes.count, allTxs.length)
+    const coverage = {
+      loaded: allTxs.length,
+      total: totalTxCount,
+      truncated: !reachedEnd && totalTxCount > allTxs.length,
+      remaining: reachedEnd ? 0 : Math.max(0, totalTxCount - allTxs.length),
+      oldestLoaded: allTxs.length ? allTxs[allTxs.length - 1].created_at : null,
+      // 시작일을 골랐고 그보다 오래된 전표까지 읽었으면 고른 기간은 빠짐없이 들어 있다.
+      periodComplete: reachedEnd || (!!ledgerStart && allTxs.length > 0 && new Date(allTxs[allTxs.length - 1].created_at) < ledgerStart),
+      loadAll: !!options.loadAll
+    }
 
     const currentMainBoxes = Number(eff.main_box_qty || 0)
     const currentMainUnits = Number(eff.main_unit_qty || 0)
@@ -3288,6 +3327,7 @@ export const serverMethods = {
         itemCode: item.item_code || '',
         barcode: item.barcode || ''
       },
+      coverage,
       stockSnapshot: {
         mainBoxQty: currentMainBoxes,
         mainUnitQty: currentMainUnits,
