@@ -162,7 +162,7 @@ function loadPeriodReport() {
     mode: 'latest',
     onSuccess: res => {
       prSnapshot = (res && res.items) || [];
-      if (prData && prIsAnalysisTab()) renderPeriodReport();
+      if (prData && (prIsAnalysisTab() || prTab === 'item')) renderPeriodReport();
     },
     onError: err => {
       prSnapshot = null;
@@ -885,10 +885,12 @@ function prBuildTable(tab, rows) {
   }
 
   if (tab === 'item') {
+    const stockWh = (document.getElementById('prWh') || {}).value || '';
+    const stockOf = prItemStockFn(stockWh);
     const map = new Map();
     rows.forEach(r => {
       const g = add(map, r.itemId, () => ({
-        name: r.name, color: r.color, pack: r.pack, _item: prItemLabel(r),
+        itemId: r.itemId, name: r.name, color: r.color, pack: r.pack, _item: prItemLabel(r),
         outBox: 0, outUnit: 0, out: 0, ret: 0, outLines: 0, outPartners: new Set(), in: 0, move: 0
       }));
       if (r.type === 'OUTBOUND') {
@@ -903,7 +905,7 @@ function prBuildTable(tab, rows) {
     });
     return {
       columns: [
-        { key: 'name', label: '품명' },
+        { key: 'name', label: stockOf ? `품명 (${stockWh || '전체 창고'} 현재고)` : '품명', stockTag: true },
         { key: 'color', label: '컬러' },
         { key: 'pack', label: '입수', num: true },
         { key: 'outBox', label: '출고 상자', num: true },
@@ -918,7 +920,10 @@ function prBuildTable(tab, rows) {
         { key: 'move', label: '이동', num: true }
       ],
       rows: Array.from(map.values())
-        .map(g => ({ ...g, netOut: g.out - g.ret, retRate: prRate(g.ret, g.out), outPartnerCount: g.outPartners.size }))
+        .map(g => ({
+          ...g, netOut: g.out - g.ret, retRate: prRate(g.ret, g.out), outPartnerCount: g.outPartners.size,
+          _stock: stockOf ? stockOf(g.itemId) : null
+        }))
         .sort((a, b) => b.netOut - a.netOut || b.in - a.in),
       drillItem: true
     };
@@ -976,6 +981,29 @@ function prBuildTable(tab, rows) {
     rows: Array.from(map.values())
       .map(g => ({ handler: g.handler, in: g.in, out: g.out, ret: g.ret, move: g.move, invCount: g.inv.size }))
       .sort((a, b) => (b.in + b.out + b.ret + b.move) - (a.in + a.out + a.ret + a.move))
+  };
+}
+
+/**
+ * 품목별 탭의 품명 옆 현재고 (상자+낱개) — 작업지시서와 같은 표기. 스냅샷을 아직 못 불러왔으면 null.
+ * 창고를 골랐으면 그 창고 장부 수량 그대로, 전체 창고면 모든 창고 합계를 낱개로 모아 상자+낱개로 나눈다.
+ * 스냅샷에 없는 품목(비활성 등)은 null을 돌려 표시하지 않는다.
+ */
+function prItemStockFn(wh) {
+  if (!prSnapshot) return null;
+  const byId = new Map(prSnapshot.map(it => [String(it.itemId), it]));
+  return itemId => {
+    const it = byId.get(String(itemId));
+    if (!it) return null;
+    const ws = it.whStocks || {};
+    if (wh) {
+      const s = ws[wh];
+      return s ? { box: s.box, unit: s.unit } : { box: 0, unit: 0 };
+    }
+    const units = Object.values(ws).reduce((sum, s) => sum + s.box * it.pack + s.unit, 0);
+    const sign = units < 0 ? -1 : 1;
+    const abs = Math.abs(units);
+    return { box: sign * Math.floor(abs / it.pack), unit: sign * (abs % it.pack) };
   };
 }
 
@@ -1202,6 +1230,10 @@ function renderPeriodReport() {
         text = (Number(v) || (c.zero && v === 0)) ? prFmt(v) : '<span style="color:#cbd5e1;">-</span>';
       } else {
         text = escapeHtml(v == null ? '' : v);
+        if (c.stockTag && r._stock) {
+          const empty = r._stock.box <= 0 && r._stock.unit <= 0;
+          text += ` <span title="현재 재고 (상자+낱개)" style="font-weight:700; color:${empty ? '#dc2626' : '#0284c7'}; margin-left:3px;">(${r._stock.box}+${r._stock.unit})</span>`;
+        }
       }
       return `<td style="padding:5px 8px; text-align:${c.num ? 'right' : 'left'}; white-space:nowrap; background:${c.bold && !r._total ? '#f8fafc' : bg};${c.bold ? ' font-weight:800;' : ''} ${stickyCss(c, bg)}">${text}</td>`;
     }).join('') + '</tr>';
@@ -1266,6 +1298,7 @@ async function downloadPeriodReportXlsx() {
     table.rows.forEach(r => aoa.push(table.columns.map(c => {
       const v = r[c.key];
       if (c.num && typeof v !== 'string') return r1(v);
+      if (c.stockTag && r._stock) return `${v == null ? '' : v} (${r._stock.box}+${r._stock.unit})`;
       return v == null ? '' : v;
     })));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), t.key === 'pivot' ? '피벗' : t.label.replace(/[·]/g, ''));

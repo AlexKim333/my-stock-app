@@ -2760,7 +2760,9 @@ export const serverMethods = {
       subUnits: 0,
       safeBoxes: 0,
       inTransitBoxes: 0,
-      heldUnits: 0
+      heldUnits: 0,
+      // 창고별 장부상 실재고(상자·낱개 그대로) — 기간 보고서 품목별 탭의 품명 옆 (상자+낱개) 표시용
+      whStocks: {}
     }]))
 
     stocks.forEach(st => {
@@ -2768,6 +2770,9 @@ export const serverMethods = {
       if (!it) return
       const wh = String(st.warehouse_code || '').toUpperCase().trim()
       if (wh === 'SMOKETEST') return
+      const ws = it.whStocks[wh] || (it.whStocks[wh] = { box: 0, unit: 0 })
+      ws.box += Number(st.box_qty || 0)
+      ws.unit += Number(st.unit_qty || 0)
       const units = Number(st.box_qty || 0) * it.pack + Number(st.unit_qty || 0)
       if (wh === 'MAIN') {
         it.mainUnits += units
