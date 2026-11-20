@@ -6289,22 +6289,24 @@ function updateRecord(index, field, value) {
     const valStr = String(value || '').trim();
     const isP = /[pP]$/i.test(valStr) || /pz$/i.test(valStr);
     const parsedNum = parseInt(valStr.replace(/[^\d]/g, ''), 10) || 0;
-    const targetVal = currentType === 'in' ? parsedNum : -Math.abs(parsedNum);
+    // 출고만 음수로 저장한다. 재고조정(실사 수량)은 양수여야 하며, 예전에는 칸에 들어갔다 나오기만 해도
+    // 음수가 되어 제출이 "음수를 입력할 수 없습니다"로 거절됐다.
+    const targetVal = currentType === 'out' ? -Math.abs(parsedNum) : parsedNum;
 
-    if (isP || field === 'individualQty') {
+    if (isP && field === 'boxQty') {
+      // 상자 칸에 '96p'처럼 적으면 그 행을 낱개 행으로 바꾼다는 뜻이다.
       if (rec.individualQty !== targetVal || rec.boxQty !== 0 || rec.unitType !== 'individual') {
         rec.individualQty = targetVal;
         rec.boxQty = 0;
         rec.unitType = 'individual';
         changed = true;
       }
-    } else {
-      if (rec.boxQty !== targetVal || rec.individualQty !== 0 || rec.unitType !== 'box') {
-        rec.boxQty = targetVal;
-        rec.individualQty = 0;
-        rec.unitType = 'box';
-        changed = true;
-      }
+    } else if ((rec[field] || 0) !== targetVal) {
+      // 고친 칸만 바꾸고 다른 쪽 수량은 유지한다. 예전에는 칸에 들어갔다 나오기만 해도
+      // 상자+낱개 혼합 행의 다른 쪽 수량이 0이 되어(예: 2상자+96개 → 2상자) 그대로 제출됐다.
+      rec[field] = targetVal;
+      rec.unitType = rec.individualQty ? 'individual' : 'box';
+      changed = true;
     }
   } else {
     const newVal = (value || '').trim();
